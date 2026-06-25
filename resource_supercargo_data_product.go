@@ -77,7 +77,7 @@ func (r *supercargoDataProductResource) ModifyPlan(ctx context.Context, req reso
 		}
 	}
 
-	if targetProject != "" && productManifest.Meta.Urn != "" {
+	if targetProject != "" && productManifest.Meta != nil && productManifest.Meta.Urn != "" {
 		urnParts := strings.Split(productManifest.Meta.Urn, ":")
 		productName := urnParts[len(urnParts)-1]
 		identities := make(map[string]types.String)
@@ -123,6 +123,13 @@ func (r *supercargoDataProductResource) ModifyPlan(ctx context.Context, req reso
 			partitioningField := plan.PartitioningField.ValueString()
 
 			// Validate Team existence
+			if productManifest.Meta == nil || productManifest.Meta.Owner == nil {
+				resp.Diagnostics.AddError(
+					"Invalid Product Manifest",
+					"The product manifest is missing metadata or owner information.",
+				)
+				return
+			}
 			teamName := productManifest.Meta.Owner.TeamName
 			cacheKey := "team:" + teamName
 			if _, ok := r.client.Cache.Load(cacheKey); !ok {
@@ -195,18 +202,17 @@ func (r *supercargoDataProductResource) ModifyPlan(ctx context.Context, req reso
 	resp.Diagnostics.Append(resp.Plan.Set(ctx, &plan)...)
 }
 
-
 // supercargoDataProductResourceModel maps the resource schema data.
 type supercargoDataProductResourceModel struct {
-	ManifestFile      types.String        `tfsdk:"manifest_file"`
-	URN               types.String        `tfsdk:"urn"`
-	Version           types.String        `tfsdk:"version"`
-	Project           types.String        `tfsdk:"project"`
-	Location          types.String        `tfsdk:"location"`
-	PartitioningField      types.String        `tfsdk:"partitioning_field"`
+	ManifestFile          types.String        `tfsdk:"manifest_file"`
+	URN                   types.String        `tfsdk:"urn"`
+	Version               types.String        `tfsdk:"version"`
+	Project               types.String        `tfsdk:"project"`
+	Location              types.String        `tfsdk:"location"`
+	PartitioningField     types.String        `tfsdk:"partitioning_field"`
 	PartitionExpirationMs types.Int64         `tfsdk:"partition_expiration_ms"`
-	ServiceIdentities      types.Map           `tfsdk:"service_identities"`
-	SLA                    *supercargoSLAModel `tfsdk:"sla"`
+	ServiceIdentities     types.Map           `tfsdk:"service_identities"`
+	SLA                   *supercargoSLAModel `tfsdk:"sla"`
 }
 
 type supercargoSLAModel struct {
@@ -332,58 +338,58 @@ func (r *supercargoDataProductResource) Create(ctx context.Context, req resource
 		return
 	}
 
-		// 1. Read and Parse Manifest
-		productManifest, err := manifest.Load(plan.ManifestFile.ValueString())
-		if err != nil {
-			resp.Diagnostics.AddError("Error Loading Manifest", err.Error())
-			return
-		}
+	// 1. Read and Parse Manifest
+	productManifest, err := manifest.Load(plan.ManifestFile.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError("Error Loading Manifest", err.Error())
+		return
+	}
 
-		// 2. Apply Overrides (Deep Merge)
-		r.applyOverrides(productManifest, &plan)
+	// 2. Apply Overrides (Deep Merge)
+	r.applyOverrides(productManifest, &plan)
 
-		// 3. Register Product in Hub
-		res, err := r.client.HubClient.RegisterProduct(ctx, &hubv1.RegisterProductRequest{
-			Manifest: productManifest,
-		})
-		if err != nil {
-			resp.Diagnostics.AddError("Error Registering Product", err.Error())
-			return
-		}
+	// 3. Register Product in Hub
+	res, err := r.client.HubClient.RegisterProduct(ctx, &hubv1.RegisterProductRequest{
+		Manifest: productManifest,
+	})
+	if err != nil {
+		resp.Diagnostics.AddError("Error Registering Product", err.Error())
+		return
+	}
 
-		// 4. Update State
-		plan.URN = types.StringValue(res.ProductUrn)
-		plan.Version = types.StringValue(res.Version)
+	// 4. Update State
+	plan.URN = types.StringValue(res.ProductUrn)
+	plan.Version = types.StringValue(res.Version)
 
-		// Ensure overrides that were applied are reflected in the computed fields if they weren't in HCL
-		if plan.Project.IsUnknown() || plan.Project.IsNull() {
-			if len(productManifest.OutputPorts) > 0 && productManifest.OutputPorts[0].Physical != nil && productManifest.OutputPorts[0].Physical.Bigquery != nil && productManifest.OutputPorts[0].Physical.Bigquery.Project != "" {
-				plan.Project = types.StringValue(productManifest.OutputPorts[0].Physical.Bigquery.Project)
-			} else {
-				plan.Project = types.StringNull()
-			}
+	// Ensure overrides that were applied are reflected in the computed fields if they weren't in HCL
+	if plan.Project.IsUnknown() || plan.Project.IsNull() {
+		if len(productManifest.OutputPorts) > 0 && productManifest.OutputPorts[0].Physical != nil && productManifest.OutputPorts[0].Physical.Bigquery != nil && productManifest.OutputPorts[0].Physical.Bigquery.Project != "" {
+			plan.Project = types.StringValue(productManifest.OutputPorts[0].Physical.Bigquery.Project)
+		} else {
+			plan.Project = types.StringNull()
 		}
-		if plan.Location.IsUnknown() || plan.Location.IsNull() {
-			if len(productManifest.OutputPorts) > 0 && productManifest.OutputPorts[0].Physical != nil && productManifest.OutputPorts[0].Physical.Bigquery != nil && productManifest.OutputPorts[0].Physical.Bigquery.Location != "" {
-				plan.Location = types.StringValue(productManifest.OutputPorts[0].Physical.Bigquery.Location)
-			} else {
-				plan.Location = types.StringNull()
-			}
+	}
+	if plan.Location.IsUnknown() || plan.Location.IsNull() {
+		if len(productManifest.OutputPorts) > 0 && productManifest.OutputPorts[0].Physical != nil && productManifest.OutputPorts[0].Physical.Bigquery != nil && productManifest.OutputPorts[0].Physical.Bigquery.Location != "" {
+			plan.Location = types.StringValue(productManifest.OutputPorts[0].Physical.Bigquery.Location)
+		} else {
+			plan.Location = types.StringNull()
 		}
-		if plan.PartitioningField.IsUnknown() || plan.PartitioningField.IsNull() {
-			if len(productManifest.OutputPorts) > 0 && productManifest.OutputPorts[0].Physical != nil && productManifest.OutputPorts[0].Physical.Bigquery != nil && productManifest.OutputPorts[0].Physical.Bigquery.PartitionBy != "" {
-				plan.PartitioningField = types.StringValue(productManifest.OutputPorts[0].Physical.Bigquery.PartitionBy)
-			} else {
-				plan.PartitioningField = types.StringNull()
-			}
+	}
+	if plan.PartitioningField.IsUnknown() || plan.PartitioningField.IsNull() {
+		if len(productManifest.OutputPorts) > 0 && productManifest.OutputPorts[0].Physical != nil && productManifest.OutputPorts[0].Physical.Bigquery != nil && productManifest.OutputPorts[0].Physical.Bigquery.PartitionBy != "" {
+			plan.PartitioningField = types.StringValue(productManifest.OutputPorts[0].Physical.Bigquery.PartitionBy)
+		} else {
+			plan.PartitioningField = types.StringNull()
 		}
-		if plan.PartitionExpirationMs.IsUnknown() || plan.PartitionExpirationMs.IsNull() {
-			if len(productManifest.OutputPorts) > 0 {
-				plan.PartitionExpirationMs = durationToMs(productManifest.OutputPorts[0].Physical)
-			} else {
-				plan.PartitionExpirationMs = types.Int64Null()
-			}
+	}
+	if plan.PartitionExpirationMs.IsUnknown() || plan.PartitionExpirationMs.IsNull() {
+		if len(productManifest.OutputPorts) > 0 {
+			plan.PartitionExpirationMs = durationToMs(productManifest.OutputPorts[0].Physical)
+		} else {
+			plan.PartitionExpirationMs = types.Int64Null()
 		}
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
@@ -403,6 +409,13 @@ func (r *supercargoDataProductResource) Read(ctx context.Context, req resource.R
 		return
 	}
 
+	if res.Manifest == nil || res.Manifest.Meta == nil {
+		resp.Diagnostics.AddError(
+			"Invalid Product Manifest",
+			"The product returned from the Hub is missing manifest or metadata.",
+		)
+		return
+	}
 	state.Version = types.StringValue(res.Manifest.Meta.Version)
 
 	// Find first project ID in manifest

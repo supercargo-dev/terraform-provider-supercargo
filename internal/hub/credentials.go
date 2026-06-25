@@ -55,12 +55,12 @@ func (c *OIDCCredentials) getToken() (*oauth2.Token, error) {
 	c.mu.RUnlock()
 
 	// Proactive refresh: if token is missing or expires in less than 1 minute
-	if token == nil || time.Until(token.Expiry) < time.Minute {
+	if token == nil || (!token.Expiry.IsZero() && time.Until(token.Expiry) < time.Minute) {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 
 		// Re-check after acquiring write lock
-		if c.token == nil || time.Until(c.token.Expiry) < time.Minute {
+		if c.token == nil || (!c.token.Expiry.IsZero() && time.Until(c.token.Expiry) < time.Minute) {
 			newToken, err := c.source.Token()
 			if err != nil {
 				return nil, fmt.Errorf("failed to fetch OIDC token: %w", err)

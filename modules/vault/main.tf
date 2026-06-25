@@ -124,10 +124,10 @@ resource "google_project_iam_member" "vault_monitoring" {
   member  = "serviceAccount:${google_service_account.vault_sa.email}"
 }
 
-resource "google_project_iam_member" "vault_token_creator" {
-  project = var.project_id
-  role    = "roles/iam.serviceAccountOpenIdTokenCreator"
-  member  = "serviceAccount:${google_service_account.vault_sa.email}"
+resource "google_service_account_iam_member" "vault_token_creator" {
+  service_account_id = google_service_account.vault_sa.name
+  role               = "roles/iam.serviceAccountOpenIdTokenCreator"
+  member             = "serviceAccount:${google_service_account.vault_sa.email}"
 }
 
 resource "google_pubsub_topic_iam_member" "vault_pubsub_publisher" {

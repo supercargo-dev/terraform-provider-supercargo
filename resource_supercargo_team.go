@@ -9,8 +9,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	platformv1 "github.com/supercargo-dev/core/gen/go/platform/v1"
 	hubv1 "github.com/supercargo-dev/core/gen/go/hub/v1"
+	platformv1 "github.com/supercargo-dev/core/gen/go/platform/v1"
 	"google.golang.org/grpc/status"
 )
 
@@ -104,6 +104,14 @@ func (r *supercargoTeamResource) Create(ctx context.Context, req resource.Create
 		return
 	}
 
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
+		return
+	}
+
 	// Map plan to proto
 	team := &platformv1.Team{
 		Name:      plan.Name.ValueString(),
@@ -141,6 +149,14 @@ func (r *supercargoTeamResource) Read(ctx context.Context, req resource.ReadRequ
 	var state supercargoTeamResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
 		return
 	}
 

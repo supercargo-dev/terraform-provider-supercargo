@@ -150,6 +150,13 @@ func (d *SupercargoContractDataSource) Read(ctx context.Context, req datasource.
 	contract := hubResp.Contract
 
 	// Populate metadata
+	if contract.Meta == nil {
+		resp.Diagnostics.AddError(
+			"Invalid Contract Metadata",
+			"The contract returned from the Hub is missing metadata.",
+		)
+		return
+	}
 	data.URN = types.StringValue(contract.Meta.Urn)
 	data.Version = types.StringValue(contract.Meta.Version)
 	data.OwnerTeam = types.StringValue(contract.Meta.OwnerTeam)

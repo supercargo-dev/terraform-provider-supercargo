@@ -134,6 +134,13 @@ resource "google_project_iam_member" "pubsub_bq_writer" {
   member  = "serviceAccount:service-${data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
 }
 
+resource "google_project_iam_member" "pubsub_bq_metadata" {
+  count   = length(var.contracts) > 0 ? 1 : 0
+  project = var.project_id
+  role    = "roles/bigquery.metadataViewer"
+  member  = "serviceAccount:service-${data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
 data "google_project" "project" {
   project_id = var.project_id
 }

@@ -43,6 +43,14 @@ func (r *supercargoContractVersionResource) ModifyPlan(ctx context.Context, req 
 		return
 	}
 
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
+		return
+	}
+
 	// Handshake: Check compatibility during the plan phase with caching
 	contract, err := r.mapToProto(plan)
 	if err != nil {
@@ -158,6 +166,14 @@ func (r *supercargoContractVersionResource) Create(ctx context.Context, req reso
 		return
 	}
 
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
+		return
+	}
+
 	// Handshake: Check compatibility before creating
 	contract, err := r.mapToProto(plan)
 	if err != nil {
@@ -204,6 +220,14 @@ func (r *supercargoContractVersionResource) Read(ctx context.Context, req resour
 	var state supercargoContractVersionResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
 		return
 	}
 

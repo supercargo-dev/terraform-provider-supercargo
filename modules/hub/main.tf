@@ -284,10 +284,10 @@ resource "google_project_iam_member" "hub_monitoring" {
   member  = "serviceAccount:${google_service_account.hub_runtime.email}"
 }
 
-resource "google_project_iam_member" "hub_token_creator" {
-  project = var.project_id
-  role    = "roles/iam.serviceAccountOpenIdTokenCreator"
-  member  = "serviceAccount:${google_service_account.hub_runtime.email}"
+resource "google_service_account_iam_member" "hub_token_creator" {
+  service_account_id = google_service_account.hub_runtime.name
+  role               = "roles/iam.serviceAccountOpenIdTokenCreator"
+  member             = "serviceAccount:${google_service_account.hub_runtime.email}"
 }
 
 resource "google_cloud_run_v2_service" "hub" {
