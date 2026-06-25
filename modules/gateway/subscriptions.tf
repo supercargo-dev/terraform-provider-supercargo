@@ -114,7 +114,7 @@ resource "google_pubsub_subscription" "clean_bq" {
     maximum_backoff = var.pubsub_maximum_backoff
   }
 
-  depends_on = [google_project_iam_member.pubsub_bq_writer]
+  depends_on = [google_bigquery_dataset_iam_member.pubsub_bq_writer]
 }
 
 // IAM: Pub/Sub Service Agent needs permission to acknowledge messages on the clean_bq subscription for DLQ routing
