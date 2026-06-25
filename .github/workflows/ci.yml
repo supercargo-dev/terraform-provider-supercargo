@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  go-test:
+    name: Go Lint & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.5'
+          cache: true
+
+      - name: Configure Git for Private Modules
+        run: |
+          git config --global url."https://${{ secrets.SUPERCARGO_DEV_PAT }}@github.com/supercargo-dev".insteadOf "https://github.com/supercargo-dev"
+
+      - name: Check Go format
+        run: |
+          if [ -n "$(go fmt ./...)" ]; then
+            echo "Go code is not formatted. Run 'go fmt ./...'."
+            exit 1
+          fi
+
+      - name: Run Go Vet
+        run: go vet ./...
+
+      - name: Run Go Tests
+        run: go test -v -cover ./...
+
+  terraform-validate:
+    name: Terraform Format & Validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.5.0' # Or latest stable
+
+      - name: Check Terraform format
+        run: terraform fmt -check -recursive
+
+      # In order to validate modules, we must initialize them first.
+      # Some modules may require provider configuration or credentials to fully init,
+      # but standard modules without backend configuration can usually be initialized and validated.
+      - name: Validate Terraform Modules
+        run: |
+          for dir in modules/*/; do
+            if [ -d "$dir" ]; then
+              echo "Validating module in $dir"
+              (cd "$dir" && terraform init -backend=false && terraform validate)
+            fi
+          done
