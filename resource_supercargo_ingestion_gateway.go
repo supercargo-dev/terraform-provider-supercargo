@@ -1,0 +1,91 @@
+package main
+
+import (
+	"context"
+
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/types"
+)
+
+var _ resource.Resource = &SupercargoIngestionGatewayResource{}
+
+func NewSupercargoIngestionGatewayResource() resource.Resource {
+	return &SupercargoIngestionGatewayResource{}
+}
+
+type SupercargoIngestionGatewayResource struct{}
+
+type SupercargoIngestionGatewayResourceModel struct {
+	ID              types.String `tfsdk:"id"`
+	ContractID      types.String `tfsdk:"contract_id"`
+	ContractVersion types.String `tfsdk:"contract_version"`
+}
+
+func (r *SupercargoIngestionGatewayResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+	resp.TypeName = req.ProviderTypeName + "_ingestion_gateway"
+}
+
+func (r *SupercargoIngestionGatewayResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
+	resp.Schema = schema.Schema{
+		Attributes: map[string]schema.Attribute{
+			"id": schema.StringAttribute{
+				Computed: true,
+			},
+			"contract_id": schema.StringAttribute{
+				Required: true,
+			},
+			"contract_version": schema.StringAttribute{
+				Required: true,
+			},
+		},
+	}
+}
+
+func (r *SupercargoIngestionGatewayResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan SupercargoIngestionGatewayResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Governance Check: Verify contract existence in Hub.
+	// This ensures that we don't even attempt to provision infrastructure if the
+	// governing contract doesn't exist.
+	// In a full implementation, we would use the Hub client from r.client.
+	// if err := r.validateContract(ctx, plan.ContractID.ValueString(), plan.ContractVersion.ValueString()); err != nil {
+	//    resp.Diagnostics.AddError("Governance Validation Failed", err.Error())
+	//    return
+	// }
+
+	plan.ID = types.StringValue("gateway-" + plan.ContractID.ValueString())
+
+	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+}
+
+func (r *SupercargoIngestionGatewayResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var state SupercargoIngestionGatewayResourceModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+func (r *SupercargoIngestionGatewayResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan SupercargoIngestionGatewayResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	plan.ID = types.StringValue("gateway-" + plan.ContractID.ValueString())
+	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+}
+
+// Delete handles the de-provisioning of the resource.
+// Note: In this 'light' provider implementation, this is currently a no-op as the actual
+// cloud resources are managed via the Terraform module 'supercargo-ingestion-gateway'.
+// A full implementation would use GCP APIs here to manage the lifecycle of Cloud Run, Pub/Sub, etc.
+func (r *SupercargoIngestionGatewayResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	// No-op for now as infrastructure is module-managed.
+}
