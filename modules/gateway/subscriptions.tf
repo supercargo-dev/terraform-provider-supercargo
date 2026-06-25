@@ -127,18 +127,20 @@ resource "google_pubsub_subscription_iam_member" "pubsub_clean_bq_dlq_subscriber
 }
 
 // IAM: Pub/Sub needs permission to write to BigQuery
-resource "google_project_iam_member" "pubsub_bq_writer" {
-  count   = length(var.contracts) > 0 ? 1 : 0
-  project = var.project_id
-  role    = "roles/bigquery.dataEditor"
-  member  = "serviceAccount:service-${data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+resource "google_bigquery_dataset_iam_member" "pubsub_bq_writer" {
+  count      = length(var.contracts) > 0 ? 1 : 0
+  project    = var.project_id
+  dataset_id = var.bigquery_dataset_id
+  role       = "roles/bigquery.dataEditor"
+  member     = "serviceAccount:service-${data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
 }
 
-resource "google_project_iam_member" "pubsub_bq_metadata" {
-  count   = length(var.contracts) > 0 ? 1 : 0
-  project = var.project_id
-  role    = "roles/bigquery.metadataViewer"
-  member  = "serviceAccount:service-${data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+resource "google_bigquery_dataset_iam_member" "pubsub_bq_metadata" {
+  count      = length(var.contracts) > 0 ? 1 : 0
+  project    = var.project_id
+  dataset_id = var.bigquery_dataset_id
+  role       = "roles/bigquery.metadataViewer"
+  member     = "serviceAccount:service-${data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
 }
 
 data "google_project" "project" {

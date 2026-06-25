@@ -373,7 +373,12 @@ resource "google_service_account" "shovel_runtime" {
 }
 
 # Grant Shovel access to Publish to Control Plane Topic
-
+resource "google_pubsub_topic_iam_member" "shovel_control_plane_publisher" {
+  project = var.project_id
+  topic   = var.control_plane_topic
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:${google_service_account.shovel_runtime.email}"
+}
 
 # Grant Shovel access to Delete Firestore Documents (cleanup)
 resource "google_project_iam_member" "shovel_firestore_user" {
@@ -409,7 +414,7 @@ resource "google_cloud_run_v2_service" "shovel" {
       }
       env {
         name  = "OIDC_AUDIENCE"
-        value = "https://metadata-shovel-${var.project_number}.${var.region}.run.app"
+        value = google_cloud_run_v2_service.shovel.uri
       }
       env {
         name  = "AUTH_ENFORCE"

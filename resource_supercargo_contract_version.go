@@ -243,6 +243,14 @@ func (r *supercargoContractVersionResource) Read(ctx context.Context, req resour
 		return
 	}
 
+	if res == nil || res.Contract == nil || res.Contract.Meta == nil {
+		resp.Diagnostics.AddError(
+			"Error Reading Contract",
+			"Hub returned an empty or invalid contract response.",
+		)
+		return
+	}
+
 	state.ContentHash = types.StringValue(res.Contract.Meta.ContentHash)
 	state.CommitSha = types.StringValue(res.Contract.Meta.CommitSha)
 	state.DataAsset = types.StringValue(res.Contract.Meta.DataAsset)

@@ -409,7 +409,7 @@ func (r *supercargoDataProductResource) Read(ctx context.Context, req resource.R
 		return
 	}
 
-	if res.Manifest == nil || res.Manifest.Meta == nil {
+	if res == nil || res.Manifest == nil || res.Manifest.Meta == nil {
 		resp.Diagnostics.AddError(
 			"Invalid Product Manifest",
 			"The product returned from the Hub is missing manifest or metadata.",

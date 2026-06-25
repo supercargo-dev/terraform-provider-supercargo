@@ -172,6 +172,14 @@ func (r *supercargoTeamResource) Read(ctx context.Context, req resource.ReadRequ
 		return
 	}
 
+	if res == nil || res.Team == nil {
+		resp.Diagnostics.AddError(
+			"Error Reading Team",
+			"Hub returned an empty response.",
+		)
+		return
+	}
+
 	// Update state
 	state.DataAsset = types.StringValue(res.Team.DataAsset)
 	state.URN = types.StringValue(res.Team.Urn)

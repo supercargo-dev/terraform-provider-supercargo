@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -62,7 +63,11 @@ func (f *Factory) GetClient(ctx context.Context, address string, opts ...grpc.Di
 	} else {
 		// Use OIDC for cloud environments
 		// The audience is the Hub's URL (usually the address without port)
-		audience := "https://" + strings.Split(address, ":")[0]
+		host := address
+		if h, _, err := net.SplitHostPort(address); err == nil {
+			host = h
+		}
+		audience := "https://" + host
 		ts, err := idtoken.NewTokenSource(ctx, audience)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create OIDC token source for %s: %w", audience, err)
