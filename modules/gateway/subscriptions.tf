@@ -1,6 +1,6 @@
 // Service Account for Pub/Sub to invoke Cloud Run
 resource "google_service_account" "push_invoker" {
-  account_id   = "push-invoker-${var.product_id}"
+  account_id   = "push-invoker-${var.product_id}-${random_id.suffix.hex}"
   display_name = "Push Invoker for ${var.product_id}"
   project      = var.project_id
 }
@@ -39,7 +39,7 @@ resource "google_pubsub_subscription_iam_member" "pubsub_dlq_subscriber" {
 
 // Raw Subscription (Push to Guardian)
 resource "google_pubsub_subscription" "raw_push" {
-  name    = "raw-sub-${var.product_id}"
+  name    = "raw-sub-${var.product_id}-${random_id.suffix.hex}"
   topic   = google_pubsub_topic.raw.name
   project = var.project_id
 
@@ -71,7 +71,7 @@ resource "google_pubsub_subscription" "raw_push" {
 
 // Clean Subscription (Pull) - for consumers
 resource "google_pubsub_subscription" "clean_sub" {
-  name    = "clean-sub-${var.product_id}"
+  name    = "clean-sub-${var.product_id}-${random_id.suffix.hex}"
   topic   = google_pubsub_topic.clean.name
   project = var.project_id
 
@@ -84,7 +84,7 @@ resource "google_pubsub_subscription" "clean_sub" {
 // Clean Subscription (BigQuery) - for persistence
 resource "google_pubsub_subscription" "clean_bq" {
   for_each = var.contracts
-  name     = "clean-bq-${var.product_id}-${replace(each.key, "-", "_")}"
+  name     = "clean-bq-${var.product_id}-${replace(each.key, "-", "_")}-${random_id.suffix.hex}"
   topic    = google_pubsub_topic.clean.name
   project  = var.project_id
 
@@ -149,7 +149,7 @@ data "google_project" "project" {
 
 // DLQ Subscription (Pull) - for inspection
 resource "google_pubsub_subscription" "dlq_sub" {
-  name    = "dlq-sub-${var.product_id}"
+  name    = "dlq-sub-${var.product_id}-${random_id.suffix.hex}"
   topic   = google_pubsub_topic.dlq.name
   project = var.project_id
 

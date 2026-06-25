@@ -1,3 +1,7 @@
+resource "random_id" "suffix" {
+  byte_length = 2
+}
+
 resource "google_project_service" "hub_apis" {
   for_each = toset([
     "run.googleapis.com",
@@ -260,7 +264,7 @@ resource "time_sleep" "wait_for_apis" {
 
 resource "google_service_account" "hub_runtime" {
   project      = var.project_id
-  account_id   = "hub-runtime"
+  account_id   = "hub-runtime-${random_id.suffix.hex}"
   display_name = "Hub Runtime Service Account"
   depends_on   = [time_sleep.wait_for_apis]
 }
@@ -293,7 +297,7 @@ resource "google_service_account_iam_member" "hub_token_creator" {
 resource "google_cloud_run_v2_service" "hub" {
   provider = google-beta
   project  = var.project_id
-  name     = "hub"
+  name     = "hub-${random_id.suffix.hex}"
   location = var.region
 
   launch_stage = "BETA"
@@ -368,7 +372,7 @@ resource "google_cloud_run_v2_service" "hub" {
 # Metadata Shovel Service Account
 resource "google_service_account" "shovel_runtime" {
   project      = var.project_id
-  account_id   = "metadata-shovel-sa"
+  account_id   = "metadata-shovel-sa-${random_id.suffix.hex}"
   display_name = "Metadata Shovel Runtime Service Account"
 }
 
@@ -391,7 +395,7 @@ resource "google_project_iam_member" "shovel_firestore_user" {
 resource "google_cloud_run_v2_service" "shovel" {
   provider            = google-beta
   project             = var.project_id
-  name                = "metadata-shovel"
+  name                = "metadata-shovel-${random_id.suffix.hex}"
   location            = var.region
   ingress             = "INGRESS_TRAFFIC_INTERNAL_ONLY" # Triggered by Eventarc only
   deletion_protection = false
@@ -444,7 +448,7 @@ resource "google_cloud_run_v2_service_iam_member" "eventarc_invoker" {
 # Service Account for Eventarc Trigger
 resource "google_service_account" "eventarc_trigger_sa" {
   project      = var.project_id
-  account_id   = "eventarc-trigger-sa"
+  account_id   = "eventarc-trigger-sa-${random_id.suffix.hex}"
   display_name = "Eventarc Trigger Service Account"
 }
 
@@ -474,7 +478,7 @@ resource "google_project_iam_member" "eventarc_pubsub_publisher" {
 resource "google_eventarc_trigger" "outbox_trigger" {
   depends_on              = [google_project_iam_member.eventarc_pubsub_publisher]
   project                 = var.project_id
-  name                    = "metadata-shovel-trigger"
+  name                    = "metadata-shovel-trigger-${random_id.suffix.hex}"
   location                = var.region
   event_data_content_type = "application/protobuf"
 
@@ -546,17 +550,17 @@ output "shovel_service_account_email" {
 
 resource "google_pubsub_topic" "events" {
   project = var.project_id
-  name    = "supercargo-events"
+  name    = "supercargo-events-${random_id.suffix.hex}"
 }
 
 resource "google_pubsub_topic" "contract_changed" {
   project = var.project_id
-  name    = "catalog-contract-changed"
+  name    = "catalog-contract-changed-${random_id.suffix.hex}"
 }
 
 resource "google_pubsub_topic" "contract_deleted" {
   project = var.project_id
-  name    = "catalog-contract-deleted"
+  name    = "catalog-contract-deleted-${random_id.suffix.hex}"
 }
 
 resource "google_pubsub_topic_iam_member" "shovel_events_publisher" {
@@ -596,7 +600,7 @@ resource "google_pubsub_topic_iam_member" "hub_contract_deleted_publisher" {
 
 resource "google_service_account" "events_invoker" {
   project      = var.project_id
-  account_id   = "hub-events-invoker"
+  account_id   = "hub-events-invoker-${random_id.suffix.hex}"
   display_name = "Hub Alert Relay Push Invoker"
 }
 
@@ -610,7 +614,7 @@ resource "google_cloud_run_v2_service_iam_member" "events_invoker_run" {
 
 resource "google_pubsub_subscription" "events_push" {
   project = var.project_id
-  name    = "hub-events-push"
+  name    = "hub-events-push-${random_id.suffix.hex}"
   topic   = google_pubsub_topic.events.name
 
   ack_deadline_seconds = 60

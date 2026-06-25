@@ -18,8 +18,12 @@ resource "time_sleep" "wait_for_vault_apis" {
   create_duration = "30s"
 }
 
+resource "random_id" "suffix" {
+  byte_length = 2
+}
+
 resource "google_service_account" "vault_sa" {
-  account_id   = "supercargo-vault"
+  account_id   = "supercargo-vault-${random_id.suffix.hex}"
   display_name = "Supercargo Vault Service Account"
   project      = var.project_id
   depends_on   = [time_sleep.wait_for_vault_apis]
@@ -27,7 +31,7 @@ resource "google_service_account" "vault_sa" {
 
 resource "google_secret_manager_secret" "vault_master_key" {
   project   = var.project_id
-  secret_id = "supercargo-vault-master-key"
+  secret_id = "supercargo-vault-master-key-${random_id.suffix.hex}"
   replication {
     auto {}
   }
@@ -52,7 +56,7 @@ resource "google_secret_manager_secret_iam_member" "vault_sa_secret_accessor" {
 
 resource "google_secret_manager_secret" "global_pepper" {
   project   = var.project_id
-  secret_id = "supercargo-vault-global-pepper"
+  secret_id = "supercargo-vault-global-pepper-${random_id.suffix.hex}"
   replication {
     auto {}
   }
@@ -77,7 +81,7 @@ resource "google_secret_manager_secret_iam_member" "vault_sa_pepper_accessor" {
 }
 
 resource "google_kms_key_ring" "keyring" {
-  name     = "supercargo-vault-keyring"
+  name     = "supercargo-vault-keyring-${random_id.suffix.hex}"
   location = var.region
   project  = var.project_id
 
@@ -85,7 +89,7 @@ resource "google_kms_key_ring" "keyring" {
 }
 
 resource "google_kms_crypto_key" "master_key" {
-  name            = "supercargo-vault-master-key"
+  name            = "supercargo-vault-master-key-${random_id.suffix.hex}"
   key_ring        = google_kms_key_ring.keyring.id
   rotation_period = "2592000s" # 30 days
 
@@ -138,14 +142,14 @@ resource "google_pubsub_topic_iam_member" "vault_pubsub_publisher" {
 }
 
 resource "google_pubsub_topic" "key_created" {
-  name       = "com.supercargo.security.key_created.v1"
+  name       = "com.supercargo.security.key_created.v1-${random_id.suffix.hex}"
   project    = var.project_id
   depends_on = [google_project_service.vault_apis]
 }
 
 resource "google_cloud_run_v2_service" "vault" {
   provider = google-beta
-  name     = var.service_name
+  name     = "${var.service_name}-${random_id.suffix.hex}"
   location = var.region
   project  = var.project_id
 
@@ -212,7 +216,7 @@ resource "google_cloud_run_v2_service" "vault" {
         name = "VAULT_MASTER_KEY"
         value_source {
           secret_key_ref {
-            secret  = "supercargo-vault-master-key"
+            secret  = google_secret_manager_secret.vault_master_key.secret_id
             version = "latest"
           }
         }

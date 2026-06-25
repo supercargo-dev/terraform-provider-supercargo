@@ -3,7 +3,7 @@
 resource "google_monitoring_notification_channel" "slack" {
   count        = var.alert_slack_channel != "" ? 1 : 0
   project      = var.project_id
-  display_name = "Slack Alert Channel (${var.product_id})"
+  display_name = "Slack Alert Channel (${var.product_id}) - ${random_id.suffix.hex}"
   type         = "slack"
   labels = {
     "channel_name" = var.alert_slack_channel
@@ -13,7 +13,7 @@ resource "google_monitoring_notification_channel" "slack" {
 resource "google_monitoring_notification_channel" "email" {
   count        = var.alert_email_address != "" ? 1 : 0
   project      = var.project_id
-  display_name = "Email Alert Channel (${var.product_id})"
+  display_name = "Email Alert Channel (${var.product_id}) - ${random_id.suffix.hex}"
   type         = "email"
   labels = {
     "email_address" = var.alert_email_address
@@ -26,7 +26,7 @@ resource "google_monitoring_metric_descriptor" "gateway_messages_total" {
   project      = var.project_id
   description  = "Total count of processed messages"
   display_name = "Gateway Messages Total"
-  type         = "custom.googleapis.com/${replace(var.product_id, "-", "_")}_messages_total"
+  type         = "custom.googleapis.com/${replace(var.product_id, "-", "_")}_${random_id.suffix.hex}_messages_total"
   metric_kind  = "CUMULATIVE"
   value_type   = "INT64"
   unit         = "1"
@@ -59,7 +59,7 @@ resource "google_monitoring_metric_descriptor" "gateway_validation_duration_ms" 
   project      = var.project_id
   description  = "Latency of message validation"
   display_name = "Gateway Validation Duration"
-  type         = "custom.googleapis.com/${replace(var.product_id, "-", "_")}_validation_duration_ms"
+  type         = "custom.googleapis.com/${replace(var.product_id, "-", "_")}_${random_id.suffix.hex}_validation_duration_ms"
   metric_kind  = "CUMULATIVE"
   value_type   = "DISTRIBUTION"
   unit         = "ms"
@@ -87,7 +87,7 @@ resource "google_monitoring_metric_descriptor" "gateway_validation_errors_total"
   project      = var.project_id
   description  = "Total count of validation errors"
   display_name = "Gateway Validation Errors Total"
-  type         = "custom.googleapis.com/${replace(var.product_id, "-", "_")}_validation_errors_total"
+  type         = "custom.googleapis.com/${replace(var.product_id, "-", "_")}_${random_id.suffix.hex}_validation_errors_total"
   metric_kind  = "CUMULATIVE"
   value_type   = "INT64"
   unit         = "1"
@@ -121,7 +121,7 @@ resource "google_monitoring_metric_descriptor" "gateway_validation_errors_total"
 # Alert on ANY validation failure for Tier 1
 resource "google_monitoring_alert_policy" "tier1_validation_failure" {
   project      = var.project_id
-  display_name = "[Tier 1] Gateway Validation Failure (${var.product_id})"
+  display_name = "[Tier 1] Gateway Validation Failure (${var.product_id}) - ${random_id.suffix.hex}"
   combiner     = "OR"
   depends_on = [
     google_cloud_run_v2_service.gateway,
@@ -130,7 +130,7 @@ resource "google_monitoring_alert_policy" "tier1_validation_failure" {
   conditions {
     display_name = "Validation Errors > 0"
     condition_threshold {
-      filter          = "metric.type=\"custom.googleapis.com/${replace(var.product_id, "-", "_")}_validation_errors_total\" resource.type=\"global\""
+      filter          = "metric.type=\"custom.googleapis.com/${replace(var.product_id, "-", "_")}_${random_id.suffix.hex}_validation_errors_total\" resource.type=\"global\""
       duration        = "0s"
       comparison      = "COMPARISON_GT"
       threshold_value = 0
@@ -157,7 +157,7 @@ resource "google_monitoring_alert_policy" "tier1_validation_failure" {
 # "Silent Killer": Absence of Data for Tier 1
 resource "google_monitoring_alert_policy" "tier1_absence_of_data" {
   project      = var.project_id
-  display_name = "[Tier 1] Ingestion Traffic Drop - Absence of Data (${var.product_id})"
+  display_name = "[Tier 1] Ingestion Traffic Drop - Absence of Data (${var.product_id}) - ${random_id.suffix.hex}"
   combiner     = "OR"
   depends_on = [
     google_cloud_run_v2_service.gateway,
@@ -166,7 +166,7 @@ resource "google_monitoring_alert_policy" "tier1_absence_of_data" {
   conditions {
     display_name = "No messages reported"
     condition_absent {
-      filter   = "metric.type=\"custom.googleapis.com/${replace(var.product_id, "-", "_")}_messages_total\" resource.type=\"global\""
+      filter   = "metric.type=\"custom.googleapis.com/${replace(var.product_id, "-", "_")}_${random_id.suffix.hex}_messages_total\" resource.type=\"global\""
       duration = "300s" # 5 minutes
       trigger {
         count = 1
@@ -189,7 +189,7 @@ resource "google_monitoring_alert_policy" "tier1_absence_of_data" {
 # Alert on P99 Latency > 100ms
 resource "google_monitoring_alert_policy" "tier2_latency_spike" {
   project      = var.project_id
-  display_name = "[Tier 2] Gateway Latency Spike P99 > 100ms (${var.product_id})"
+  display_name = "[Tier 2] Gateway Latency Spike P99 > 100ms (${var.product_id}) - ${random_id.suffix.hex}"
   combiner     = "OR"
   depends_on = [
     google_cloud_run_v2_service.gateway,
@@ -200,9 +200,9 @@ resource "google_monitoring_alert_policy" "tier2_latency_spike" {
     condition_monitoring_query_language {
       query    = <<-EOT
         fetch global
-        | metric 'custom.googleapis.com/${replace(var.product_id, "-", "_")}_validation_duration_ms'
+        | metric 'custom.googleapis.com/${replace(var.product_id, "-", "_")}_${random_id.suffix.hex}_validation_duration_ms'
         | align delta(1m)
-        | group_by [metric.product_id], 1m, [val: percentile(value.${replace(var.product_id, "-", "_")}_validation_duration_ms, 99)]
+        | group_by [metric.product_id], 1m, [val: percentile(value.${replace(var.product_id, "-", "_")}_${random_id.suffix.hex}_validation_duration_ms, 99)]
         | condition val > 100 'ms'
       EOT
       duration = "300s"
@@ -215,7 +215,7 @@ resource "google_monitoring_alert_policy" "tier2_latency_spike" {
 # "Contract Breach": High Error Rate (>20% budget consumption)
 resource "google_monitoring_alert_policy" "tier2_high_error_rate" {
   project      = var.project_id
-  display_name = "[Tier 2] Gateway High Error Rate - Budget Breach (${var.product_id})"
+  display_name = "[Tier 2] Gateway High Error Rate - Budget Breach (${var.product_id}) - ${random_id.suffix.hex}"
   combiner     = "OR"
   depends_on = [
     google_cloud_run_v2_service.gateway,
@@ -226,13 +226,13 @@ resource "google_monitoring_alert_policy" "tier2_high_error_rate" {
     condition_monitoring_query_language {
       query    = <<-EOT
         fetch global
-        | metric 'custom.googleapis.com/${replace(var.product_id, "-", "_")}_messages_total'
+        | metric 'custom.googleapis.com/${replace(var.product_id, "-", "_")}_${random_id.suffix.hex}_messages_total'
         | align rate(5m)
         | {
             filter metric.status == 'failed' || metric.status == 'quarantine'
-            | group_by [metric.product_id], 5m, [errors: sum(value.${replace(var.product_id, "-", "_")}_messages_total)]
+            | group_by [metric.product_id], 5m, [errors: sum(value.${replace(var.product_id, "-", "_")}_${random_id.suffix.hex}_messages_total)]
           ;
-            group_by [metric.product_id], 5m, [total: sum(value.${replace(var.product_id, "-", "_")}_messages_total)]
+            group_by [metric.product_id], 5m, [total: sum(value.${replace(var.product_id, "-", "_")}_${random_id.suffix.hex}_messages_total)]
           }
         | join
         | div
