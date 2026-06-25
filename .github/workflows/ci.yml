@@ -12,6 +12,8 @@ jobs:
   go-test:
     name: Go Lint & Test
     runs-on: ubuntu-latest
+    env:
+      GOPRIVATE: "github.com/supercargo-dev/*"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
