@@ -1,7 +1,7 @@
 terraform {
   required_providers {
     supercargo = {
-      source  = "robertsahlin/supercargo"
+      source  = "supercargo-dev/supercargo"
       version = "~> 0.0.1"
     }
     google = {
