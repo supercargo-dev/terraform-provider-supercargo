@@ -6,7 +6,7 @@ variable "project_id" {
 variable "location" {
   type        = string
   description = "The GCP location for the dataset."
-  default     = "US"
+  default     = "EU"
 }
 
 variable "env" {
