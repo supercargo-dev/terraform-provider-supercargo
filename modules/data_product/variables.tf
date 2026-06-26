@@ -16,8 +16,10 @@ variable "region" {
 variable "contracts" {
   description = "Map of contracts to register and provision"
   type = map(object({
-    version     = string
-    schema_json = string
+    version      = string
+    schema_json  = string
+    commit_sha   = string
+    content_hash = string
   }))
   default = {}
 }

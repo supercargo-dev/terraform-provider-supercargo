@@ -2,7 +2,7 @@ terraform {
   required_providers {
     supercargo = {
       source  = "supercargo-dev/supercargo"
-      version = "= 0.0.1-alpha.2"
+      version = ">= 0.0.1-alpha"
     }
     google = {
       source  = "hashicorp/google"
@@ -28,8 +28,10 @@ locals {
   # The agent generates schemas in the /schemas folder named by the port name.
   contracts = {
     for port in local.manifest.output_ports : port.contract.urn => {
-      version     = port.contract.version
-      schema_json = file("${path.module}/schemas/${port.name}.${port.contract.version}.bigquery.json")
+      version      = port.contract.version
+      schema_json  = file("${path.module}/schemas/${port.name}.${port.contract.version}.bigquery.json")
+      content_hash = sha256(file("${path.module}/contracts/${port.name}.yaml"))
+      commit_sha   = "example-commit-sha-123456"
     }
     if port.contract != null
   }

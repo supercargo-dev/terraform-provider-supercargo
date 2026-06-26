@@ -6,9 +6,11 @@ resource "supercargo_data_product" "this" {
 resource "supercargo_contract_version" "this" {
   for_each = var.contracts
 
-  urn         = each.key
-  version     = each.value.version
-  schema_json = each.value.schema_json
+  urn          = each.key
+  version      = each.value.version
+  schema_json  = each.value.schema_json
+  commit_sha   = each.value.commit_sha
+  content_hash = each.value.content_hash
 }
 
 module "gateway" {
