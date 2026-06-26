@@ -418,7 +418,7 @@ resource "google_cloud_run_v2_service" "shovel" {
       }
       env {
         name  = "OIDC_AUDIENCE"
-        value = google_cloud_run_v2_service.shovel.uri
+        value = "https://metadata-shovel-${var.project_number}.${var.region}.run.app"
       }
       env {
         name  = "AUTH_ENFORCE"
