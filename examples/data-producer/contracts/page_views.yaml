@@ -1,0 +1,17 @@
+meta:
+    urn: "urn:supercargo:hub:contract:page-views"
+    version: "1.0.0"
+    data_asset: "go://github.com/supercargo-dev/core/examples/data-producer"
+schema:
+    - name: "user_id"
+      description: "The unique identifier for the user"
+      type: "DATA_TYPE_STRING"
+      mode: "FIELD_MODE_REQUIRED"
+    - name: "url"
+      description: "The URL of the page viewed"
+      type: "DATA_TYPE_STRING"
+      mode: "FIELD_MODE_REQUIRED"
+    - name: "timestamp"
+      description: "When the page view occurred"
+      type: "DATA_TYPE_TIMESTAMP"
+      mode: "FIELD_MODE_REQUIRED"

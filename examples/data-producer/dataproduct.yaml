@@ -1,0 +1,11 @@
+meta:
+  urn: urn:supercargo:hub:product:customer-telemetry
+  version: v1.0.0
+  owner:
+    team_name: team-alpha
+output_ports:
+  - name: page_views
+    urn: urn:supercargo:hub:port:page-views
+    contract:
+      urn: urn:supercargo:hub:contract:page-views
+      version: v1.0.0
