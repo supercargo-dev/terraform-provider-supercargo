@@ -133,3 +133,13 @@ variable "force_deploy_trigger" {
   type        = string
   default     = "static"
 }
+variable "custom_audiences" {
+  type    = list(string)
+  default = []
+}
+
+variable "gateway_audience" {
+  type    = string
+  default = ""
+}
+

@@ -27,3 +27,8 @@ output "bigquery_table_ids" {
   description = "A map of contract names to BigQuery table IDs"
   value       = module.gateway.bigquery_table_ids
 }
+
+output "service_account_email" {
+  description = "The service account email of the Gateway"
+  value       = module.gateway.service_account_email
+}

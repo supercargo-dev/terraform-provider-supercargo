@@ -38,6 +38,8 @@ module "gateway" {
   bigquery_dataset_id               = var.bigquery_dataset_id
   auth_enforce                      = var.auth_enforce
   force_deploy_trigger              = var.force_deploy_trigger
+  custom_audiences                  = var.custom_audiences
+  gateway_audience                  = var.gateway_audience
 
   contracts = {
     for k, v in var.contracts : k => {
