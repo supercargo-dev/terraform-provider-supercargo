@@ -40,6 +40,12 @@ variable "gateway_service_account_email" {
   default     = null
 }
 
+variable "create_gateway_invoker" {
+  description = "Whether to create the IAM binding for the Gateway service account"
+  type        = bool
+  default     = false
+}
+
 variable "iap_enabled" {
   description = "Whether to enable IAP for the service"
   type        = bool
