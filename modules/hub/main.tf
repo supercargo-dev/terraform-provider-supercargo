@@ -77,7 +77,7 @@ resource "google_iap_web_cloud_run_service_iam_member" "iap_accessor" {
 
 # Grant Gateway Service Account access to invoke Hub (IAM auth)
 resource "google_cloud_run_v2_service_iam_member" "gateway_invoker" {
-  count    = var.gateway_service_account_email != "" ? 1 : 0
+  count    = var.gateway_service_account_email != null ? 1 : 0
   project  = var.project_id
   location = var.region
   name     = google_cloud_run_v2_service.hub.name
@@ -415,10 +415,6 @@ resource "google_cloud_run_v2_service" "shovel" {
       env {
         name  = "GCP_PROJECT_ID"
         value = var.project_id
-      }
-      env {
-        name  = "OIDC_AUDIENCE"
-        value = google_cloud_run_v2_service.shovel.uri
       }
       env {
         name  = "AUTH_ENFORCE"

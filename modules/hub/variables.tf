@@ -37,7 +37,7 @@ variable "image_project_id" {
 variable "gateway_service_account_email" {
   description = "The service account email of the Ingestion Gateway"
   type        = string
-  default     = ""
+  default     = null
 }
 
 variable "iap_enabled" {
