@@ -51,6 +51,12 @@ func (r *supercargoContractVersionResource) ModifyPlan(ctx context.Context, req 
 		return
 	}
 
+	if r.client.HubClient == nil {
+		// Provider was configured with an unknown Hub Address (likely being created in this plan).
+		// Skip plan-time validation since we can't reach the Hub yet.
+		return
+	}
+
 	// Handshake: Check compatibility during the plan phase with caching
 	contract, err := r.mapToProto(plan)
 	if err != nil {
