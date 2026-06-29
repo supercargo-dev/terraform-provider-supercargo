@@ -140,7 +140,11 @@ func (r *supercargoContractVersionResource) Schema(_ context.Context, _ resource
 			},
 			"data_asset": schema.StringAttribute{
 				Optional:            true,
+				Computed:            true,
 				MarkdownDescription: "Reference to the authoritative source (e.g., 'go://...').",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 		},
 	}
