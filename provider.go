@@ -28,6 +28,7 @@ type SupercargoProvider struct {
 // SupercargoProviderModel describes the provider data model.
 type SupercargoProviderModel struct {
 	HubAddress types.String `tfsdk:"hub_address"`
+	Token      types.String `tfsdk:"token"`
 }
 
 // ProviderData is the data passed to data sources and resources.
@@ -48,6 +49,11 @@ func (p *SupercargoProvider) Schema(ctx context.Context, req provider.SchemaRequ
 			"hub_address": schema.StringAttribute{
 				MarkdownDescription: "Address of the Supercargo Hub (HubService).",
 				Optional:            true,
+			},
+			"token": schema.StringAttribute{
+				MarkdownDescription: "Explicit OIDC ID token for authenticating with the Hub. If omitted, the provider will attempt to generate one automatically using Application Default Credentials.",
+				Optional:            true,
+				Sensitive:           true,
 			},
 		},
 	}
@@ -82,7 +88,7 @@ func (p *SupercargoProvider) Configure(ctx context.Context, req provider.Configu
 		hubAddress = "localhost:50051"
 	}
 
-	client, err := p.factory.GetClient(ctx, hubAddress)
+	client, err := p.factory.GetClient(ctx, hubAddress, data.Token.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Failed to connect to Supercargo Hub",

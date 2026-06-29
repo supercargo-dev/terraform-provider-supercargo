@@ -37,7 +37,7 @@ func NewFactory() *Factory {
 }
 
 // GetClient returns a Hub client for the given address.
-func (f *Factory) GetClient(ctx context.Context, address string, opts ...grpc.DialOption) (*Client, error) {
+func (f *Factory) GetClient(ctx context.Context, address string, token string, opts ...grpc.DialOption) (*Client, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -68,10 +68,22 @@ func (f *Factory) GetClient(ctx context.Context, address string, opts ...grpc.Di
 			host = h
 		}
 		audience := "https://" + host
-		ts, err := idtoken.NewTokenSource(ctx, audience)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create OIDC token source for %s: %w", audience, err)
+
+		var ts oauth2.TokenSource
+		if token != "" {
+			// If a token is explicitly provided (e.g., from an ID token data source), use it.
+			ts = oauth2.StaticTokenSource(&oauth2.Token{
+				AccessToken: token,
+			})
+		} else {
+			// Fallback to ADC
+			var err error
+			ts, err = idtoken.NewTokenSource(ctx, audience)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create OIDC token source for %s: %w", audience, err)
+			}
 		}
+
 		creds := NewOIDCCredentials(ts)
 		opts = append(opts,
 			grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(nil, "")),
