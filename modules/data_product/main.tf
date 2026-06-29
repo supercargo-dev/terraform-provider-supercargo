@@ -18,7 +18,7 @@ module "gateway" {
 
   project_id                        = var.project_id
   region                            = var.region
-  product_id                        = supercargo_data_product.this.urn
+  product_id                        = element(split(":", supercargo_data_product.this.urn), length(split(":", supercargo_data_product.this.urn)) - 1)
   image                             = var.image
   log_level                         = var.log_level
   container_memory                  = var.container_memory
@@ -42,7 +42,7 @@ module "gateway" {
   gateway_audience                  = var.gateway_audience
 
   contracts = {
-    for k, v in var.contracts : k => {
+    for k, v in var.contracts : element(split(":", supercargo_contract_version.this[k].urn), length(split(":", supercargo_contract_version.this[k].urn)) - 1) => {
       id     = supercargo_contract_version.this[k].urn
       schema = v.schema_json
     }
