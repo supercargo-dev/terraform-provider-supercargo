@@ -148,7 +148,14 @@ WHERE processed IS NULL OR processed = FALSE;
 COMMIT TRANSACTION;
 EOF
   }
+  
   depends_on = [google_project_service.bq_datatransfer]
+
+  timeouts {
+    create = "2m"
+    update = "2m"
+    delete = "2m"
+  }
 }
 
 data "google_project" "project" {
