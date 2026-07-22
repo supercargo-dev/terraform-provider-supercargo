@@ -49,7 +49,7 @@ jobs:
               "automationMode": "AUTO_CREATE_PR"
             }' > jules_payload.json
 
-          curl -s -X POST 'https://jules.googleapis.com/v1alpha/sessions' \
+          curl --fail -sS -X POST 'https://jules.googleapis.com/v1alpha/sessions' \
             -H "Content-Type: application/json" \
             -H "X-Goog-Api-Key: $JULES_API_KEY" \
             -d @jules_payload.json

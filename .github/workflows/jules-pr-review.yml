@@ -4,49 +4,24 @@ on:
     types: [opened, synchronize]
     branches:
       - main
-  issue_comment:
-    types: [created]
 
 jobs:
   review:
-    if: >
-      github.event_name == 'pull_request' || 
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '/jules review'))
+    if: github.actor != 'google-labs-jules[bot]'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write
     steps:
-      - name: Add 👀 Reaction
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [ "${{ github.event_name }}" == "issue_comment" ]; then
-            gh api --method POST -H "Accept: application/vnd.github+json" \
-              /repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
-              -f content='eyes'
-          else
-            gh api --method POST -H "Accept: application/vnd.github+json" \
-              /repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/reactions \
-              -f content='eyes'
-          fi
-
-      - name: Determine Branch
-        id: branch
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [ "${{ github.event_name }}" == "issue_comment" ]; then
-            BRANCH=$(gh pr view ${{ github.event.issue.number }} --repo ${{ github.repository }} --json headRefName -q .headRefName)
-          else
-            BRANCH="${{ github.head_ref }}"
-          fi
-          echo "STARTING_BRANCH=$BRANCH" >> $GITHUB_ENV
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 30
 
       - name: Invoke Jules Code Review
         shell: bash
         env:
           JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+          STARTING_BRANCH: ${{ github.head_ref }}
           REPO_FULL_NAME: ${{ github.repository }}
           USER_PROMPT: |
             You are an expert Principal Go Engineer reviewing this Pull Request for the Supercargo Terraform Provider.
@@ -79,7 +54,7 @@ jobs:
               "automationMode": "AUTO_CREATE_PR"
             }' > jules_payload.json
 
-          curl -s -X POST 'https://jules.googleapis.com/v1alpha/sessions' \
+          curl --fail -sS -X POST 'https://jules.googleapis.com/v1alpha/sessions' \
             -H "Content-Type: application/json" \
             -H "X-Goog-Api-Key: $JULES_API_KEY" \
             -d @jules_payload.json
