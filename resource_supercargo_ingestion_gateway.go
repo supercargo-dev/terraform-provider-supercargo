@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -9,12 +10,15 @@ import (
 )
 
 var _ resource.Resource = &SupercargoIngestionGatewayResource{}
+var _ resource.ResourceWithConfigure = &SupercargoIngestionGatewayResource{}
 
 func NewSupercargoIngestionGatewayResource() resource.Resource {
 	return &SupercargoIngestionGatewayResource{}
 }
 
-type SupercargoIngestionGatewayResource struct{}
+type SupercargoIngestionGatewayResource struct {
+	client *ProviderData
+}
 
 type SupercargoIngestionGatewayResourceModel struct {
 	ID              types.String `tfsdk:"id"`
@@ -42,10 +46,35 @@ func (r *SupercargoIngestionGatewayResource) Schema(ctx context.Context, req res
 	}
 }
 
+func (r *SupercargoIngestionGatewayResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+	if req.ProviderData == nil {
+		return
+	}
+
+	data, ok := req.ProviderData.(*ProviderData)
+	if !ok {
+		resp.Diagnostics.AddError(
+			"Unexpected Resource Configure Data Type",
+			fmt.Sprintf("Expected *ProviderData, got: %T. Please report this issue to the provider developers.", req.ProviderData),
+		)
+		return
+	}
+
+	r.client = data
+}
+
 func (r *SupercargoIngestionGatewayResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan SupercargoIngestionGatewayResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
 		return
 	}
 
@@ -69,6 +98,15 @@ func (r *SupercargoIngestionGatewayResource) Read(ctx context.Context, req resou
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
+		return
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -78,6 +116,15 @@ func (r *SupercargoIngestionGatewayResource) Update(ctx context.Context, req res
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
+		return
+	}
+
 	plan.ID = types.StringValue("gateway-" + plan.ContractID.ValueString())
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }

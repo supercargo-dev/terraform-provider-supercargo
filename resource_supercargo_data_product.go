@@ -338,6 +338,14 @@ func (r *supercargoDataProductResource) Create(ctx context.Context, req resource
 		return
 	}
 
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
+		return
+	}
+
 	// 1. Read and Parse Manifest
 	productManifest, err := manifest.Load(plan.ManifestFile.ValueString())
 	if err != nil {
@@ -397,6 +405,14 @@ func (r *supercargoDataProductResource) Read(ctx context.Context, req resource.R
 	var state supercargoDataProductResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
 		return
 	}
 

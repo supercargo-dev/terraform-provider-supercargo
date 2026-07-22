@@ -92,6 +92,14 @@ func (r *supercargoGatewayConfigResource) Create(ctx context.Context, req resour
 		return
 	}
 
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
+		return
+	}
+
 	// 1. Load and Hash Manifest
 	manifestData, err := os.ReadFile(plan.ManifestFile.ValueString())
 	if err != nil {
@@ -142,6 +150,14 @@ func (r *supercargoGatewayConfigResource) Read(ctx context.Context, req resource
 	var state supercargoGatewayConfigResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
 		return
 	}
 
