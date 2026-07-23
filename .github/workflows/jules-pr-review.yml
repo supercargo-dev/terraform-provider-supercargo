@@ -54,7 +54,7 @@ jobs:
                 }
               },
               "requirePlanApproval": false,
-              "automationMode": "REVIEW_ONLY"
+              "automationMode": "AUTO_CREATE_PR"
             }' > jules_payload.json
 
           curl --fail -sS -X POST 'https://jules.googleapis.com/v1alpha/sessions' \
