@@ -7,6 +7,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	hubv1 "github.com/supercargo-dev/core/gen/go/hub/v1"
 )
 
 var _ resource.Resource = &SupercargoIngestionGatewayResource{}
@@ -70,14 +71,21 @@ func (r *SupercargoIngestionGatewayResource) Create(ctx context.Context, req res
 		return
 	}
 
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
+		return
+	}
+
 	// Governance Check: Verify contract existence in Hub.
 	// This ensures that we don't even attempt to provision infrastructure if the
 	// governing contract doesn't exist.
-	// In a full implementation, we would use the Hub client from r.client.
-	// if err := r.validateContract(ctx, plan.ContractID.ValueString(), plan.ContractVersion.ValueString()); err != nil {
-	//    resp.Diagnostics.AddError("Governance Validation Failed", err.Error())
-	//    return
-	// }
+	if err := r.validateContract(ctx, plan.ContractID.ValueString(), plan.ContractVersion.ValueString()); err != nil {
+	   resp.Diagnostics.AddError("Governance Validation Failed", err.Error())
+	   return
+	}
 
 	plan.ID = types.StringValue("gateway-" + plan.ContractID.ValueString())
 
@@ -90,6 +98,14 @@ func (r *SupercargoIngestionGatewayResource) Read(ctx context.Context, req resou
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
+		return
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -97,6 +113,14 @@ func (r *SupercargoIngestionGatewayResource) Update(ctx context.Context, req res
 	var plan SupercargoIngestionGatewayResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
 		return
 	}
 	plan.ID = types.StringValue("gateway-" + plan.ContractID.ValueString())
@@ -108,5 +132,29 @@ func (r *SupercargoIngestionGatewayResource) Update(ctx context.Context, req res
 // cloud resources are managed via the Terraform module 'supercargo-ingestion-gateway'.
 // A full implementation would use GCP APIs here to manage the lifecycle of Cloud Run, Pub/Sub, etc.
 func (r *SupercargoIngestionGatewayResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
+		return
+	}
 	// No-op for now as infrastructure is module-managed.
+}
+
+func (r *SupercargoIngestionGatewayResource) validateContract(ctx context.Context, contractID string, contractVersion string) error {
+	if r.client == nil || r.client.HubClient == nil {
+		// Cannot validate if client is not fully configured (e.g., plan phase)
+		return nil
+	}
+
+	_, err := r.client.HubClient.GetContract(ctx, &hubv1.GetContractRequest{
+		ContractUrn: contractID,
+		Version:     contractVersion,
+	})
+	if err != nil {
+		return fmt.Errorf("contract %s version %s not found or inaccessible: %w", contractID, contractVersion, err)
+	}
+
+	return nil
 }
