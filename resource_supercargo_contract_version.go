@@ -226,45 +226,6 @@ func (r *supercargoContractVersionResource) Create(ctx context.Context, req reso
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
-func (r *supercargoContractVersionResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
-	if req.Plan.Raw.IsNull() {
-		return // Destroy plan
-	}
-
-	var plan supercargoContractVersionResourceModel
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	if r.client == nil || r.client.HubClient == nil {
-		return
-	}
-
-	contract, err := r.mapToProto(plan)
-	if err != nil {
-		return // Handled in Create
-	}
-
-	impact, err := r.client.HubClient.CheckDownstreamImpact(ctx, &hubv1.CheckDownstreamImpactRequest{
-		Contract: contract,
-	})
-	if err != nil {
-		resp.Diagnostics.AddWarning(
-			"Governance Handshake Failed",
-			fmt.Sprintf("Could not check compatibility during plan for contract '%s': %s", plan.URN.ValueString(), status.Convert(err).Message()),
-		)
-		return
-	}
-
-	if impact.Severity == hubv1.ImpactSeverity_IMPACT_SEVERITY_BREAKING {
-		resp.Diagnostics.AddError(
-			"Breaking Change Detected (Plan-Time Governance)",
-			fmt.Sprintf("Proposed changes to %s are incompatible with the existing contract version. Breaking changes: %s",
-				plan.URN.ValueString(), strings.Join(impact.BreakingChanges, ", ")),
-		)
-	}
-}
 
 func (r *supercargoContractVersionResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	var state supercargoContractVersionResourceModel
