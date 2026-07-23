@@ -36,6 +36,9 @@ jobs:
             4. **Security:** Are sensitive attributes correctly marked as `Sensitive: true` in the schema to prevent logging to console?
             5. **Testability:** Are there appropriate acceptance tests (acctest) covering the new resources or data sources?
             
+            6. **Context Awareness:** Before injecting new methods or logic, you MUST explicitly scan the file to ensure an implementation doesn't already exist. Never create duplicate function declarations.
+            7. **Compile-Ready Code:** Ensure your code passes strict compilation (`go vet`).
+
             Do not nitpick minor formatting if it passes the standard Go linter. Focus on architectural soundness, robustness, and the Terraform operator experience.
         run: |
           jq -n \
@@ -51,7 +54,7 @@ jobs:
                 }
               },
               "requirePlanApproval": false,
-              "automationMode": "AUTO_CREATE_PR"
+              "automationMode": "REVIEW_ONLY"
             }' > jules_payload.json
 
           curl --fail -sS -X POST 'https://jules.googleapis.com/v1alpha/sessions' \
