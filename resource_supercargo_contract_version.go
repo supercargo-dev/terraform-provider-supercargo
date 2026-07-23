@@ -226,7 +226,6 @@ func (r *supercargoContractVersionResource) Create(ctx context.Context, req reso
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
-
 func (r *supercargoContractVersionResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	var state supercargoContractVersionResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)

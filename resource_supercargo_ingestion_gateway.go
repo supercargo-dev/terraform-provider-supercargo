@@ -83,8 +83,8 @@ func (r *SupercargoIngestionGatewayResource) Create(ctx context.Context, req res
 	// This ensures that we don't even attempt to provision infrastructure if the
 	// governing contract doesn't exist.
 	if err := r.validateContract(ctx, plan.ContractID.ValueString(), plan.ContractVersion.ValueString()); err != nil {
-	   resp.Diagnostics.AddError("Governance Validation Failed", err.Error())
-	   return
+		resp.Diagnostics.AddError("Governance Validation Failed", err.Error())
+		return
 	}
 
 	plan.ID = types.StringValue("gateway-" + plan.ContractID.ValueString())
