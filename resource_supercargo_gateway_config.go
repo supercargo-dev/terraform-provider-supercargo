@@ -59,6 +59,7 @@ func (r *supercargoGatewayConfigResource) Schema(_ context.Context, _ resource.S
 			},
 			"env_vars": schema.MapAttribute{
 				Computed:            true,
+				Sensitive:           true,
 				ElementType:         types.StringType,
 				MarkdownDescription: "Map of environment variables for the Gateway.",
 			},
@@ -148,6 +149,10 @@ func (r *supercargoGatewayConfigResource) Read(ctx context.Context, req resource
 	// Read is similar to Create logic to check for drift if manifest changed on disk
 	manifestData, err := os.ReadFile(state.ManifestFile.ValueString())
 	if err != nil {
+		if os.IsNotExist(err) {
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError("Error Reading Manifest", err.Error())
 		return
 	}
