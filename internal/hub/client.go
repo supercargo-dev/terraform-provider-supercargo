@@ -91,6 +91,20 @@ func (f *Factory) GetClient(ctx context.Context, address string, token string, o
 		)
 	}
 
+	retryPolicy := `{
+		"methodConfig": [{
+		  "name": [{"service": ""}],
+		  "retryPolicy": {
+			"maxAttempts": 5,
+			"initialBackoff": "1s",
+			"maxBackoff": "10s",
+			"backoffMultiplier": 2,
+			"retryableStatusCodes": ["UNAVAILABLE", "RESOURCE_EXHAUSTED"]
+		  }
+		}]
+	}`
+	opts = append(opts, grpc.WithDefaultServiceConfig(retryPolicy))
+
 	conn, err := grpc.NewClient(address, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial hub at %s: %w", address, err)

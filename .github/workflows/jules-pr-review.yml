@@ -1,0 +1,63 @@
+name: Jules AI PR Review
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches:
+      - main
+
+jobs:
+  review:
+    if: github.actor != 'google-labs-jules[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 30
+
+      - name: Invoke Jules Code Review
+        shell: bash
+        env:
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+          STARTING_BRANCH: ${{ github.head_ref }}
+          REPO_FULL_NAME: ${{ github.repository }}
+          USER_PROMPT: |
+            You are an expert Principal Go Engineer reviewing this Pull Request for the Supercargo Terraform Provider.
+            This project is a Terraform Provider built using the official HashiCorp Terraform Plugin Framework/SDK.
+            
+            Please review the code changes and provide actionable feedback, or create commits to fix issues.
+            
+            Focus your review strictly on:
+            1. **Provider Schema & State Safety:** Are schema definitions clear and typesafe? Are we properly handling state creation, reading, updating, and deletion (CRUD)? Ensure no unhandled panics occur during state manipulation.
+            2. **Backward Compatibility:** Does this change break existing Terraform state or HCL configurations? Breaking changes require a new major version or state upgrade logic.
+            3. **API Interaction:** Are API calls efficient? Do we handle rate limits, retries, and context cancellation correctly?
+            4. **Security:** Are sensitive attributes correctly marked as `Sensitive: true` in the schema to prevent logging to console?
+            5. **Testability:** Are there appropriate acceptance tests (acctest) covering the new resources or data sources?
+            
+            6. **Context Awareness:** Before injecting new methods or logic, you MUST explicitly scan the file to ensure an implementation doesn't already exist. Never create duplicate function declarations.
+            7. **Compile-Ready Code:** Ensure your code passes strict compilation (`go vet`).
+
+            Do not nitpick minor formatting if it passes the standard Go linter. Focus on architectural soundness, robustness, and the Terraform operator experience.
+        run: |
+          jq -n \
+            --arg prompt "$USER_PROMPT" \
+            --arg branch "$STARTING_BRANCH" \
+            --arg repo "$REPO_FULL_NAME" \
+            '{
+              "prompt": $prompt,
+              "sourceContext": {
+                "source": "sources/github/\($repo)",
+                "githubRepoContext": {
+                  "startingBranch": $branch
+                }
+              },
+              "requirePlanApproval": false,
+              "automationMode": "AUTO_CREATE_PR"
+            }' > jules_payload.json
+
+          curl --fail -sS -X POST 'https://jules.googleapis.com/v1alpha/sessions' \
+            -H "Content-Type: application/json" \
+            -H "X-Goog-Api-Key: $JULES_API_KEY" \
+            -d @jules_payload.json

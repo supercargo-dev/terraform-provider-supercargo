@@ -405,6 +405,10 @@ func (r *supercargoDataProductResource) Read(ctx context.Context, req resource.R
 		Version:    state.Version.ValueString(),
 	})
 	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError("Error Reading Product", err.Error())
 		return
 	}
@@ -443,6 +447,12 @@ func (r *supercargoDataProductResource) Read(ctx context.Context, req resource.R
 		}
 		identitiesMap, _ := types.MapValueFrom(ctx, types.StringType, identities)
 		state.ServiceIdentities = identitiesMap
+	} else {
+		state.Project = types.StringNull()
+		state.Location = types.StringNull()
+		state.PartitioningField = types.StringNull()
+		state.PartitionExpirationMs = types.Int64Null()
+		state.ServiceIdentities = types.MapNull(types.StringType)
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)

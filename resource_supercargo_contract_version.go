@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	hubv1 "github.com/supercargo-dev/core/gen/go/hub/v1"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
@@ -184,7 +185,6 @@ func (r *supercargoContractVersionResource) Create(ctx context.Context, req reso
 		return
 	}
 
-	// Handshake: Check compatibility before creating
 	contract, err := r.mapToProto(plan)
 	if err != nil {
 		resp.Diagnostics.AddError("Invalid Schema JSON", err.Error())
@@ -246,6 +246,10 @@ func (r *supercargoContractVersionResource) Read(ctx context.Context, req resour
 		Version:     state.Version.ValueString(),
 	})
 	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error Reading Contract",
 			fmt.Sprintf("Could not read contract '%s' (v%s) from Supercargo Hub: %s", state.URN.ValueString(), state.Version.ValueString(), status.Convert(err).Message()),

@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	hubv1 "github.com/supercargo-dev/core/gen/go/hub/v1"
 	platformv1 "github.com/supercargo-dev/core/gen/go/platform/v1"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
@@ -165,6 +166,10 @@ func (r *supercargoTeamResource) Read(ctx context.Context, req resource.ReadRequ
 		Name: state.Name.ValueString(),
 	})
 	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError(
 			"Error Reading Team",
 			fmt.Sprintf("Could not read team '%s' from Supercargo Hub: %s", state.Name.ValueString(), status.Convert(err).Message()),
