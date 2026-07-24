@@ -1,7 +1,7 @@
 name: Jules AI PR Review
 on:
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, reopened, ready_for_review]
     branches:
       - main
 
@@ -38,6 +38,7 @@ jobs:
             
             6. **Context Awareness:** Before injecting new methods or logic, you MUST explicitly scan the file to ensure an implementation doesn't already exist. Never create duplicate function declarations.
             7. **Compile-Ready Code:** Ensure your code passes strict compilation (`go vet`).
+            8. **Language Context:** This project uses Go 1.26+. Leverage modern Go features and do NOT revert them (e.g. loop variable captures).
 
             Do not nitpick minor formatting if it passes the standard Go linter. Focus on architectural soundness, robustness, and the Terraform operator experience.
         run: |

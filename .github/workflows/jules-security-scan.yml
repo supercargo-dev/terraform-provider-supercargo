@@ -32,6 +32,7 @@ jobs:
             
             **Context Awareness:** Before injecting new methods or logic, you MUST explicitly scan the file to ensure an implementation doesn't already exist. Never create duplicate function declarations.
             **Compile-Ready Code:** Ensure your code passes strict compilation (`go vet`).
+            **Language Context:** This project uses Go 1.26+. Leverage modern Go features and do NOT revert them (e.g. loop variable captures).
 
             If you find a high or critical severity vulnerability, open a pull request immediately with a targeted, minimal fix. 
             Do not make changes to business logic unrelated to the security fix. Ensure all existing tests pass and the schema remains backward compatible.
