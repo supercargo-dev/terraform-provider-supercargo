@@ -93,6 +93,14 @@ func (r *supercargoGatewayConfigResource) Create(ctx context.Context, req resour
 		return
 	}
 
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
+		return
+	}
+
 	// 1. Load and Hash Manifest
 	manifestData, err := os.ReadFile(plan.ManifestFile.ValueString())
 	if err != nil {
@@ -146,6 +154,14 @@ func (r *supercargoGatewayConfigResource) Read(ctx context.Context, req resource
 		return
 	}
 
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
+		return
+	}
+
 	// Read is similar to Create logic to check for drift if manifest changed on disk
 	manifestData, err := os.ReadFile(state.ManifestFile.ValueString())
 	if err != nil {
@@ -185,8 +201,22 @@ func (r *supercargoGatewayConfigResource) Read(ctx context.Context, req resource
 }
 
 func (r *supercargoGatewayConfigResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
+		return
+	}
 	r.Create(ctx, resource.CreateRequest{Plan: req.Plan}, &resource.CreateResponse{State: resp.State, Diagnostics: resp.Diagnostics})
 }
 
 func (r *supercargoGatewayConfigResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
+		return
+	}
 }

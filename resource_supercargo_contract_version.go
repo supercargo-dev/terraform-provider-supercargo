@@ -273,11 +273,25 @@ func (r *supercargoContractVersionResource) Read(ctx context.Context, req resour
 }
 
 func (r *supercargoContractVersionResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
+		return
+	}
 	// Contracts are immutable by URN+Version. Update is mostly for metadata if allowed.
 	// But our resource requires replace for version.
 }
 
 func (r *supercargoContractVersionResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
+		return
+	}
 }
 
 func (r *supercargoContractVersionResource) mapToProto(m supercargoContractVersionResourceModel) (*hubv1.DataContract, error) {
