@@ -278,6 +278,14 @@ func (r *supercargoContractVersionResource) Update(ctx context.Context, req reso
 }
 
 func (r *supercargoContractVersionResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
+		return
+	}
+	// Contract deletion is generally not supported for immutability and auditing purposes.
 }
 
 func (r *supercargoContractVersionResource) mapToProto(m supercargoContractVersionResourceModel) (*hubv1.DataContract, error) {

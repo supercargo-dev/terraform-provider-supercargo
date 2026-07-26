@@ -239,6 +239,13 @@ func (r *supercargoTeamResource) Update(ctx context.Context, req resource.Update
 
 // Delete deletes the resource and removes the Terraform state.
 func (r *supercargoTeamResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
+		return
+	}
 	// Hub does not currently support team deletion via API for safety reasons,
 	// but we could implement a 'deactivate' or similar if needed.
 	// For now, we just remove from Terraform state.
