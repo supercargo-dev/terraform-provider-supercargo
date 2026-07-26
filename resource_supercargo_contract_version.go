@@ -292,6 +292,8 @@ func (r *supercargoContractVersionResource) Delete(ctx context.Context, req reso
 		)
 		return
 	}
+	// The Hub API does not support deletion of contract versions as they are immutable.
+	// This is a no-op; Terraform will just safely remove the resource from the state.
 }
 
 func (r *supercargoContractVersionResource) mapToProto(m supercargoContractVersionResourceModel) (*hubv1.DataContract, error) {
