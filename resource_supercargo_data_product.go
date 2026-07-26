@@ -338,6 +338,14 @@ func (r *supercargoDataProductResource) Create(ctx context.Context, req resource
 		return
 	}
 
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
+		return
+	}
+
 	// 1. Read and Parse Manifest
 	productManifest, err := manifest.Load(plan.ManifestFile.ValueString())
 	if err != nil {
@@ -400,6 +408,14 @@ func (r *supercargoDataProductResource) Read(ctx context.Context, req resource.R
 		return
 	}
 
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
+		return
+	}
+
 	res, err := r.client.HubClient.GetProduct(ctx, &hubv1.GetProductRequest{
 		ProductUrn: state.URN.ValueString(),
 		Version:    state.Version.ValueString(),
@@ -459,12 +475,27 @@ func (r *supercargoDataProductResource) Read(ctx context.Context, req resource.R
 }
 
 func (r *supercargoDataProductResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
+		return
+	}
 	// Similar to Create but using Update logic if needed (RegisterProduct is idempotent)
 	r.Create(ctx, resource.CreateRequest{Plan: req.Plan}, &resource.CreateResponse{State: resp.State, Diagnostics: resp.Diagnostics})
 }
 
 func (r *supercargoDataProductResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	// Implement DeleteProduct call if supported and safe
+	if r.client == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the resource can be managed.",
+		)
+		return
+	}
+	// The Hub API does not currently support deletion of data products for safety reasons.
+	// This is a no-op; Terraform will just safely remove the resource from the state.
 }
 
 func (r *supercargoDataProductResource) applyOverrides(m *hubv1.ProductManifest, plan *supercargoDataProductResourceModel) {
