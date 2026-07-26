@@ -219,4 +219,7 @@ func (r *supercargoGatewayConfigResource) Delete(ctx context.Context, req resour
 		)
 		return
 	}
+	// Gateway configuration represents a logical entity tracking drift from a local manifest.
+	// Deletion via Terraform simply removes it from state; actual gateway resource cleanup
+	// would typically be managed by modifying the surrounding Terraform module usage.
 }

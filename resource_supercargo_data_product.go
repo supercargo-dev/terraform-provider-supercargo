@@ -494,7 +494,8 @@ func (r *supercargoDataProductResource) Delete(ctx context.Context, req resource
 		)
 		return
 	}
-	// Implement DeleteProduct call if supported and safe
+	// The Hub API does not currently support deletion of data products for safety reasons.
+	// This is a no-op; Terraform will just safely remove the resource from the state.
 }
 
 func (r *supercargoDataProductResource) applyOverrides(m *hubv1.ProductManifest, plan *supercargoDataProductResourceModel) {
