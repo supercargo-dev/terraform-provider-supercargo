@@ -8,6 +8,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	hubv1 "github.com/supercargo-dev/core/gen/go/hub/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 var _ resource.Resource = &SupercargoIngestionGatewayResource{}
@@ -106,6 +108,16 @@ func (r *SupercargoIngestionGatewayResource) Read(ctx context.Context, req resou
 		)
 		return
 	}
+
+	if err := r.validateContract(ctx, state.ContractID.ValueString(), state.ContractVersion.ValueString()); err != nil {
+		if status.Code(err) == codes.NotFound {
+			resp.State.RemoveResource(ctx)
+			return
+		}
+		resp.Diagnostics.AddError("Error Reading Contract for Gateway", err.Error())
+		return
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
