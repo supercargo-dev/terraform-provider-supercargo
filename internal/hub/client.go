@@ -46,13 +46,18 @@ func (f *Factory) GetClient(ctx context.Context, address string, token string, o
 	}
 
 	// Determine if we need OIDC (GCP environment) or insecure (localhost)
-	if strings.Contains(address, "localhost") || strings.Contains(address, "127.0.0.1") {
+	host := address
+	if h, _, err := net.SplitHostPort(address); err == nil {
+		host = h
+	}
+
+	if host == "localhost" || host == "127.0.0.1" {
 		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 
 		// For local development against emulators, we inject a mock token that passes AuthZ
 		mockToken := os.Getenv("SUPERCARGO_MOCK_TOKEN")
 		if mockToken == "" {
-			mockToken = "admin@example.com|platform-trust"
+			return nil, fmt.Errorf("SUPERCARGO_MOCK_TOKEN environment variable must be set for local development")
 		}
 
 		ts := oauth2.StaticTokenSource(&oauth2.Token{
