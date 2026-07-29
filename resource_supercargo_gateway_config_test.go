@@ -9,6 +9,7 @@ import (
 )
 
 func TestAccSupercargoGatewayConfig_hash(t *testing.T) {
+	t.Setenv("SUPERCARGO_MOCK_TOKEN", "admin@example.com|platform-trust")
 	manifestPath := filepath.Join(t.TempDir(), "product.yaml")
 	manifestContent1 := `
 meta:

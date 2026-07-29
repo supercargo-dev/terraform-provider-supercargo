@@ -9,6 +9,7 @@ import (
 )
 
 func TestAccSupercargoE2E_rollingUpdate(t *testing.T) {
+	t.Setenv("SUPERCARGO_MOCK_TOKEN", "admin@example.com|platform-trust")
 	manifestPath := filepath.Join(t.TempDir(), "product.yaml")
 
 	config1 := `

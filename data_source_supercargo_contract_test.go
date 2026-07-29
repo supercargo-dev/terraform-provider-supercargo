@@ -7,6 +7,7 @@ import (
 )
 
 func TestAccSupercargoContractDataSource_basic(t *testing.T) {
+	t.Setenv("SUPERCARGO_MOCK_TOKEN", "admin@example.com|platform-trust")
 	contractURN := "urn:supercargo:hub:contract:ds-test-contract-unique"
 
 	resource.Test(t, resource.TestCase{

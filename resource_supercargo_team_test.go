@@ -7,6 +7,7 @@ import (
 )
 
 func TestAccSupercargoTeam_basic(t *testing.T) {
+	t.Setenv("SUPERCARGO_MOCK_TOKEN", "admin@example.com|platform-trust")
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{

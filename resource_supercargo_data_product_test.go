@@ -10,6 +10,7 @@ import (
 )
 
 func TestAccSupercargoDataProduct_overrides(t *testing.T) {
+	t.Setenv("SUPERCARGO_MOCK_TOKEN", "admin@example.com|platform-trust")
 	manifestPath := filepath.Join(t.TempDir(), "product.yaml")
 	manifestContent := `
 meta:
