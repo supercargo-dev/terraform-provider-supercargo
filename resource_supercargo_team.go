@@ -119,11 +119,11 @@ func (r *supercargoTeamResource) Create(ctx context.Context, req resource.Create
 		DataAsset: plan.DataAsset.ValueString(),
 	}
 
-	if !plan.Members.IsNull() {
+	if !plan.Members.IsNull() && !plan.Members.IsUnknown() {
 		resp.Diagnostics.Append(plan.Members.ElementsAs(ctx, &team.Members, false)...)
 	}
 
-	if !plan.Metadata.IsNull() {
+	if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() {
 		resp.Diagnostics.Append(plan.Metadata.ElementsAs(ctx, &team.Metadata, false)...)
 	}
 
@@ -222,11 +222,11 @@ func (r *supercargoTeamResource) Update(ctx context.Context, req resource.Update
 		DataAsset: plan.DataAsset.ValueString(),
 	}
 
-	if !plan.Members.IsNull() {
+	if !plan.Members.IsNull() && !plan.Members.IsUnknown() {
 		resp.Diagnostics.Append(plan.Members.ElementsAs(ctx, &team.Members, false)...)
 	}
 
-	if !plan.Metadata.IsNull() {
+	if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() {
 		resp.Diagnostics.Append(plan.Metadata.ElementsAs(ctx, &team.Metadata, false)...)
 	}
 
