@@ -68,8 +68,8 @@ func (p *SupercargoProvider) Configure(ctx context.Context, req provider.Configu
 		return
 	}
 
-	if data.HubAddress.IsUnknown() {
-		// HubAddress is not known yet (e.g. creating the Hub in this run).
+	if data.HubAddress.IsUnknown() || data.Token.IsUnknown() {
+		// HubAddress or Token is not known yet (e.g. creating the Hub in this run).
 		// We can't configure the client, but we must pass ProviderData down
 		// so ModifyPlan can detect the client is nil and skip validation.
 		providerData := &ProviderData{
