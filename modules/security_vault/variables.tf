@@ -29,3 +29,9 @@ variable "platform_topic_id" {
   type        = string
   description = "The Pub/Sub topic ID for the platform events (raw-platform)."
 }
+
+variable "bigquery_deletion_protection" {
+  description = "Whether to enable deletion protection on BigQuery tables"
+  type        = bool
+  default     = true
+}
