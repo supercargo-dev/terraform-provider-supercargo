@@ -13,6 +13,8 @@ resource "google_bigquery_table" "lookup_table" {
   table_id   = "lookup_table"
   project    = var.project_id
 
+  deletion_protection = var.bigquery_deletion_protection
+
   time_partitioning {
     type  = "DAY"
     field = "created_at"
@@ -59,14 +61,14 @@ EOF
 resource "google_iam_deny_policy" "restrict_bq_access" {
   count        = var.authorized_view_sa_email != "" ? 1 : 0
   provider     = google-beta
-  parent       = urlencode("cloudresourcemanager.googleapis.com/projects/${var.project_id}")
-  name         = "restrict-bq-direct-access"
-  display_name = "Restrict direct BigQuery access to Sovereign Lookup Table"
+  parent       = "cloudresourcemanager.googleapis.com/projects/${var.project_id}"
+  name         = "deny-bq-data-viewer-${var.env}"
+  display_name = "Deny BigQuery Data Viewer on Security Vault"
 
   rules {
     description = "Deny bigquery.dataViewer to all users except authorized service accounts"
     deny_rule {
-      denied_principals = ["principalSet://goog/public:all"]
+      denied_principals = ["principalSet://goog.global/attribute.value/allAuthenticatedUsers"]
       exception_principals = [
         "principal://iam.googleapis.com/projects/-/serviceAccounts/${var.authorized_view_sa_email}"
       ]
@@ -76,14 +78,14 @@ resource "google_iam_deny_policy" "restrict_bq_access" {
 }
 
 resource "google_bigquery_connection" "kms_connection" {
-  connection_id = "kms-connection"
+  connection_id = "kms-conn-${var.env}"
   project       = var.project_id
   location      = var.location
-  friendly_name = "KMS Connection for Sovereign Decryption"
+  friendly_name = "KMS Cloud Resource Connection for AEAD"
   cloud_resource {}
 }
 
-resource "google_kms_crypto_key_iam_member" "bq_decrypter" {
+resource "google_kms_crypto_key_iam_member" "kms_decrypter" {
   crypto_key_id = var.sovereign_kms_key_id
   role          = "roles/cloudkms.cryptoKeyDecrypter"
   member        = "serviceAccount:${google_bigquery_connection.kms_connection.cloud_resource[0].service_account_id}"
@@ -99,6 +101,8 @@ resource "google_bigquery_table" "rtbf_shred_queue" {
   dataset_id = google_bigquery_dataset.security_vault.dataset_id
   table_id   = "rtbf_shred_queue"
   project    = var.project_id
+
+  deletion_protection = var.bigquery_deletion_protection
 
   schema = <<EOF
 [

@@ -130,6 +130,14 @@ resource "google_cloud_run_v2_service" "gateway" {
       }
     }
   }
+
+  lifecycle {
+    ignore_changes = [
+      template[0].containers[0].image,
+      client,
+      client_version
+    ]
+  }
 }
 
 // Topics
@@ -157,7 +165,7 @@ resource "google_bigquery_table" "validated_data" {
   table_id   = "validated_${replace(each.key, "-", "_")}_${random_id.suffix.hex}"
   project    = var.project_id
 
-  deletion_protection = false
+  deletion_protection = var.bigquery_deletion_protection
 
   schema = each.value.schema
 }

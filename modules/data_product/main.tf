@@ -40,6 +40,7 @@ module "gateway" {
   force_deploy_trigger              = var.force_deploy_trigger
   custom_audiences                  = var.custom_audiences
   gateway_audience                  = var.gateway_audience
+  bigquery_deletion_protection      = var.bigquery_deletion_protection
 
   contracts = {
     for k, v in var.contracts : element(split(":", supercargo_contract_version.this[k].urn), length(split(":", supercargo_contract_version.this[k].urn)) - 1) => {

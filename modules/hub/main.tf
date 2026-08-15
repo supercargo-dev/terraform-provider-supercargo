@@ -367,6 +367,14 @@ resource "google_cloud_run_v2_service" "hub" {
       }
     }
   }
+
+  lifecycle {
+    ignore_changes = [
+      template[0].containers[0].image,
+      client,
+      client_version
+    ]
+  }
 }
 
 # Metadata Shovel Service Account
@@ -429,6 +437,14 @@ resource "google_cloud_run_v2_service" "shovel" {
         value = var.force_deploy_trigger
       }
     }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      template[0].containers[0].image,
+      client,
+      client_version
+    ]
   }
 }
 

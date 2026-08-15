@@ -143,3 +143,9 @@ variable "gateway_audience" {
   default = ""
 }
 
+variable "bigquery_deletion_protection" {
+  description = "Whether to enable deletion protection on BigQuery tables"
+  type        = bool
+  default     = true
+}
+
