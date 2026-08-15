@@ -128,6 +128,11 @@ resource "google_cloud_run_v2_service" "gateway" {
           cpu    = var.container_cpu
         }
       }
+
+      ports {
+        container_port = 8080
+        name           = "h2c"
+      }
     }
   }
 
