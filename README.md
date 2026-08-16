@@ -1,4 +1,4 @@
-# Supercargo Terraform Provider (`terraform/provider/`)
+# Supercargo Terraform Provider
 
 **Intent:** Custom Terraform provider code for managing Supercargo platform resources via Infrastructure as Code.
 

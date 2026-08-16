@@ -1,4 +1,4 @@
-package main
+package provider
 
 import (
 	"context"
@@ -116,7 +116,7 @@ func (r *supercargoDataProductResource) ModifyPlan(ctx context.Context, req reso
 	}
 
 	// 3. Validation Logic (Requires Hub Client)
-	if r.client != nil {
+	if r.client != nil && r.client.HubClient != nil {
 		if !plan.PartitioningField.IsNull() && !plan.PartitioningField.IsUnknown() {
 			// Validate partitioning field against contracts
 			fieldFound := false
@@ -143,7 +143,7 @@ func (r *supercargoDataProductResource) ModifyPlan(ctx context.Context, req reso
 							"Team Not Found (Bootstrap Mode)",
 							fmt.Sprintf("Team '%s' was not found in the Hub. Plan will proceed assuming it's being created in the current plan.", teamName),
 						)
-					} else {
+					} else if ok && st.Code() != codes.Unavailable {
 						resp.Diagnostics.AddError(
 							"Governance Handshake Failed",
 							fmt.Sprintf("Could not verify team '%s' in Hub: %s", teamName, st.Message()),
@@ -157,7 +157,7 @@ func (r *supercargoDataProductResource) ModifyPlan(ctx context.Context, req reso
 
 			contractsChecked := 0
 			for _, port := range productManifest.OutputPorts {
-				if port.Contract == nil {
+				if port == nil || port.Contract == nil {
 					continue
 				}
 
@@ -171,16 +171,20 @@ func (r *supercargoDataProductResource) ModifyPlan(ctx context.Context, req reso
 						ContractUrn: port.Contract.Urn,
 						Version:     port.Contract.Version,
 					})
-					if err != nil {
+					if err != nil || res == nil || res.Contract == nil {
 						continue
 					}
 					contract = res.Contract
 					r.client.Cache.Store(contractCacheKey, contract)
 				}
 
+				if contract == nil {
+					continue
+				}
+
 				contractsChecked++
 				for _, f := range contract.Schema {
-					if f.Name == partitioningField {
+					if f != nil && f.Name == partitioningField {
 						fieldFound = true
 						break
 					}
@@ -384,13 +388,6 @@ func (r *supercargoDataProductResource) Create(ctx context.Context, req resource
 			plan.Location = types.StringNull()
 		}
 	}
-	if plan.PartitioningField.IsUnknown() || plan.PartitioningField.IsNull() {
-		if len(productManifest.OutputPorts) > 0 && productManifest.OutputPorts[0].Physical != nil && productManifest.OutputPorts[0].Physical.Bigquery != nil && productManifest.OutputPorts[0].Physical.Bigquery.PartitionBy != "" {
-			plan.PartitioningField = types.StringValue(productManifest.OutputPorts[0].Physical.Bigquery.PartitionBy)
-		} else {
-			plan.PartitioningField = types.StringNull()
-		}
-	}
 	if plan.PartitionExpirationMs.IsUnknown() || plan.PartitionExpirationMs.IsNull() {
 		if len(productManifest.OutputPorts) > 0 {
 			plan.PartitionExpirationMs = durationToMs(productManifest.OutputPorts[0].Physical)
@@ -401,6 +398,7 @@ func (r *supercargoDataProductResource) Create(ctx context.Context, req resource
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
+// Read refreshes the Terraform state with the latest data.
 func (r *supercargoDataProductResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	var state supercargoDataProductResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
@@ -408,7 +406,7 @@ func (r *supercargoDataProductResource) Read(ctx context.Context, req resource.R
 		return
 	}
 
-	if r.client == nil {
+	if r.client == nil || r.client.HubClient == nil {
 		resp.Diagnostics.AddError(
 			"Provider Not Configured",
 			"The provider must be configured before the resource can be managed.",
@@ -475,19 +473,21 @@ func (r *supercargoDataProductResource) Read(ctx context.Context, req resource.R
 }
 
 func (r *supercargoDataProductResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	if r.client == nil {
+	if r.client == nil || r.client.HubClient == nil {
 		resp.Diagnostics.AddError(
 			"Provider Not Configured",
 			"The provider must be configured before the resource can be managed.",
 		)
 		return
 	}
-	// Similar to Create but using Update logic if needed (RegisterProduct is idempotent)
-	r.Create(ctx, resource.CreateRequest{Plan: req.Plan}, &resource.CreateResponse{State: resp.State, Diagnostics: resp.Diagnostics})
+	createResp := resource.CreateResponse{State: resp.State}
+	r.Create(ctx, resource.CreateRequest{Plan: req.Plan, Config: req.Config}, &createResp)
+	resp.Diagnostics.Append(createResp.Diagnostics...)
+	resp.State = createResp.State
 }
 
 func (r *supercargoDataProductResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	if r.client == nil {
+	if r.client == nil || r.client.HubClient == nil {
 		resp.Diagnostics.AddError(
 			"Provider Not Configured",
 			"The provider must be configured before the resource can be managed.",

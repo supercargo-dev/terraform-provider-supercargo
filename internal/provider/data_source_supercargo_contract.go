@@ -1,4 +1,4 @@
-package main
+package provider
 
 import (
 	"context"
@@ -113,6 +113,14 @@ func (d *SupercargoContractDataSource) Read(ctx context.Context, req datasource.
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if d.client == nil || d.client.HubClient == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the data source can be read.",
+		)
 		return
 	}
 

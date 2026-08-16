@@ -45,3 +45,8 @@ terraform.rc
 
 .terraform.lock.hcl
 
+# Compiled binaries
+terraform-provider-supercargo
+*.exe
+*.test
+*.out

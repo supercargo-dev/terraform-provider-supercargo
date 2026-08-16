@@ -1,4 +1,4 @@
-package main
+package provider
 
 import (
 	"context"
@@ -73,7 +73,7 @@ func (r *SupercargoIngestionGatewayResource) Create(ctx context.Context, req res
 		return
 	}
 
-	if r.client == nil {
+	if r.client == nil || r.client.HubClient == nil {
 		resp.Diagnostics.AddError(
 			"Provider Not Configured",
 			"The provider must be configured before the resource can be managed.",
@@ -101,7 +101,7 @@ func (r *SupercargoIngestionGatewayResource) Read(ctx context.Context, req resou
 		return
 	}
 
-	if r.client == nil {
+	if r.client == nil || r.client.HubClient == nil {
 		resp.Diagnostics.AddError(
 			"Provider Not Configured",
 			"The provider must be configured before the resource can be managed.",
@@ -128,7 +128,7 @@ func (r *SupercargoIngestionGatewayResource) Update(ctx context.Context, req res
 		return
 	}
 
-	if r.client == nil {
+	if r.client == nil || r.client.HubClient == nil {
 		resp.Diagnostics.AddError(
 			"Provider Not Configured",
 			"The provider must be configured before the resource can be managed.",
@@ -144,7 +144,7 @@ func (r *SupercargoIngestionGatewayResource) Update(ctx context.Context, req res
 // cloud resources are managed via the Terraform module 'supercargo-ingestion-gateway'.
 // A full implementation would use GCP APIs here to manage the lifecycle of Cloud Run, Pub/Sub, etc.
 func (r *SupercargoIngestionGatewayResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	if r.client == nil {
+	if r.client == nil || r.client.HubClient == nil {
 		resp.Diagnostics.AddError(
 			"Provider Not Configured",
 			"The provider must be configured before the resource can be managed.",

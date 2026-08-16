@@ -1,4 +1,4 @@
-# Terraform Modules (`terraform/modules/`)
+# Terraform Modules (`modules/`)
 
 **Intent:** Reusable, parameterized Terraform modules for provisioning Supercargo services and infrastructure components.
 

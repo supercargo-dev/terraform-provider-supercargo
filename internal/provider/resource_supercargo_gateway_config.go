@@ -1,4 +1,4 @@
-package main
+package provider
 
 import (
 	"context"
@@ -120,7 +120,7 @@ func (r *supercargoGatewayConfigResource) Create(ctx context.Context, req resour
 
 	var contractURNs []string
 	for _, o := range productManifest.OutputPorts {
-		if o.Contract != nil {
+		if o != nil && o.Contract != nil {
 			urn := fmt.Sprintf("%s:%s", o.Contract.Urn, o.Contract.Version)
 			contractURNs = append(contractURNs, urn)
 		}
@@ -128,6 +128,7 @@ func (r *supercargoGatewayConfigResource) Create(ctx context.Context, req resour
 	sort.Strings(contractURNs)
 	for _, urn := range contractURNs {
 		h.Write([]byte(urn))
+		h.Write([]byte("\n"))
 	}
 
 	configHash := hex.EncodeToString(h.Sum(nil))
@@ -184,7 +185,7 @@ func (r *supercargoGatewayConfigResource) Read(ctx context.Context, req resource
 
 	var contractURNs []string
 	for _, o := range productManifest.OutputPorts {
-		if o.Contract != nil {
+		if o != nil && o.Contract != nil {
 			urn := fmt.Sprintf("%s:%s", o.Contract.Urn, o.Contract.Version)
 			contractURNs = append(contractURNs, urn)
 		}
@@ -192,6 +193,7 @@ func (r *supercargoGatewayConfigResource) Read(ctx context.Context, req resource
 	sort.Strings(contractURNs)
 	for _, urn := range contractURNs {
 		h.Write([]byte(urn))
+		h.Write([]byte("\n"))
 	}
 
 	configHash := hex.EncodeToString(h.Sum(nil))
@@ -208,7 +210,10 @@ func (r *supercargoGatewayConfigResource) Update(ctx context.Context, req resour
 		)
 		return
 	}
-	r.Create(ctx, resource.CreateRequest{Plan: req.Plan}, &resource.CreateResponse{State: resp.State, Diagnostics: resp.Diagnostics})
+	createResp := resource.CreateResponse{State: resp.State}
+	r.Create(ctx, resource.CreateRequest{Plan: req.Plan, Config: req.Config}, &createResp)
+	resp.Diagnostics.Append(createResp.Diagnostics...)
+	resp.State = createResp.State
 }
 
 func (r *supercargoGatewayConfigResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
