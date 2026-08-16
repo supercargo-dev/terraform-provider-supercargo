@@ -1,4 +1,4 @@
-package main
+package provider
 
 import (
 	"context"
@@ -123,9 +123,11 @@ func (p *SupercargoProvider) DataSources(ctx context.Context) []func() datasourc
 	}
 }
 
-func New() provider.Provider {
-	return &SupercargoProvider{
-		version: "dev",
-		factory: hub.NewFactory(),
+func New(version string) func() provider.Provider {
+	return func() provider.Provider {
+		return &SupercargoProvider{
+			version: version,
+			factory: hub.NewFactory(),
+		}
 	}
 }

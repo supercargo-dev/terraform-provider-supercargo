@@ -1,4 +1,4 @@
-package main
+package provider
 
 import (
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
@@ -6,5 +6,5 @@ import (
 )
 
 var testAccProtoV6ProviderFactories = map[string]func() (tfprotov6.ProviderServer, error){
-	"supercargo": providerserver.NewProtocol6WithError(New()),
+	"supercargo": providerserver.NewProtocol6WithError(New("test")()),
 }

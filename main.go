@@ -6,6 +6,13 @@ import (
 	"log"
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
+	"github.com/supercargo-dev/terraform-provider-supercargo/internal/provider"
+)
+
+// Provider build parameters injected via ldflags by GoReleaser.
+var (
+	version string = "dev"
+	commit  string = ""
 )
 
 func main() {
@@ -19,7 +26,7 @@ func main() {
 		Debug:   debug,
 	}
 
-	err := providerserver.Serve(context.Background(), New, opts)
+	err := providerserver.Serve(context.Background(), provider.New(version), opts)
 
 	if err != nil {
 		log.Fatal(err.Error())
