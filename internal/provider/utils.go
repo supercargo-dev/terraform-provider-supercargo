@@ -92,6 +92,9 @@ func protoToBQFields(fields []*hubv1.Field, path []string) ([]*bqField, error) {
 	}
 	out := make([]*bqField, 0)
 	for _, f := range fields {
+		if f == nil {
+			continue
+		}
 		bqType, err := mapProtoType(f.Type)
 		if err != nil {
 			return nil, fmt.Errorf("field %q: %w", f.Name, err)
@@ -121,6 +124,9 @@ func flattenFields(fields []*hubv1.Field, prefix string, path []string) ([]Contr
 	}
 	result := make([]ContractFieldModel, 0)
 	for _, f := range fields {
+		if f == nil {
+			continue
+		}
 		name := f.Name
 		if prefix != "" {
 			name = prefix + "." + f.Name

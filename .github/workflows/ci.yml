@@ -39,8 +39,10 @@ jobs:
           cache: true
 
       - name: Configure Git for Private Modules
+        env:
+          SUPERCARGO_DEV_PAT: ${{ secrets.SUPERCARGO_DEV_PAT }}
         run: |
-          git config --global url."https://${{ secrets.SUPERCARGO_DEV_PAT }}@github.com/supercargo-dev".insteadOf "https://github.com/supercargo-dev"
+          git config --global url."https://${SUPERCARGO_DEV_PAT}@github.com/supercargo-dev".insteadOf "https://github.com/supercargo-dev"
 
       - name: Check Go format
         run: |

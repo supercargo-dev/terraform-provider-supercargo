@@ -116,6 +116,14 @@ func (d *SupercargoContractDataSource) Read(ctx context.Context, req datasource.
 		return
 	}
 
+	if d.client == nil || d.client.HubClient == nil {
+		resp.Diagnostics.AddError(
+			"Provider Not Configured",
+			"The provider must be configured before the data source can be read.",
+		)
+		return
+	}
+
 	// Fetch from Hub using gRPC client
 	version := ""
 	if !data.Version.IsNull() && !data.Version.IsUnknown() {

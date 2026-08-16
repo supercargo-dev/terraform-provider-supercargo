@@ -105,7 +105,7 @@ func (r *supercargoTeamResource) Create(ctx context.Context, req resource.Create
 		return
 	}
 
-	if r.client == nil {
+	if r.client == nil || r.client.HubClient == nil {
 		resp.Diagnostics.AddError(
 			"Provider Not Configured",
 			"The provider must be configured before the resource can be managed.",
@@ -125,6 +125,10 @@ func (r *supercargoTeamResource) Create(ctx context.Context, req resource.Create
 
 	if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() {
 		resp.Diagnostics.Append(plan.Metadata.ElementsAs(ctx, &team.Metadata, false)...)
+	}
+
+	if resp.Diagnostics.HasError() {
+		return
 	}
 
 	// Call Hub
@@ -153,7 +157,7 @@ func (r *supercargoTeamResource) Read(ctx context.Context, req resource.ReadRequ
 		return
 	}
 
-	if r.client == nil {
+	if r.client == nil || r.client.HubClient == nil {
 		resp.Diagnostics.AddError(
 			"Provider Not Configured",
 			"The provider must be configured before the resource can be managed.",
@@ -208,7 +212,7 @@ func (r *supercargoTeamResource) Update(ctx context.Context, req resource.Update
 		return
 	}
 
-	if r.client == nil {
+	if r.client == nil || r.client.HubClient == nil {
 		resp.Diagnostics.AddError(
 			"Provider Not Configured",
 			"The provider must be configured before the resource can be managed.",
@@ -216,7 +220,6 @@ func (r *supercargoTeamResource) Update(ctx context.Context, req resource.Update
 		return
 	}
 
-	// Map plan to proto
 	team := &platformv1.Team{
 		Name:      plan.Name.ValueString(),
 		DataAsset: plan.DataAsset.ValueString(),
@@ -228,6 +231,10 @@ func (r *supercargoTeamResource) Update(ctx context.Context, req resource.Update
 
 	if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() {
 		resp.Diagnostics.Append(plan.Metadata.ElementsAs(ctx, &team.Metadata, false)...)
+	}
+
+	if resp.Diagnostics.HasError() {
+		return
 	}
 
 	// Call Hub (RegisterTeam is idempotent and acts as Update)
@@ -247,7 +254,7 @@ func (r *supercargoTeamResource) Update(ctx context.Context, req resource.Update
 
 // Delete deletes the resource and removes the Terraform state.
 func (r *supercargoTeamResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	if r.client == nil {
+	if r.client == nil || r.client.HubClient == nil {
 		resp.Diagnostics.AddError(
 			"Provider Not Configured",
 			"The provider must be configured before the resource can be managed.",

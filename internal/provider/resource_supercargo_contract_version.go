@@ -84,7 +84,7 @@ func (r *supercargoContractVersionResource) ModifyPlan(ctx context.Context, req 
 		r.client.Cache.Store(impactCacheKey, impact)
 	}
 
-	if impact.Severity == hubv1.ImpactSeverity_IMPACT_SEVERITY_BREAKING {
+	if impact != nil && impact.Severity == hubv1.ImpactSeverity_IMPACT_SEVERITY_BREAKING {
 		resp.Diagnostics.AddError(
 			"Breaking Change Detected (Plan-Time Governance)",
 			fmt.Sprintf("Proposed changes to %s are incompatible with the existing contract version. Breaking changes: %s",
@@ -105,44 +105,45 @@ type supercargoContractVersionResourceModel struct {
 }
 
 // Metadata returns the resource type name.
-func (r *supercargoContractVersionResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+func (r *supercargoContractVersionResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_contract_version"
 }
 
 // Schema defines the schema for the resource.
-func (r *supercargoContractVersionResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *supercargoContractVersionResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
+		MarkdownDescription: "Manages a specific immutable version of a Supercargo Data Contract.",
 		Attributes: map[string]schema.Attribute{
 			"urn": schema.StringAttribute{
+				MarkdownDescription: "The URN of the Data Contract.",
 				Required:            true,
-				MarkdownDescription: "Globally unique identifier (URN).",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
 			"version": schema.StringAttribute{
+				MarkdownDescription: "The semantic version of the contract.",
 				Required:            true,
-				MarkdownDescription: "Semantic Versioning (SemVer).",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
 			"content_hash": schema.StringAttribute{
-				Required:            true,
-				MarkdownDescription: "SHA-256 of the contract content.",
+				MarkdownDescription: "SHA256 hash of the contract contents for integrity verification.",
+				Optional:            true,
 			},
 			"commit_sha": schema.StringAttribute{
-				Required:            true,
-				MarkdownDescription: "Immutable Git Commit SHA.",
+				MarkdownDescription: "Git commit SHA that introduced this contract version.",
+				Optional:            true,
 			},
 			"schema_json": schema.StringAttribute{
+				MarkdownDescription: "BigQuery JSON schema definition string representing the contract structure.",
 				Required:            true,
-				MarkdownDescription: "The JSON representation of the schema fields.",
 			},
 			"data_asset": schema.StringAttribute{
+				MarkdownDescription: "URI of the data asset this contract defines schema for.",
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "Reference to the authoritative source (e.g., 'go://...').",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -152,7 +153,7 @@ func (r *supercargoContractVersionResource) Schema(_ context.Context, _ resource
 }
 
 // Configure adds the provider-level data to the resource.
-func (r *supercargoContractVersionResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (r *supercargoContractVersionResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
@@ -160,8 +161,8 @@ func (r *supercargoContractVersionResource) Configure(_ context.Context, req res
 	data, ok := req.ProviderData.(*ProviderData)
 	if !ok {
 		resp.Diagnostics.AddError(
-			"Unexpected Resource Configure Data Type",
-			fmt.Sprintf("Expected *ProviderData, got: %T.", req.ProviderData),
+			"Unexpected Resource Configure Type",
+			fmt.Sprintf("Expected *ProviderData, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
 		return
 	}
@@ -177,7 +178,7 @@ func (r *supercargoContractVersionResource) Create(ctx context.Context, req reso
 		return
 	}
 
-	if r.client == nil {
+	if r.client == nil || r.client.HubClient == nil {
 		resp.Diagnostics.AddError(
 			"Provider Not Configured",
 			"The provider must be configured before the resource can be managed.",
@@ -202,7 +203,7 @@ func (r *supercargoContractVersionResource) Create(ctx context.Context, req reso
 		return
 	}
 
-	if impact.Severity == hubv1.ImpactSeverity_IMPACT_SEVERITY_BREAKING {
+	if impact != nil && impact.Severity == hubv1.ImpactSeverity_IMPACT_SEVERITY_BREAKING {
 		resp.Diagnostics.AddError(
 			"Breaking Change Detected",
 			fmt.Sprintf("Proposed changes to %s are incompatible with the existing contract version. Breaking changes: %s",
@@ -233,7 +234,7 @@ func (r *supercargoContractVersionResource) Read(ctx context.Context, req resour
 		return
 	}
 
-	if r.client == nil {
+	if r.client == nil || r.client.HubClient == nil {
 		resp.Diagnostics.AddError(
 			"Provider Not Configured",
 			"The provider must be configured before the resource can be managed.",

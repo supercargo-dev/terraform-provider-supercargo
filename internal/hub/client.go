@@ -37,30 +37,41 @@ func NewFactory() *Factory {
 
 // GetClient returns a Hub client for the given address.
 func (f *Factory) GetClient(ctx context.Context, address string, token string, opts ...grpc.DialOption) (*Client, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	cacheKey := fmt.Sprintf("%s|%s", address, token)
 
-	if client, ok := f.clients[address]; ok {
+	f.mu.Lock()
+	if client, ok := f.clients[cacheKey]; ok {
+		f.mu.Unlock()
 		return client, nil
 	}
+	f.mu.Unlock()
 
-	// Determine if we need OIDC (GCP environment) or insecure (localhost)
+	// Determine if we need OIDC (GCP environment) or insecure (localhost/loopback)
 	host := address
 	if h, _, err := net.SplitHostPort(address); err == nil {
 		host = h
 	}
 
-	if host == "localhost" || host == "127.0.0.1" {
+	isLoopback := false
+	if host == "localhost" {
+		isLoopback = true
+	} else if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		isLoopback = true
+	}
+
+	if isLoopback {
 		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 
-		// For local development against emulators, we inject a mock token that passes AuthZ
-		mockToken := os.Getenv("SUPERCARGO_MOCK_TOKEN")
-		if mockToken == "" {
-			return nil, fmt.Errorf("SUPERCARGO_MOCK_TOKEN environment variable must be set for local development")
+		authToken := token
+		if authToken == "" {
+			authToken = os.Getenv("SUPERCARGO_MOCK_TOKEN")
+		}
+		if authToken == "" {
+			return nil, fmt.Errorf("token or SUPERCARGO_MOCK_TOKEN environment variable must be set for local development")
 		}
 
 		ts := oauth2.StaticTokenSource(&oauth2.Token{
-			AccessToken: mockToken,
+			AccessToken: authToken,
 			Expiry:      time.Now().Add(1 * time.Hour),
 		})
 		opts = append(opts, grpc.WithPerRPCCredentials(NewInsecureOIDCCredentials(ts)))
@@ -115,7 +126,10 @@ func (f *Factory) GetClient(ctx context.Context, address string, token string, o
 		conn:             conn,
 	}
 
-	f.clients[address] = client
+	f.mu.Lock()
+	f.clients[cacheKey] = client
+	f.mu.Unlock()
+
 	return client, nil
 }
 
