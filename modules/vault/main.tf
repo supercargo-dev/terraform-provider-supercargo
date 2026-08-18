@@ -35,7 +35,7 @@ resource "google_secret_manager_secret" "vault_master_key" {
   replication {
     auto {}
   }
-  depends_on = [google_project_service.vault_apis]
+  depends_on = [time_sleep.wait_for_vault_apis]
 }
 
 resource "random_id" "vault_master_key" {
@@ -60,7 +60,7 @@ resource "google_secret_manager_secret" "global_pepper" {
   replication {
     auto {}
   }
-  depends_on = [google_project_service.vault_apis]
+  depends_on = [time_sleep.wait_for_vault_apis]
 }
 
 resource "random_password" "global_pepper" {
@@ -81,17 +81,26 @@ resource "google_secret_manager_secret_iam_member" "vault_sa_pepper_accessor" {
 }
 
 resource "google_kms_key_ring" "keyring" {
-  name     = "supercargo-vault-keyring-${random_id.suffix.hex}"
+  name     = var.keyring_name
   location = var.region
   project  = var.project_id
 
-  depends_on = [google_project_service.vault_apis]
+  lifecycle {
+    prevent_destroy = true
+  }
+
+  depends_on = [time_sleep.wait_for_vault_apis]
 }
 
 resource "google_kms_crypto_key" "master_key" {
-  name            = "supercargo-vault-master-key-${random_id.suffix.hex}"
+  name            = var.crypto_key_name
   key_ring        = google_kms_key_ring.keyring.id
-  rotation_period = "2592000s" # 30 days
+  rotation_period = var.key_rotation_period
+  purpose         = "ENCRYPT_DECRYPT"
+
+  version_template {
+    algorithm = "GOOGLE_SYMMETRIC_ENCRYPTION"
+  }
 
   lifecycle {
     prevent_destroy = true
@@ -144,7 +153,7 @@ resource "google_pubsub_topic_iam_member" "vault_pubsub_publisher" {
 resource "google_pubsub_topic" "key_created" {
   name       = "com.supercargo.security.key_created.v1-${random_id.suffix.hex}"
   project    = var.project_id
-  depends_on = [google_project_service.vault_apis]
+  depends_on = [time_sleep.wait_for_vault_apis]
 }
 
 resource "google_cloud_run_v2_service" "vault" {
@@ -168,7 +177,9 @@ resource "google_cloud_run_v2_service" "vault" {
   depends_on = [
     time_sleep.wait_for_vault_apis,
     google_secret_manager_secret_iam_member.vault_sa_secret_accessor,
-    google_secret_manager_secret_iam_member.vault_sa_pepper_accessor
+    google_secret_manager_secret_iam_member.vault_sa_pepper_accessor,
+    google_secret_manager_secret_version.vault_master_key_data,
+    google_secret_manager_secret_version.global_pepper_data
   ]
 
   template {
@@ -253,7 +264,7 @@ resource "google_project_service_identity" "iap_sa" {
   project  = var.project_id
   service  = "iap.googleapis.com"
 
-  depends_on = [google_project_service.vault_apis]
+  depends_on = [time_sleep.wait_for_vault_apis]
 }
 
 # Grant the IAP Service Agent permission to invoke the Cloud Run service
