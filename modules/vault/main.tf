@@ -81,7 +81,7 @@ resource "google_secret_manager_secret_iam_member" "vault_sa_pepper_accessor" {
 }
 
 resource "google_kms_key_ring" "keyring" {
-  name     = "supercargo-vault-keyring-${random_id.suffix.hex}"
+  name     = var.keyring_name
   location = var.region
   project  = var.project_id
 
@@ -89,9 +89,9 @@ resource "google_kms_key_ring" "keyring" {
 }
 
 resource "google_kms_crypto_key" "master_key" {
-  name            = "supercargo-vault-master-key-${random_id.suffix.hex}"
+  name            = var.crypto_key_name
   key_ring        = google_kms_key_ring.keyring.id
-  rotation_period = "2592000s" # 30 days
+  rotation_period = var.key_rotation_period
 
   lifecycle {
     prevent_destroy = true

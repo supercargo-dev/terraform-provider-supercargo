@@ -83,3 +83,21 @@ variable "force_deploy_trigger" {
   type        = string
   default     = "static"
 }
+
+variable "keyring_name" {
+  description = "The name of the Cloud KMS KeyRing for the Vault. Defaults to 'supercargo-vault-keyring' (stable naming without random suffixes to prevent recreation of immutable KMS resources)."
+  type        = string
+  default     = "supercargo-vault-keyring"
+}
+
+variable "crypto_key_name" {
+  description = "The name of the Cloud KMS CryptoKey for the Vault master key. Defaults to 'supercargo-vault-master-key'."
+  type        = string
+  default     = "supercargo-vault-master-key"
+}
+
+variable "key_rotation_period" {
+  description = "The rotation period for the Cloud KMS master key (e.g. '2592000s' for 30 days)."
+  type        = string
+  default     = "2592000s"
+}
