@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
@@ -78,16 +79,7 @@ func (r *supercargoDataProductResource) ModifyPlan(ctx context.Context, req reso
 	}
 
 	if targetProject != "" && productManifest.Meta != nil && productManifest.Meta.Urn != "" {
-		urnParts := strings.Split(productManifest.Meta.Urn, ":")
-		productName := urnParts[len(urnParts)-1]
-		identities := make(map[string]types.String)
-		components := []string{"gateway", "shovel"}
-		for _, comp := range components {
-			email := fmt.Sprintf("%s-%s@%s.iam.gserviceaccount.com", comp, productName, targetProject)
-			identities[comp] = types.StringValue("serviceAccount:" + email)
-		}
-
-		identitiesMap, diags := types.MapValueFrom(ctx, types.StringType, identities)
+		identitiesMap, diags := calculateServiceIdentities(ctx, targetProject, productManifest.Meta.Urn)
 		resp.Diagnostics.Append(diags...)
 		if resp.Diagnostics.HasError() {
 			return
@@ -373,10 +365,16 @@ func (r *supercargoDataProductResource) Create(ctx context.Context, req resource
 	plan.URN = types.StringValue(res.ProductUrn)
 	plan.Version = types.StringValue(res.Version)
 
+	targetProject := ""
+	if !plan.Project.IsNull() && !plan.Project.IsUnknown() {
+		targetProject = plan.Project.ValueString()
+	}
+
 	// Ensure overrides that were applied are reflected in the computed fields if they weren't in HCL
 	if plan.Project.IsUnknown() || plan.Project.IsNull() {
 		if len(productManifest.OutputPorts) > 0 && productManifest.OutputPorts[0].Physical != nil && productManifest.OutputPorts[0].Physical.Bigquery != nil && productManifest.OutputPorts[0].Physical.Bigquery.Project != "" {
-			plan.Project = types.StringValue(productManifest.OutputPorts[0].Physical.Bigquery.Project)
+			targetProject = productManifest.OutputPorts[0].Physical.Bigquery.Project
+			plan.Project = types.StringValue(targetProject)
 		} else {
 			plan.Project = types.StringNull()
 		}
@@ -395,6 +393,18 @@ func (r *supercargoDataProductResource) Create(ctx context.Context, req resource
 			plan.PartitionExpirationMs = types.Int64Null()
 		}
 	}
+
+	productUrn := res.ProductUrn
+	if productUrn == "" && productManifest.Meta != nil {
+		productUrn = productManifest.Meta.Urn
+	}
+	identitiesMap, diags := calculateServiceIdentities(ctx, targetProject, productUrn)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	plan.ServiceIdentities = identitiesMap
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
@@ -449,17 +459,9 @@ func (r *supercargoDataProductResource) Read(ctx context.Context, req resource.R
 		}
 	}
 
-	if manifestProject != "" {
-		// Recalculate identities for state
-		urnParts := strings.Split(res.Manifest.Meta.Urn, ":")
-		productName := urnParts[len(urnParts)-1]
-		identities := make(map[string]types.String)
-		components := []string{"gateway", "shovel"}
-		for _, comp := range components {
-			email := fmt.Sprintf("%s-%s@%s.iam.gserviceaccount.com", comp, productName, manifestProject)
-			identities[comp] = types.StringValue("serviceAccount:" + email)
-		}
-		identitiesMap, _ := types.MapValueFrom(ctx, types.StringType, identities)
+	if manifestProject != "" && res.Manifest.Meta != nil {
+		identitiesMap, diags := calculateServiceIdentities(ctx, manifestProject, res.Manifest.Meta.Urn)
+		resp.Diagnostics.Append(diags...)
 		state.ServiceIdentities = identitiesMap
 	} else {
 		state.Project = types.StringNull()
@@ -563,3 +565,19 @@ func durationToMs(p *hubv1.PhysicalConfig) types.Int64 {
 	}
 	return types.Int64Null()
 }
+
+func calculateServiceIdentities(ctx context.Context, targetProject, productUrn string) (types.Map, diag.Diagnostics) {
+	if targetProject == "" || productUrn == "" {
+		return types.MapNull(types.StringType), nil
+	}
+	urnParts := strings.Split(productUrn, ":")
+	productName := urnParts[len(urnParts)-1]
+	identities := make(map[string]types.String)
+	components := []string{"gateway", "shovel"}
+	for _, comp := range components {
+		email := fmt.Sprintf("%s-%s@%s.iam.gserviceaccount.com", comp, productName, targetProject)
+		identities[comp] = types.StringValue("serviceAccount:" + email)
+	}
+	return types.MapValueFrom(ctx, types.StringType, identities)
+}
+

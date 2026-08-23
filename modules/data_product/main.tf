@@ -1,3 +1,9 @@
+locals {
+  manifest_content = yamldecode(file(var.manifest_file))
+  product_urn      = try(local.manifest_content.meta.urn, "")
+  product_id       = length(split(":", local.product_urn)) > 1 ? element(split(":", local.product_urn), length(split(":", local.product_urn)) - 1) : local.product_urn
+}
+
 resource "supercargo_data_product" "this" {
   manifest_file = var.manifest_file
   project       = var.project_id
@@ -18,7 +24,7 @@ module "gateway" {
 
   project_id                        = var.project_id
   region                            = var.region
-  product_id                        = element(split(":", supercargo_data_product.this.urn), length(split(":", supercargo_data_product.this.urn)) - 1)
+  product_id                        = local.product_id
   image                             = var.image
   log_level                         = var.log_level
   container_memory                  = var.container_memory
@@ -43,8 +49,8 @@ module "gateway" {
   bigquery_deletion_protection      = var.bigquery_deletion_protection
 
   contracts = {
-    for k, v in var.contracts : element(split(":", supercargo_contract_version.this[k].urn), length(split(":", supercargo_contract_version.this[k].urn)) - 1) => {
-      id     = supercargo_contract_version.this[k].urn
+    for k, v in var.contracts : element(split(":", k), length(split(":", k)) - 1) => {
+      id     = k
       schema = v.schema_json
     }
   }

@@ -127,6 +127,11 @@ func (f *Factory) GetClient(ctx context.Context, address string, token string, o
 	}
 
 	f.mu.Lock()
+	if existing, ok := f.clients[cacheKey]; ok {
+		f.mu.Unlock()
+		_ = conn.Close()
+		return existing, nil
+	}
 	f.clients[cacheKey] = client
 	f.mu.Unlock()
 
