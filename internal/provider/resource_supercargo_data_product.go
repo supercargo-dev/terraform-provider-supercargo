@@ -47,6 +47,10 @@ func (r *supercargoDataProductResource) ModifyPlan(ctx context.Context, req reso
 		return
 	}
 
+	if plan.ManifestFile.IsNull() || plan.ManifestFile.IsUnknown() {
+		return
+	}
+
 	// 1. Load Manifest
 	productManifest, err := manifest.Load(plan.ManifestFile.ValueString())
 	if err != nil {
@@ -339,6 +343,11 @@ func (r *supercargoDataProductResource) Create(ctx context.Context, req resource
 			"Provider Not Configured",
 			"The provider must be configured before the resource can be managed.",
 		)
+		return
+	}
+
+	if plan.ManifestFile.IsNull() {
+		resp.Diagnostics.AddError("Manifest File Missing", "manifest_file cannot be null")
 		return
 	}
 
