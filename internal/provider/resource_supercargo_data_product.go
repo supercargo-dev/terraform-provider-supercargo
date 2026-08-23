@@ -583,4 +583,3 @@ func calculateServiceIdentities(ctx context.Context, targetProject, productUrn s
 	}
 	return types.MapValueFrom(ctx, types.StringType, identities)
 }
-
