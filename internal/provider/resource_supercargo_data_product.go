@@ -550,6 +550,9 @@ func (r *supercargoDataProductResource) applyOverrides(m *hubv1.ProductManifest,
 }
 
 func ensureBqConfig(p *hubv1.OutputPort) *hubv1.BigQueryConfig {
+	if p == nil {
+		return nil
+	}
 	if p.Physical == nil {
 		p.Physical = &hubv1.PhysicalConfig{Bigquery: &hubv1.BigQueryConfig{}}
 	}
