@@ -113,9 +113,11 @@ func (r *supercargoTeamResource) Create(ctx context.Context, req resource.Create
 		return
 	}
 
+	urn := fmt.Sprintf("urn:supercargo:hub:team:%s", plan.Name.ValueString())
 	// Map plan to proto
 	team := &platformv1.Team{
 		Name:      plan.Name.ValueString(),
+		Urn:       urn,
 		DataAsset: plan.DataAsset.ValueString(),
 	}
 
@@ -144,7 +146,7 @@ func (r *supercargoTeamResource) Create(ctx context.Context, req resource.Create
 	}
 
 	// Update state with URN (deterministic)
-	plan.URN = types.StringValue(fmt.Sprintf("urn:supercargo:hub:team:%s", team.Name))
+	plan.URN = types.StringValue(urn)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
@@ -220,8 +222,10 @@ func (r *supercargoTeamResource) Update(ctx context.Context, req resource.Update
 		return
 	}
 
+	urn := fmt.Sprintf("urn:supercargo:hub:team:%s", plan.Name.ValueString())
 	team := &platformv1.Team{
 		Name:      plan.Name.ValueString(),
+		Urn:       urn,
 		DataAsset: plan.DataAsset.ValueString(),
 	}
 
@@ -249,6 +253,7 @@ func (r *supercargoTeamResource) Update(ctx context.Context, req resource.Update
 		return
 	}
 
+	plan.URN = types.StringValue(urn)
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
