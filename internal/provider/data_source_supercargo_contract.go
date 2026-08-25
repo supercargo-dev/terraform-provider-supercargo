@@ -11,18 +11,18 @@ import (
 	hubv1 "github.com/supercargo-dev/core/gen/go/hub/v1"
 )
 
-var _ datasource.DataSource = &SupercargoContractDataSource{}
-var _ datasource.DataSourceWithConfigure = &SupercargoContractDataSource{}
+var _ datasource.DataSource = &supercargoContractDataSource{}
+var _ datasource.DataSourceWithConfigure = &supercargoContractDataSource{}
 
 func NewSupercargoContractDataSource() datasource.DataSource {
-	return &SupercargoContractDataSource{}
+	return &supercargoContractDataSource{}
 }
 
-type SupercargoContractDataSource struct {
+type supercargoContractDataSource struct {
 	client *ProviderData
 }
 
-type SupercargoContractDataSourceModel struct {
+type supercargoContractDataSourceModel struct {
 	ID         types.String         `tfsdk:"id"`
 	Version    types.String         `tfsdk:"version"`
 	URN        types.String         `tfsdk:"urn"`
@@ -31,11 +31,11 @@ type SupercargoContractDataSourceModel struct {
 	Fields     []ContractFieldModel `tfsdk:"fields"`
 }
 
-func (d *SupercargoContractDataSource) Metadata(ctx context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
+func (d *supercargoContractDataSource) Metadata(ctx context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_contract"
 }
 
-func (d *SupercargoContractDataSource) Schema(ctx context.Context, req datasource.SchemaRequest, resp *datasource.SchemaResponse) {
+func (d *supercargoContractDataSource) Schema(ctx context.Context, req datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -83,7 +83,7 @@ func (d *SupercargoContractDataSource) Schema(ctx context.Context, req datasourc
 	}
 }
 
-func (d *SupercargoContractDataSource) Configure(ctx context.Context, req datasource.ConfigureRequest, resp *datasource.ConfigureResponse) {
+func (d *supercargoContractDataSource) Configure(ctx context.Context, req datasource.ConfigureRequest, resp *datasource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
@@ -100,7 +100,7 @@ func (d *SupercargoContractDataSource) Configure(ctx context.Context, req dataso
 	d.client = data
 }
 
-func (d *SupercargoContractDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+func (d *supercargoContractDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
 	if d.client == nil {
 		resp.Diagnostics.AddError(
 			"Provider Not Configured",
@@ -109,7 +109,7 @@ func (d *SupercargoContractDataSource) Read(ctx context.Context, req datasource.
 		return
 	}
 
-	var data SupercargoContractDataSourceModel
+	var data supercargoContractDataSourceModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 
 	if resp.Diagnostics.HasError() {
