@@ -22,7 +22,7 @@ func main() {
 	flag.Parse()
 
 	opts := providerserver.ServeOpts{
-		Address: "registry.terraform.io/robertsahlin/supercargo",
+		Address: "registry.terraform.io/supercargo-dev/supercargo",
 		Debug:   debug,
 	}
 
