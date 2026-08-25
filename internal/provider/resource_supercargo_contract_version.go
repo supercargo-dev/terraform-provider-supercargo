@@ -224,6 +224,14 @@ func (r *supercargoContractVersionResource) Create(ctx context.Context, req reso
 		return
 	}
 
+	if plan.DataAsset.IsUnknown() {
+		if contract.Meta != nil && contract.Meta.DataAsset != "" {
+			plan.DataAsset = types.StringValue(contract.Meta.DataAsset)
+		} else {
+			plan.DataAsset = types.StringNull()
+		}
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
@@ -268,7 +276,11 @@ func (r *supercargoContractVersionResource) Read(ctx context.Context, req resour
 
 	state.ContentHash = types.StringValue(res.Contract.Meta.ContentHash)
 	state.CommitSha = types.StringValue(res.Contract.Meta.CommitSha)
-	state.DataAsset = types.StringValue(res.Contract.Meta.DataAsset)
+	if res.Contract.Meta.DataAsset != "" {
+		state.DataAsset = types.StringValue(res.Contract.Meta.DataAsset)
+	} else {
+		state.DataAsset = types.StringNull()
+	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 }
