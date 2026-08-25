@@ -12,28 +12,28 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-var _ resource.Resource = &SupercargoIngestionGatewayResource{}
-var _ resource.ResourceWithConfigure = &SupercargoIngestionGatewayResource{}
+var _ resource.Resource = &supercargoIngestionGatewayResource{}
+var _ resource.ResourceWithConfigure = &supercargoIngestionGatewayResource{}
 
 func NewSupercargoIngestionGatewayResource() resource.Resource {
-	return &SupercargoIngestionGatewayResource{}
+	return &supercargoIngestionGatewayResource{}
 }
 
-type SupercargoIngestionGatewayResource struct {
+type supercargoIngestionGatewayResource struct {
 	client *ProviderData
 }
 
-type SupercargoIngestionGatewayResourceModel struct {
+type supercargoIngestionGatewayResourceModel struct {
 	ID              types.String `tfsdk:"id"`
 	ContractID      types.String `tfsdk:"contract_id"`
 	ContractVersion types.String `tfsdk:"contract_version"`
 }
 
-func (r *SupercargoIngestionGatewayResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+func (r *supercargoIngestionGatewayResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_ingestion_gateway"
 }
 
-func (r *SupercargoIngestionGatewayResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *supercargoIngestionGatewayResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -49,7 +49,7 @@ func (r *SupercargoIngestionGatewayResource) Schema(ctx context.Context, req res
 	}
 }
 
-func (r *SupercargoIngestionGatewayResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (r *supercargoIngestionGatewayResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
@@ -66,8 +66,8 @@ func (r *SupercargoIngestionGatewayResource) Configure(_ context.Context, req re
 	r.client = data
 }
 
-func (r *SupercargoIngestionGatewayResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var plan SupercargoIngestionGatewayResourceModel
+func (r *supercargoIngestionGatewayResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan supercargoIngestionGatewayResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -94,8 +94,8 @@ func (r *SupercargoIngestionGatewayResource) Create(ctx context.Context, req res
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *SupercargoIngestionGatewayResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	var state SupercargoIngestionGatewayResourceModel
+func (r *supercargoIngestionGatewayResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var state supercargoIngestionGatewayResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -121,8 +121,8 @@ func (r *SupercargoIngestionGatewayResource) Read(ctx context.Context, req resou
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-func (r *SupercargoIngestionGatewayResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan SupercargoIngestionGatewayResourceModel
+func (r *supercargoIngestionGatewayResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan supercargoIngestionGatewayResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -143,7 +143,7 @@ func (r *SupercargoIngestionGatewayResource) Update(ctx context.Context, req res
 // Note: In this 'light' provider implementation, this is currently a no-op as the actual
 // cloud resources are managed via the Terraform module 'supercargo-ingestion-gateway'.
 // A full implementation would use GCP APIs here to manage the lifecycle of Cloud Run, Pub/Sub, etc.
-func (r *SupercargoIngestionGatewayResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+func (r *supercargoIngestionGatewayResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	if r.client == nil || r.client.HubClient == nil {
 		resp.Diagnostics.AddError(
 			"Provider Not Configured",
@@ -154,7 +154,7 @@ func (r *SupercargoIngestionGatewayResource) Delete(ctx context.Context, req res
 	// No-op for now as infrastructure is module-managed.
 }
 
-func (r *SupercargoIngestionGatewayResource) validateContract(ctx context.Context, contractID string, contractVersion string) error {
+func (r *supercargoIngestionGatewayResource) validateContract(ctx context.Context, contractID string, contractVersion string) error {
 	if r.client == nil || r.client.HubClient == nil {
 		// Cannot validate if client is not fully configured (e.g., plan phase)
 		return nil
