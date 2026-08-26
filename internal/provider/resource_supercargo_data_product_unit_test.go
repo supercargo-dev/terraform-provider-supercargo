@@ -1143,3 +1143,35 @@ func TestSupercargoDataProductResource_Delete(t *testing.T) {
 		assert.False(t, resp.Diagnostics.HasError())
 	})
 }
+
+func TestSupercargoDataProductResource_NilPortDefensiveness(t *testing.T) {
+	r := &supercargoDataProductResource{}
+
+	// Test ensureBqConfig with nil
+	assert.Nil(t, ensureBqConfig(nil))
+
+	// Test durationToMs with nil
+	assert.True(t, durationToMs(nil).IsNull())
+	assert.True(t, durationToMs(&hubv1.PhysicalConfig{}).IsNull())
+
+	// Test applyOverrides with nil port element
+	manifestWithNilPort := &hubv1.ProductManifest{
+		OutputPorts: []*hubv1.OutputPort{nil},
+	}
+	planModel := &supercargoDataProductResourceModel{
+		Project:               types.StringValue("p1"),
+		Location:              types.StringValue("EU"),
+		PartitioningField:     types.StringValue("ts"),
+		PartitionExpirationMs: types.Int64Value(3600000),
+		SLA: &supercargoSLAModel{
+			Tier:      types.StringValue("GOLD"),
+			Rto:       types.StringValue("1h"),
+			Freshness: types.StringValue("5m"),
+			Latency:   types.StringValue("100ms"),
+		},
+	}
+	assert.NotPanics(t, func() {
+		r.applyOverrides(manifestWithNilPort, planModel)
+	})
+	assert.Equal(t, hubv1.SLATier_SLA_TIER_1_MISSION_CRITICAL, manifestWithNilPort.Sla.Tier)
+}

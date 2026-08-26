@@ -64,7 +64,7 @@ func (r *supercargoDataProductResource) ModifyPlan(ctx context.Context, req reso
 	if targetProject == "" {
 		// Validate manifest project consistency if no override provided
 		for i, port := range productManifest.OutputPorts {
-			if port.Physical != nil && port.Physical.Bigquery != nil && port.Physical.Bigquery.Project != "" {
+			if port != nil && port.Physical != nil && port.Physical.Bigquery != nil && port.Physical.Bigquery.Project != "" {
 				if targetProject == "" {
 					targetProject = port.Physical.Bigquery.Project
 				} else if targetProject != port.Physical.Bigquery.Project {
@@ -380,7 +380,7 @@ func (r *supercargoDataProductResource) Create(ctx context.Context, req resource
 
 	// Ensure overrides that were applied are reflected in the computed fields if they weren't in HCL
 	if plan.Project.IsUnknown() || plan.Project.IsNull() {
-		if len(productManifest.OutputPorts) > 0 && productManifest.OutputPorts[0].Physical != nil && productManifest.OutputPorts[0].Physical.Bigquery != nil && productManifest.OutputPorts[0].Physical.Bigquery.Project != "" {
+		if len(productManifest.OutputPorts) > 0 && productManifest.OutputPorts[0] != nil && productManifest.OutputPorts[0].Physical != nil && productManifest.OutputPorts[0].Physical.Bigquery != nil && productManifest.OutputPorts[0].Physical.Bigquery.Project != "" {
 			targetProject = productManifest.OutputPorts[0].Physical.Bigquery.Project
 			plan.Project = types.StringValue(targetProject)
 		} else {
@@ -388,14 +388,14 @@ func (r *supercargoDataProductResource) Create(ctx context.Context, req resource
 		}
 	}
 	if plan.Location.IsUnknown() || plan.Location.IsNull() {
-		if len(productManifest.OutputPorts) > 0 && productManifest.OutputPorts[0].Physical != nil && productManifest.OutputPorts[0].Physical.Bigquery != nil && productManifest.OutputPorts[0].Physical.Bigquery.Location != "" {
+		if len(productManifest.OutputPorts) > 0 && productManifest.OutputPorts[0] != nil && productManifest.OutputPorts[0].Physical != nil && productManifest.OutputPorts[0].Physical.Bigquery != nil && productManifest.OutputPorts[0].Physical.Bigquery.Location != "" {
 			plan.Location = types.StringValue(productManifest.OutputPorts[0].Physical.Bigquery.Location)
 		} else {
 			plan.Location = types.StringNull()
 		}
 	}
 	if plan.PartitionExpirationMs.IsUnknown() || plan.PartitionExpirationMs.IsNull() {
-		if len(productManifest.OutputPorts) > 0 {
+		if len(productManifest.OutputPorts) > 0 && productManifest.OutputPorts[0] != nil {
 			plan.PartitionExpirationMs = durationToMs(productManifest.OutputPorts[0].Physical)
 		} else {
 			plan.PartitionExpirationMs = types.Int64Null()
@@ -457,7 +457,7 @@ func (r *supercargoDataProductResource) Read(ctx context.Context, req resource.R
 	// Find first project ID in manifest
 	manifestProject := ""
 	for _, port := range res.Manifest.OutputPorts {
-		if port.Physical != nil && port.Physical.Bigquery != nil && port.Physical.Bigquery.Project != "" {
+		if port != nil && port.Physical != nil && port.Physical.Bigquery != nil && port.Physical.Bigquery.Project != "" {
 			manifestProject = port.Physical.Bigquery.Project
 			state.Project = types.StringValue(manifestProject)
 			state.Location = types.StringValue(port.Physical.Bigquery.Location)
@@ -511,22 +511,30 @@ func (r *supercargoDataProductResource) Delete(ctx context.Context, req resource
 func (r *supercargoDataProductResource) applyOverrides(m *hubv1.ProductManifest, plan *supercargoDataProductResourceModel) {
 	if !plan.Project.IsNull() && !plan.Project.IsUnknown() {
 		for _, p := range m.OutputPorts {
-			ensureBqConfig(p).Project = plan.Project.ValueString()
+			if bq := ensureBqConfig(p); bq != nil {
+				bq.Project = plan.Project.ValueString()
+			}
 		}
 	}
 	if !plan.Location.IsNull() && !plan.Location.IsUnknown() {
 		for _, p := range m.OutputPorts {
-			ensureBqConfig(p).Location = plan.Location.ValueString()
+			if bq := ensureBqConfig(p); bq != nil {
+				bq.Location = plan.Location.ValueString()
+			}
 		}
 	}
 	if !plan.PartitioningField.IsNull() && !plan.PartitioningField.IsUnknown() {
 		for _, p := range m.OutputPorts {
-			ensureBqConfig(p).PartitionBy = plan.PartitioningField.ValueString()
+			if bq := ensureBqConfig(p); bq != nil {
+				bq.PartitionBy = plan.PartitioningField.ValueString()
+			}
 		}
 	}
 	if !plan.PartitionExpirationMs.IsNull() && !plan.PartitionExpirationMs.IsUnknown() {
 		for _, p := range m.OutputPorts {
-			ensureBqConfig(p).PartitionExpiration = durationpb.New(time.Duration(plan.PartitionExpirationMs.ValueInt64()) * time.Millisecond)
+			if bq := ensureBqConfig(p); bq != nil {
+				bq.PartitionExpiration = durationpb.New(time.Duration(plan.PartitionExpirationMs.ValueInt64()) * time.Millisecond)
+			}
 		}
 	}
 
@@ -602,8 +610,8 @@ func calculateServiceIdentities(ctx context.Context, targetProject, productUrn s
 	}
 	urnParts := strings.Split(productUrn, ":")
 	productName := urnParts[len(urnParts)-1]
-	identities := make(map[string]types.String)
 	components := []string{"gateway", "shovel"}
+	identities := make(map[string]types.String, len(components))
 	for _, comp := range components {
 		email := fmt.Sprintf("%s-%s@%s.iam.gserviceaccount.com", comp, productName, targetProject)
 		identities[comp] = types.StringValue("serviceAccount:" + email)
