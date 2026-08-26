@@ -171,22 +171,22 @@ func TestSupercargoContractDataSource_Read_Success_LosslessTypes(t *testing.T) {
 		fType string
 		fMode string
 	}{
-		"field_string":             {"STRING", "REQUIRED"},
-		"field_bytes":              {"BYTES", "NULLABLE"},
-		"field_int64":              {"INT64", "REQUIRED"},
-		"field_float64":            {"FLOAT64", "NULLABLE"},
-		"field_bool":               {"BOOL", "REQUIRED"},
-		"field_timestamp":          {"TIMESTAMP", "NULLABLE"},
-		"field_date":               {"DATE", "NULLABLE"},
-		"field_time":               {"TIME", "NULLABLE"},
-		"field_datetime":           {"DATETIME", "NULLABLE"},
-		"field_geography":          {"GEOGRAPHY", "NULLABLE"},
-		"field_numeric":            {"NUMERIC", "NULLABLE"},
-		"field_bignumeric":         {"BIGNUMERIC", "NULLABLE"},
-		"field_json":               {"JSON", "NULLABLE"},
-		"field_record":             {"RECORD", "REPEATED"},
-		"field_record.child_str":   {"STRING", "REQUIRED"},
-		"field_record.child_int":   {"INT64", "NULLABLE"},
+		"field_string":           {"STRING", "REQUIRED"},
+		"field_bytes":            {"BYTES", "NULLABLE"},
+		"field_int64":            {"INT64", "REQUIRED"},
+		"field_float64":          {"FLOAT64", "NULLABLE"},
+		"field_bool":             {"BOOL", "REQUIRED"},
+		"field_timestamp":        {"TIMESTAMP", "NULLABLE"},
+		"field_date":             {"DATE", "NULLABLE"},
+		"field_time":             {"TIME", "NULLABLE"},
+		"field_datetime":         {"DATETIME", "NULLABLE"},
+		"field_geography":        {"GEOGRAPHY", "NULLABLE"},
+		"field_numeric":          {"NUMERIC", "NULLABLE"},
+		"field_bignumeric":       {"BIGNUMERIC", "NULLABLE"},
+		"field_json":             {"JSON", "NULLABLE"},
+		"field_record":           {"RECORD", "REPEATED"},
+		"field_record.child_str": {"STRING", "REQUIRED"},
+		"field_record.child_int": {"INT64", "NULLABLE"},
 	}
 
 	for _, f := range stateModel.Fields {
