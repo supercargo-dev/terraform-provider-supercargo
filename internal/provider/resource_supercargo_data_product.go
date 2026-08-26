@@ -90,91 +90,99 @@ func (r *supercargoDataProductResource) ModifyPlan(ctx context.Context, req reso
 	// 2.1 Validate SLA Tier
 	if plan.SLA != nil && !plan.SLA.Tier.IsNull() && !plan.SLA.Tier.IsUnknown() {
 		tierStr := plan.SLA.Tier.ValueString()
-		valid := false
-		var validTiers []string
-		for name := range hubv1.SLATier_value {
-			validTiers = append(validTiers, name)
-			if strings.EqualFold(name, tierStr) || strings.EqualFold(strings.ReplaceAll(name, "SLA_TIER_", ""), tierStr) {
-				valid = true
-				break
-			}
-		}
-		if !valid {
+		if _, ok := parseSLATier(tierStr); !ok {
 			resp.Diagnostics.AddError(
 				"Invalid SLA Tier",
-				fmt.Sprintf("'%s' is not a valid SLA tier. Valid values are: %s", tierStr, strings.Join(validTiers, ", ")),
+				fmt.Sprintf("'%s' is not a valid SLA tier. Valid values include: SLA_TIER_1_MISSION_CRITICAL (GOLD, TIER_1, MISSION_CRITICAL), SLA_TIER_2_IMPORTANT (SILVER, TIER_2, IMPORTANT), SLA_TIER_3_BEST_EFFORT (BRONZE, TIER_3, BEST_EFFORT)", tierStr),
 			)
 		}
 	}
 
 	// 3. Validation Logic (Requires Hub Client)
 	if r.client != nil && r.client.HubClient != nil {
-		if !plan.PartitioningField.IsNull() && !plan.PartitioningField.IsUnknown() {
-			// Validate partitioning field against contracts
-			fieldFound := false
-			partitioningField := plan.PartitioningField.ValueString()
-
-			// Validate Team existence
-			if productManifest.Meta == nil || productManifest.Meta.Owner == nil {
-				resp.Diagnostics.AddError(
-					"Invalid Product Manifest",
-					"The product manifest is missing metadata or owner information.",
-				)
-				return
+		// Validate Team existence
+		if productManifest.Meta == nil || productManifest.Meta.Owner == nil || productManifest.Meta.Owner.TeamName == "" {
+			resp.Diagnostics.AddError(
+				"Invalid Product Manifest",
+				"The product manifest is missing metadata or owner information.",
+			)
+			return
+		}
+		teamName := productManifest.Meta.Owner.TeamName
+		cacheKey := "team:" + teamName
+		if _, ok := r.client.Cache.Load(cacheKey); !ok {
+			_, err = r.client.HubClient.GetTeam(ctx, &hubv1.GetTeamRequest{
+				Name: teamName,
+			})
+			if err != nil {
+				st, ok := status.FromError(err)
+				if ok && st.Code() == codes.NotFound {
+					resp.Diagnostics.AddWarning(
+						"Team Not Found (Bootstrap Mode)",
+						fmt.Sprintf("Team '%s' was not found in the Hub. Plan will proceed assuming it's being created in the current plan.", teamName),
+					)
+				} else if ok && st.Code() != codes.Unavailable {
+					resp.Diagnostics.AddError(
+						"Governance Handshake Failed",
+						fmt.Sprintf("Could not verify team '%s' in Hub: %s", teamName, st.Message()),
+					)
+					return
+				}
+			} else {
+				r.client.Cache.Store(cacheKey, true)
 			}
-			teamName := productManifest.Meta.Owner.TeamName
-			cacheKey := "team:" + teamName
-			if _, ok := r.client.Cache.Load(cacheKey); !ok {
-				_, err = r.client.HubClient.GetTeam(ctx, &hubv1.GetTeamRequest{
-					Name: teamName,
+		}
+
+		// Validate Output Port Contracts
+		contractsChecked := 0
+		var loadedContracts []*hubv1.DataContract
+		for _, port := range productManifest.OutputPorts {
+			if port == nil || port.Contract == nil || port.Contract.Urn == "" {
+				continue
+			}
+
+			// Fetch contract from Hub with caching
+			contractCacheKey := fmt.Sprintf("contract:%s:%s", port.Contract.Urn, port.Contract.Version)
+			var contract *hubv1.DataContract
+			if val, ok := r.client.Cache.Load(contractCacheKey); ok {
+				contract = val.(*hubv1.DataContract)
+			} else {
+				res, err := r.client.HubClient.GetContract(ctx, &hubv1.GetContractRequest{
+					ContractUrn: port.Contract.Urn,
+					Version:     port.Contract.Version,
 				})
 				if err != nil {
 					st, ok := status.FromError(err)
 					if ok && st.Code() == codes.NotFound {
-						resp.Diagnostics.AddWarning(
-							"Team Not Found (Bootstrap Mode)",
-							fmt.Sprintf("Team '%s' was not found in the Hub. Plan will proceed assuming it's being created in the current plan.", teamName),
+						resp.Diagnostics.AddError(
+							"Governing Contract Not Found",
+							fmt.Sprintf("Contract '%s' version '%s' was not found in the Hub.", port.Contract.Urn, port.Contract.Version),
 						)
+						return
 					} else if ok && st.Code() != codes.Unavailable {
 						resp.Diagnostics.AddError(
 							"Governance Handshake Failed",
-							fmt.Sprintf("Could not verify team '%s' in Hub: %s", teamName, st.Message()),
+							fmt.Sprintf("Could not verify contract '%s' in Hub: %s", port.Contract.Urn, st.Message()),
 						)
 						return
 					}
-				} else {
-					r.client.Cache.Store(cacheKey, true)
-				}
-			}
-
-			contractsChecked := 0
-			for _, port := range productManifest.OutputPorts {
-				if port == nil || port.Contract == nil {
-					continue
-				}
-
-				// Fetch contract from Hub with caching
-				contractCacheKey := fmt.Sprintf("contract:%s:%s", port.Contract.Urn, port.Contract.Version)
-				var contract *hubv1.DataContract
-				if val, ok := r.client.Cache.Load(contractCacheKey); ok {
-					contract = val.(*hubv1.DataContract)
-				} else {
-					res, err := r.client.HubClient.GetContract(ctx, &hubv1.GetContractRequest{
-						ContractUrn: port.Contract.Urn,
-						Version:     port.Contract.Version,
-					})
-					if err != nil || res == nil || res.Contract == nil {
-						continue
-					}
+				} else if res != nil && res.Contract != nil {
 					contract = res.Contract
 					r.client.Cache.Store(contractCacheKey, contract)
 				}
+			}
 
-				if contract == nil {
-					continue
-				}
-
+			if contract != nil {
 				contractsChecked++
+				loadedContracts = append(loadedContracts, contract)
+			}
+		}
+
+		// Validate Partitioning Field against contracts if specified
+		if !plan.PartitioningField.IsNull() && !plan.PartitioningField.IsUnknown() && plan.PartitioningField.ValueString() != "" {
+			partitioningField := plan.PartitioningField.ValueString()
+			fieldFound := false
+			for _, contract := range loadedContracts {
 				for _, f := range contract.Schema {
 					if f != nil && f.Name == partitioningField {
 						fieldFound = true
@@ -186,7 +194,7 @@ func (r *supercargoDataProductResource) ModifyPlan(ctx context.Context, req reso
 				}
 			}
 
-			if contractsChecked > 0 && !fieldFound && partitioningField != "" {
+			if contractsChecked > 0 && !fieldFound {
 				resp.Diagnostics.AddError(
 					"Invalid Partitioning Field",
 					fmt.Sprintf("The partitioning field '%s' was not found in any of the contracts associated with this data product.", partitioningField),
@@ -334,7 +342,7 @@ func (r *supercargoDataProductResource) Create(ctx context.Context, req resource
 		return
 	}
 
-	if r.client == nil {
+	if r.client == nil || r.client.HubClient == nil {
 		resp.Diagnostics.AddError(
 			"Provider Not Configured",
 			"The provider must be configured before the resource can be managed.",
@@ -527,14 +535,8 @@ func (r *supercargoDataProductResource) applyOverrides(m *hubv1.ProductManifest,
 			m.Sla = &hubv1.SLA{}
 		}
 		if !plan.SLA.Tier.IsNull() && !plan.SLA.Tier.IsUnknown() {
-			tierStr := plan.SLA.Tier.ValueString()
-			// Normalize to the expected enum name format (e.g., "mission_critical" -> "SLA_TIER_MISSION_CRITICAL").
-			normalizedTier := strings.ToUpper(tierStr)
-			if !strings.HasPrefix(normalizedTier, "SLA_TIER_") {
-				normalizedTier = "SLA_TIER_" + normalizedTier
-			}
-			if val, ok := hubv1.SLATier_value[normalizedTier]; ok {
-				m.Sla.Tier = hubv1.SLATier(val)
+			if tier, ok := parseSLATier(plan.SLA.Tier.ValueString()); ok {
+				m.Sla.Tier = tier
 			}
 		}
 		if !plan.SLA.Rto.IsNull() && !plan.SLA.Rto.IsUnknown() {
@@ -546,6 +548,31 @@ func (r *supercargoDataProductResource) applyOverrides(m *hubv1.ProductManifest,
 		if !plan.SLA.Latency.IsNull() && !plan.SLA.Latency.IsUnknown() {
 			m.Sla.Latency = plan.SLA.Latency.ValueString()
 		}
+	}
+}
+
+func parseSLATier(tierStr string) (hubv1.SLATier, bool) {
+	s := strings.ToUpper(strings.TrimSpace(tierStr))
+	// Check direct enum map
+	if val, ok := hubv1.SLATier_value[s]; ok {
+		return hubv1.SLATier(val), true
+	}
+	if val, ok := hubv1.SLATier_value["SLA_TIER_"+s]; ok {
+		return hubv1.SLATier(val), true
+	}
+
+	// Friendly alias mapping
+	switch s {
+	case "GOLD", "TIER_1", "TIER1", "1", "MISSION_CRITICAL", "MISSION-CRITICAL":
+		return hubv1.SLATier_SLA_TIER_1_MISSION_CRITICAL, true
+	case "SILVER", "TIER_2", "TIER2", "2", "IMPORTANT":
+		return hubv1.SLATier_SLA_TIER_2_IMPORTANT, true
+	case "BRONZE", "TIER_3", "TIER3", "3", "BEST_EFFORT", "BEST-EFFORT":
+		return hubv1.SLATier_SLA_TIER_3_BEST_EFFORT, true
+	case "UNSPECIFIED", "0":
+		return hubv1.SLATier_SLA_TIER_UNSPECIFIED, true
+	default:
+		return hubv1.SLATier_SLA_TIER_UNSPECIFIED, false
 	}
 }
 
