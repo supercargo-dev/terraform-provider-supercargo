@@ -90,7 +90,7 @@ func protoToBQFields(fields []*hubv1.Field, path []string) ([]*bqField, error) {
 	if err := checkRecursionLimit(path); err != nil {
 		return nil, err
 	}
-	out := make([]*bqField, 0)
+	out := make([]*bqField, 0, len(fields))
 	for _, f := range fields {
 		if f == nil {
 			continue
@@ -122,7 +122,7 @@ func flattenFields(fields []*hubv1.Field, prefix string, path []string) ([]Contr
 	if err := checkRecursionLimit(path); err != nil {
 		return nil, err
 	}
-	result := make([]ContractFieldModel, 0)
+	result := make([]ContractFieldModel, 0, len(fields))
 	for _, f := range fields {
 		if f == nil {
 			continue
