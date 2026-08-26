@@ -10,12 +10,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/test/bufconn"
 )
 
 func TestFactory_GetClient_Concurrent(t *testing.T) {
-	// Start a dummy local gRPC listener
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
+	lis := bufconn.Listen(1024 * 1024)
+	defer lis.Close()
+
 	s := grpc.NewServer()
 	go func() {
 		_ = s.Serve(lis)
@@ -28,7 +30,11 @@ func TestFactory_GetClient_Concurrent(t *testing.T) {
 	factory := NewFactory()
 	defer factory.Close()
 
-	addr := lis.Addr().String()
+	addr := "localhost:50051"
+	dialer := func(context.Context, string) (net.Conn, error) {
+		return lis.Dial()
+	}
+
 	numGoroutines := 20
 	clients := make([]*Client, numGoroutines)
 	var wg sync.WaitGroup
@@ -38,7 +44,13 @@ func TestFactory_GetClient_Concurrent(t *testing.T) {
 		idx := i
 		go func() {
 			defer wg.Done()
-			c, err := factory.GetClient(context.Background(), addr, "mock-token")
+			c, err := factory.GetClient(
+				context.Background(),
+				addr,
+				"mock-token",
+				grpc.WithTransportCredentials(insecure.NewCredentials()),
+				grpc.WithContextDialer(dialer),
+			)
 			if err == nil {
 				clients[idx] = c
 			}
@@ -63,4 +75,61 @@ func TestFactory_GetClient_Concurrent(t *testing.T) {
 	count := len(factory.clients)
 	factory.mu.Unlock()
 	assert.Equal(t, 1, count, "should have exactly 1 client instance in factory map")
+}
+
+func TestFactory_GetClient_AfterClose(t *testing.T) {
+	factory := NewFactory()
+	err := factory.Close()
+	require.NoError(t, err)
+
+	client, err := factory.GetClient(context.Background(), "localhost:50051", "mock-token")
+	assert.Nil(t, client)
+	assert.ErrorIs(t, err, ErrFactoryClosed)
+}
+
+func TestFactory_Close_Idempotent(t *testing.T) {
+	lis := bufconn.Listen(1024 * 1024)
+	defer lis.Close()
+
+	factory := NewFactory()
+
+	dialer := func(context.Context, string) (net.Conn, error) {
+		return lis.Dial()
+	}
+
+	client, err := factory.GetClient(
+		context.Background(),
+		"localhost:50051",
+		"mock-token",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(dialer),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, client)
+
+	// First Close
+	err = factory.Close()
+	require.NoError(t, err)
+
+	// Second Close should be idempotent
+	err = factory.Close()
+	require.NoError(t, err)
+}
+
+func TestFactory_GetClient_LoopbackMissingToken(t *testing.T) {
+	prevToken := os.Getenv("SUPERCARGO_MOCK_TOKEN")
+	os.Unsetenv("SUPERCARGO_MOCK_TOKEN")
+	defer func() {
+		if prevToken != "" {
+			os.Setenv("SUPERCARGO_MOCK_TOKEN", prevToken)
+		}
+	}()
+
+	factory := NewFactory()
+	defer factory.Close()
+
+	client, err := factory.GetClient(context.Background(), "localhost:50051", "")
+	assert.Nil(t, client)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "token or SUPERCARGO_MOCK_TOKEN environment variable must be set")
 }

@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -16,6 +17,9 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// ErrFactoryClosed is returned when attempting to obtain a client from a closed Factory.
+var ErrFactoryClosed = errors.New("hub factory is closed")
+
 // Client handles communication with the Supercargo Hub.
 type Client struct {
 	hubv1.HubServiceClient
@@ -25,6 +29,7 @@ type Client struct {
 // Factory manages a pool of Hub clients.
 type Factory struct {
 	mu      sync.Mutex
+	closed  bool
 	clients map[string]*Client
 }
 
@@ -40,6 +45,10 @@ func (f *Factory) GetClient(ctx context.Context, address string, token string, o
 	cacheKey := fmt.Sprintf("%s|%s", address, token)
 
 	f.mu.Lock()
+	if f.closed {
+		f.mu.Unlock()
+		return nil, ErrFactoryClosed
+	}
 	if client, ok := f.clients[cacheKey]; ok {
 		f.mu.Unlock()
 		return client, nil
@@ -127,6 +136,11 @@ func (f *Factory) GetClient(ctx context.Context, address string, token string, o
 	}
 
 	f.mu.Lock()
+	if f.closed {
+		f.mu.Unlock()
+		_ = conn.Close()
+		return nil, ErrFactoryClosed
+	}
 	if existing, ok := f.clients[cacheKey]; ok {
 		f.mu.Unlock()
 		_ = conn.Close()
@@ -143,6 +157,11 @@ func (f *Factory) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	if f.closed {
+		return nil
+	}
+	f.closed = true
+
 	var errs []error
 	for addr, client := range f.clients {
 		if err := client.conn.Close(); err != nil {
@@ -152,7 +171,7 @@ func (f *Factory) Close() error {
 	f.clients = make(map[string]*Client)
 
 	if len(errs) > 0 {
-		return fmt.Errorf("errors closing hub factory: %v", errs)
+		return errors.Join(errs...)
 	}
 	return nil
 }
