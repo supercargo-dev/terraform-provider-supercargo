@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	dschema "github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/stretchr/testify/assert"
@@ -167,6 +168,29 @@ func newTestState(ctx context.Context, t *testing.T, s schema.Schema, model any)
 	}
 	diags := state.Set(ctx, model)
 	require.False(t, diags.HasError(), "diags setting test state: %v", diags)
+	return state
+}
+
+func newTestDataSourceConfig(ctx context.Context, t *testing.T, s dschema.Schema, model any) tfsdk.Config {
+	t.Helper()
+	state := tfsdk.State{
+		Schema: s,
+	}
+	diags := state.Set(ctx, model)
+	require.False(t, diags.HasError(), "diags setting test datasource config: %v", diags)
+	return tfsdk.Config{
+		Schema: s,
+		Raw:    state.Raw,
+	}
+}
+
+func newTestDataSourceState(ctx context.Context, t *testing.T, s dschema.Schema, model any) tfsdk.State {
+	t.Helper()
+	state := tfsdk.State{
+		Schema: s,
+	}
+	diags := state.Set(ctx, model)
+	require.False(t, diags.HasError(), "diags setting test datasource state: %v", diags)
 	return state
 }
 
