@@ -62,7 +62,7 @@ func Load(path string) (*hubv1.ProductManifest, error) {
 	}
 
 	// 1. Unmarshal YAML to generic map
-	var raw interface{}
+	var raw any
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal YAML: %w", err)
 	}
@@ -366,7 +366,7 @@ func discoverSchemaJSONFile(manifestDir string, baseNames, versions []string) (s
 }
 
 func generateBigQuerySchemaJSON(fields []rawContractField) (string, error) {
-	bqFields := convertToBQFields(fields)
+	bqFields := convertToBQFields(fields, 0)
 	bytes, err := json.MarshalIndent(bqFields, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("failed marshaling BigQuery schema JSON: %w", err)
@@ -374,7 +374,10 @@ func generateBigQuerySchemaJSON(fields []rawContractField) (string, error) {
 	return string(bytes), nil
 }
 
-func convertToBQFields(fields []rawContractField) []bqFieldJSON {
+func convertToBQFields(fields []rawContractField, depth int) []bqFieldJSON {
+	if depth > 100 {
+		return nil
+	}
 	bqFields := make([]bqFieldJSON, len(fields))
 	for i, f := range fields {
 		bq := bqFieldJSON{
@@ -384,7 +387,7 @@ func convertToBQFields(fields []rawContractField) []bqFieldJSON {
 			Description: f.Description,
 		}
 		if len(f.Fields) > 0 {
-			bq.Fields = convertToBQFields(f.Fields)
+			bq.Fields = convertToBQFields(f.Fields, depth+1)
 		}
 		bqFields[i] = bq
 	}

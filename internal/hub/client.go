@@ -44,8 +44,13 @@ func NewFactory() *Factory {
 // SanitizeAddress strips protocol prefixes and trailing slashes from an address,
 // returning the clean target address and the isolated host name.
 func SanitizeAddress(address string) (cleanAddress, host string) {
-	clean := strings.TrimPrefix(address, "https://")
-	clean = strings.TrimPrefix(clean, "http://")
+	clean := address
+	lower := strings.ToLower(clean)
+	if strings.HasPrefix(lower, "https://") {
+		clean = clean[8:]
+	} else if strings.HasPrefix(lower, "http://") {
+		clean = clean[7:]
+	}
 	clean = strings.TrimRight(clean, "/")
 
 	host = clean

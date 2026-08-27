@@ -466,8 +466,10 @@ func (r *supercargoDataProductResource) Create(ctx context.Context, req resource
 	}
 
 	// 5. Update State
-	plan.URN = types.StringValue(res.ProductUrn)
-	plan.Version = types.StringValue(res.Version)
+	if res != nil {
+		plan.URN = types.StringValue(res.ProductUrn)
+		plan.Version = types.StringValue(res.Version)
+	}
 
 	targetProject := ""
 	if !plan.Project.IsNull() && !plan.Project.IsUnknown() {
@@ -475,37 +477,43 @@ func (r *supercargoDataProductResource) Create(ctx context.Context, req resource
 	}
 
 	// Ensure overrides that were applied are reflected in the computed fields if they weren't in HCL
-	if plan.Project.IsUnknown() || plan.Project.IsNull() {
-		if len(productManifest.OutputPorts) > 0 && productManifest.OutputPorts[0] != nil && productManifest.OutputPorts[0].Physical != nil && productManifest.OutputPorts[0].Physical.Bigquery != nil && productManifest.OutputPorts[0].Physical.Bigquery.Project != "" {
-			targetProject = productManifest.OutputPorts[0].Physical.Bigquery.Project
-			plan.Project = types.StringValue(targetProject)
-		} else {
-			plan.Project = types.StringNull()
+	manifestProject := ""
+	for _, port := range productManifest.OutputPorts {
+		if port != nil && port.Physical != nil && port.Physical.Bigquery != nil && port.Physical.Bigquery.Project != "" {
+			manifestProject = port.Physical.Bigquery.Project
+			if plan.Project.IsUnknown() || plan.Project.IsNull() {
+				targetProject = manifestProject
+				plan.Project = types.StringValue(targetProject)
+			}
+			if plan.Location.IsUnknown() || plan.Location.IsNull() {
+				plan.Location = types.StringValue(port.Physical.Bigquery.Location)
+			}
+			if plan.PartitioningField.IsUnknown() || plan.PartitioningField.IsNull() {
+				plan.PartitioningField = types.StringValue(port.Physical.Bigquery.PartitionBy)
+			}
+			if plan.PartitionExpirationMs.IsUnknown() || plan.PartitionExpirationMs.IsNull() {
+				plan.PartitionExpirationMs = durationToMs(port.Physical)
+			}
+			break
 		}
+	}
+	if plan.Project.IsUnknown() || plan.Project.IsNull() {
+		plan.Project = types.StringNull()
 	}
 	if plan.Location.IsUnknown() || plan.Location.IsNull() {
-		if len(productManifest.OutputPorts) > 0 && productManifest.OutputPorts[0] != nil && productManifest.OutputPorts[0].Physical != nil && productManifest.OutputPorts[0].Physical.Bigquery != nil && productManifest.OutputPorts[0].Physical.Bigquery.Location != "" {
-			plan.Location = types.StringValue(productManifest.OutputPorts[0].Physical.Bigquery.Location)
-		} else {
-			plan.Location = types.StringNull()
-		}
+		plan.Location = types.StringNull()
 	}
 	if plan.PartitioningField.IsUnknown() || plan.PartitioningField.IsNull() {
-		if len(productManifest.OutputPorts) > 0 && productManifest.OutputPorts[0] != nil && productManifest.OutputPorts[0].Physical != nil && productManifest.OutputPorts[0].Physical.Bigquery != nil && productManifest.OutputPorts[0].Physical.Bigquery.PartitionBy != "" {
-			plan.PartitioningField = types.StringValue(productManifest.OutputPorts[0].Physical.Bigquery.PartitionBy)
-		} else {
-			plan.PartitioningField = types.StringNull()
-		}
+		plan.PartitioningField = types.StringNull()
 	}
 	if plan.PartitionExpirationMs.IsUnknown() || plan.PartitionExpirationMs.IsNull() {
-		if len(productManifest.OutputPorts) > 0 && productManifest.OutputPorts[0] != nil {
-			plan.PartitionExpirationMs = durationToMs(productManifest.OutputPorts[0].Physical)
-		} else {
-			plan.PartitionExpirationMs = types.Int64Null()
-		}
+		plan.PartitionExpirationMs = types.Int64Null()
 	}
 
-	productUrn := res.ProductUrn
+	productUrn := ""
+	if res != nil {
+		productUrn = res.ProductUrn
+	}
 	if productUrn == "" && productManifest.Meta != nil {
 		productUrn = productManifest.Meta.Urn
 	}
