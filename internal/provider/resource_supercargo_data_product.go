@@ -394,6 +394,13 @@ func (r *supercargoDataProductResource) Create(ctx context.Context, req resource
 			plan.Location = types.StringNull()
 		}
 	}
+	if plan.PartitioningField.IsUnknown() || plan.PartitioningField.IsNull() {
+		if len(productManifest.OutputPorts) > 0 && productManifest.OutputPorts[0] != nil && productManifest.OutputPorts[0].Physical != nil && productManifest.OutputPorts[0].Physical.Bigquery != nil && productManifest.OutputPorts[0].Physical.Bigquery.PartitionBy != "" {
+			plan.PartitioningField = types.StringValue(productManifest.OutputPorts[0].Physical.Bigquery.PartitionBy)
+		} else {
+			plan.PartitioningField = types.StringNull()
+		}
+	}
 	if plan.PartitionExpirationMs.IsUnknown() || plan.PartitionExpirationMs.IsNull() {
 		if len(productManifest.OutputPorts) > 0 && productManifest.OutputPorts[0] != nil {
 			plan.PartitionExpirationMs = durationToMs(productManifest.OutputPorts[0].Physical)
