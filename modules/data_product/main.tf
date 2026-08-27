@@ -5,8 +5,9 @@ locals {
 }
 
 resource "supercargo_data_product" "this" {
-  manifest_file = var.manifest_file
-  project       = var.project_id
+  manifest_file      = var.manifest_file
+  project            = var.project_id
+  partitioning_field = try(local.manifest_content.output_ports[0].physical.bigquery.partition_by, "")
 }
 
 resource "supercargo_contract_version" "this" {
