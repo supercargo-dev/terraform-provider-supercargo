@@ -1,12 +1,14 @@
 package provider
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	hubv1 "github.com/supercargo-dev/core/gen/go/hub/v1"
+	"github.com/supercargo-dev/terraform-provider-supercargo/internal/manifest"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -227,3 +229,126 @@ func mapConstraints(cs map[string]string) (*hubv1.Constraints, error) {
 	}
 	return out, nil
 }
+
+type schemaFieldJSON struct {
+	Name        string            `json:"name"`
+	Type        string            `json:"type"`
+	Mode        string            `json:"mode"`
+	Description string            `json:"description,omitempty"`
+	Constraints map[string]string `json:"constraints,omitempty"`
+	Fields      []schemaFieldJSON `json:"fields,omitempty"`
+}
+
+func parseSchemaJSONToFields(schemaJSON string) ([]*hubv1.Field, error) {
+	if strings.TrimSpace(schemaJSON) == "" {
+		return nil, nil
+	}
+	var fields []schemaFieldJSON
+	if err := json.Unmarshal([]byte(schemaJSON), &fields); err != nil {
+		return nil, fmt.Errorf("failed to parse schema JSON: %w", err)
+	}
+	return mapSchemaJSONFieldsToProto(fields, 0, []string{})
+}
+
+func mapSchemaJSONFieldsToProto(fs []schemaFieldJSON, depth int, path []string) ([]*hubv1.Field, error) {
+	if err := checkRecursionLimit(path); err != nil {
+		return nil, err
+	}
+	protoFields := make([]*hubv1.Field, len(fs))
+	for i, f := range fs {
+		var dataType hubv1.DataType
+		switch strings.ToUpper(strings.TrimSpace(f.Type)) {
+		case "STRING":
+			dataType = hubv1.DataType_DATA_TYPE_STRING
+		case "INT64", "INTEGER", "INT":
+			dataType = hubv1.DataType_DATA_TYPE_INT64
+		case "FLOAT64", "FLOAT":
+			dataType = hubv1.DataType_DATA_TYPE_FLOAT64
+		case "BOOL", "BOOLEAN":
+			dataType = hubv1.DataType_DATA_TYPE_BOOL
+		case "TIMESTAMP":
+			dataType = hubv1.DataType_DATA_TYPE_TIMESTAMP
+		case "DATE":
+			dataType = hubv1.DataType_DATA_TYPE_DATE
+		case "TIME":
+			dataType = hubv1.DataType_DATA_TYPE_TIME
+		case "DATETIME":
+			dataType = hubv1.DataType_DATA_TYPE_DATETIME
+		case "GEOGRAPHY":
+			dataType = hubv1.DataType_DATA_TYPE_GEOGRAPHY
+		case "NUMERIC":
+			dataType = hubv1.DataType_DATA_TYPE_NUMERIC
+		case "BIGNUMERIC":
+			dataType = hubv1.DataType_DATA_TYPE_BIGNUMERIC
+		case "BYTES":
+			dataType = hubv1.DataType_DATA_TYPE_BYTES
+		case "JSON":
+			dataType = hubv1.DataType_DATA_TYPE_JSON
+		case "STRUCT", "RECORD":
+			dataType = hubv1.DataType_DATA_TYPE_STRUCT
+		default:
+			return nil, fmt.Errorf("unsupported or missing data type for field %q: %q", f.Name, f.Type)
+		}
+
+		fieldMode := hubv1.FieldMode_FIELD_MODE_NULLABLE
+		switch strings.ToUpper(strings.TrimSpace(f.Mode)) {
+		case "REQUIRED":
+			fieldMode = hubv1.FieldMode_FIELD_MODE_REQUIRED
+		case "REPEATED":
+			fieldMode = hubv1.FieldMode_FIELD_MODE_REPEATED
+		}
+
+		subFields, err := mapSchemaJSONFieldsToProto(f.Fields, depth+1, append(path, f.Name))
+		if err != nil {
+			return nil, err
+		}
+
+		constraints, err := mapConstraints(f.Constraints)
+		if err != nil {
+			return nil, err
+		}
+
+		protoFields[i] = &hubv1.Field{
+			Name:        f.Name,
+			Description: f.Description,
+			Type:        dataType,
+			Mode:        fieldMode,
+			Fields:      subFields,
+			Constraints: constraints,
+		}
+	}
+	return protoFields, nil
+}
+
+func protoToSchemaJSON(fields []*hubv1.Field) (string, error) {
+	bqFields, err := protoToBQFields(fields, []string{})
+	if err != nil {
+		return "", err
+	}
+	bytes, err := json.MarshalIndent(bqFields, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(bytes), nil
+}
+
+func resolvedContractToProto(rc *manifest.ResolvedContract) (*hubv1.DataContract, error) {
+	if rc == nil {
+		return nil, nil
+	}
+	fields, err := parseSchemaJSONToFields(rc.SchemaJSON)
+	if err != nil {
+		return nil, err
+	}
+	return &hubv1.DataContract{
+		Meta: &hubv1.Meta{
+			Urn:         rc.URN,
+			Version:     rc.Version,
+			ContentHash: rc.ContentHash,
+			CommitSha:   rc.CommitSha,
+			DataAsset:   rc.DataAsset,
+		},
+		Schema: fields,
+	}, nil
+}
+
