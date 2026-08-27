@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,9 +41,38 @@ func NewFactory() *Factory {
 	}
 }
 
-// GetClient returns a Hub client for the given address.
-func (f *Factory) GetClient(ctx context.Context, address string, token string, opts ...grpc.DialOption) (*Client, error) {
-	cacheKey := fmt.Sprintf("%s|%s", address, token)
+// SanitizeAddress strips protocol prefixes and trailing slashes from an address,
+// returning the clean target address and the isolated host name.
+func SanitizeAddress(address string) (cleanAddress, host string) {
+	clean := strings.TrimPrefix(address, "https://")
+	clean = strings.TrimPrefix(clean, "http://")
+	clean = strings.TrimRight(clean, "/")
+
+	host = clean
+	if h, _, err := net.SplitHostPort(clean); err == nil {
+		host = h
+	}
+	return clean, host
+}
+
+// ResolveAudience returns the custom audience if provided, or defaults to "https://" + host.
+func ResolveAudience(host, customAudience string) string {
+	if customAudience != "" {
+		return customAudience
+	}
+	h := host
+	if splitHost, _, err := net.SplitHostPort(host); err == nil {
+		h = splitHost
+	}
+	return "https://" + h
+}
+
+// GetClient returns a Hub client for the given address, token, and audience.
+func (f *Factory) GetClient(ctx context.Context, address string, token string, audience string, opts ...grpc.DialOption) (*Client, error) {
+	cleanAddress, host := SanitizeAddress(address)
+	resolvedAudience := ResolveAudience(host, audience)
+
+	cacheKey := fmt.Sprintf("%s|%s|%s", cleanAddress, token, resolvedAudience)
 
 	f.mu.Lock()
 	if f.closed {
@@ -56,11 +86,6 @@ func (f *Factory) GetClient(ctx context.Context, address string, token string, o
 	f.mu.Unlock()
 
 	// Determine if we need OIDC (GCP environment) or insecure (localhost/loopback)
-	host := address
-	if h, _, err := net.SplitHostPort(address); err == nil {
-		host = h
-	}
-
 	isLoopback := false
 	if host == "localhost" {
 		isLoopback = true
@@ -86,9 +111,6 @@ func (f *Factory) GetClient(ctx context.Context, address string, token string, o
 		opts = append(opts, grpc.WithPerRPCCredentials(NewInsecureOIDCCredentials(ts)))
 	} else {
 		// Use OIDC for cloud environments
-		// The audience is the Hub's URL (usually the address without port)
-		audience := "https://" + host
-
 		var ts oauth2.TokenSource
 		if token != "" {
 			// If a token is explicitly provided (e.g., from an ID token data source), use it.
@@ -96,11 +118,11 @@ func (f *Factory) GetClient(ctx context.Context, address string, token string, o
 				AccessToken: token,
 			})
 		} else {
-			// Fallback to ADC
+			// Fallback to ADC with resolved audience
 			var err error
-			ts, err = idtoken.NewTokenSource(ctx, audience)
+			ts, err = idtoken.NewTokenSource(ctx, resolvedAudience)
 			if err != nil {
-				return nil, fmt.Errorf("failed to create OIDC token source for %s: %w", audience, err)
+				return nil, fmt.Errorf("failed to create OIDC token source for %s: %w", resolvedAudience, err)
 			}
 		}
 
@@ -125,9 +147,9 @@ func (f *Factory) GetClient(ctx context.Context, address string, token string, o
 	}`
 	opts = append(opts, grpc.WithDefaultServiceConfig(retryPolicy))
 
-	conn, err := grpc.NewClient(address, opts...)
+	conn, err := grpc.NewClient(cleanAddress, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial hub at %s: %w", address, err)
+		return nil, fmt.Errorf("failed to dial hub at %s: %w", cleanAddress, err)
 	}
 
 	client := &Client{

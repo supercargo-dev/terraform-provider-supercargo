@@ -137,6 +137,7 @@ func startMockHubServer(t *testing.T) (*mockHubServer, *ProviderData, string) {
 		context.Background(),
 		addr,
 		"mock-token",
+		"",
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithContextDialer(dialer),
 	)

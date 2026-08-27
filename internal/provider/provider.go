@@ -29,6 +29,7 @@ type SupercargoProvider struct {
 type SupercargoProviderModel struct {
 	HubAddress types.String `tfsdk:"hub_address"`
 	Token      types.String `tfsdk:"token"`
+	Audience   types.String `tfsdk:"audience"`
 }
 
 // ProviderData is the data passed to data sources and resources.
@@ -55,6 +56,10 @@ func (p *SupercargoProvider) Schema(ctx context.Context, req provider.SchemaRequ
 				Optional:            true,
 				Sensitive:           true,
 			},
+			"audience": schema.StringAttribute{
+				MarkdownDescription: "Target OIDC audience for Hub authentication (defaults to https://<hub-host>).",
+				Optional:            true,
+			},
 		},
 	}
 }
@@ -68,8 +73,8 @@ func (p *SupercargoProvider) Configure(ctx context.Context, req provider.Configu
 		return
 	}
 
-	if data.HubAddress.IsUnknown() || data.Token.IsUnknown() {
-		// HubAddress or Token is not known yet (e.g. creating the Hub in this run).
+	if data.HubAddress.IsUnknown() || data.Token.IsUnknown() || data.Audience.IsUnknown() {
+		// HubAddress, Token, or Audience is not known yet (e.g. creating the Hub in this run).
 		// We can't configure the client, but we must pass ProviderData down
 		// so ModifyPlan can detect the client is nil and skip validation.
 		providerData := &ProviderData{
@@ -88,7 +93,7 @@ func (p *SupercargoProvider) Configure(ctx context.Context, req provider.Configu
 		hubAddress = "localhost:50051"
 	}
 
-	client, err := p.factory.GetClient(ctx, hubAddress, data.Token.ValueString())
+	client, err := p.factory.GetClient(ctx, hubAddress, data.Token.ValueString(), data.Audience.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Failed to connect to Supercargo Hub",
