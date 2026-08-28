@@ -32,9 +32,3 @@ output "service_account_email" {
   description = "The service account email of the Gateway"
   value       = module.gateway.service_account_email
 }
-
-output "contracts" {
-  description = "Map of auto-discovered or explicitly provided contracts"
-  value       = supercargo_data_product.this.contracts
-}
-
