@@ -110,7 +110,41 @@ func startMockHubServer(t *testing.T) (*mockHubServer, *ProviderData, string) {
 	lis := bufconn.Listen(bufSize)
 
 	grpcServer := grpc.NewServer()
-	mockSrv := &mockHubServer{}
+	mockSrv := &mockHubServer{
+		GetTeamHook: func(ctx context.Context, req *hubv1.GetTeamRequest) (*hubv1.GetTeamResponse, error) {
+			return &hubv1.GetTeamResponse{
+				Team: &platformv1.Team{
+					Name: req.Name,
+				},
+			}, nil
+		},
+		GetContractHook: func(ctx context.Context, req *hubv1.GetContractRequest) (*hubv1.GetContractResponse, error) {
+			return &hubv1.GetContractResponse{
+				Contract: &hubv1.DataContract{
+					Meta: &hubv1.Meta{
+						Urn:     req.ContractUrn,
+						Version: req.Version,
+					},
+					Schema: []*hubv1.Field{
+						{Name: "order_id", Type: hubv1.DataType_DATA_TYPE_STRING},
+						{Name: "order_time", Type: hubv1.DataType_DATA_TYPE_TIMESTAMP},
+						{Name: "created_at", Type: hubv1.DataType_DATA_TYPE_TIMESTAMP},
+						{Name: "event_timestamp", Type: hubv1.DataType_DATA_TYPE_TIMESTAMP},
+					},
+				},
+			}, nil
+		},
+		RegisterContractHook: func(ctx context.Context, req *hubv1.RegisterContractRequest) (*hubv1.RegisterContractResponse, error) {
+			return &hubv1.RegisterContractResponse{
+				Contract: req.Contract,
+			}, nil
+		},
+		CheckDownstreamImpactHook: func(ctx context.Context, req *hubv1.CheckDownstreamImpactRequest) (*hubv1.CheckDownstreamImpactResponse, error) {
+			return &hubv1.CheckDownstreamImpactResponse{
+				Severity: hubv1.ImpactSeverity_IMPACT_SEVERITY_NONE,
+			}, nil
+		},
+	}
 	hubv1.RegisterHubServiceServer(grpcServer, mockSrv)
 
 	go func() {
@@ -137,6 +171,7 @@ func startMockHubServer(t *testing.T) (*mockHubServer, *ProviderData, string) {
 		context.Background(),
 		addr,
 		"mock-token",
+		"",
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithContextDialer(dialer),
 	)

@@ -48,6 +48,9 @@ func TestSupercargoProvider_Schema(t *testing.T) {
 	assert.NotNil(t, resp.Schema.Attributes["token"])
 	assert.True(t, resp.Schema.Attributes["token"].IsOptional())
 	assert.True(t, resp.Schema.Attributes["token"].IsSensitive())
+
+	assert.NotNil(t, resp.Schema.Attributes["audience"])
+	assert.True(t, resp.Schema.Attributes["audience"].IsOptional())
 }
 
 func TestSupercargoProvider_Configure(t *testing.T) {
@@ -61,6 +64,7 @@ func TestSupercargoProvider_Configure(t *testing.T) {
 		configModel := SupercargoProviderModel{
 			HubAddress: types.StringUnknown(),
 			Token:      types.StringValue("some-token"),
+			Audience:   types.StringNull(),
 		}
 
 		req := provider.ConfigureRequest{
@@ -93,6 +97,33 @@ func TestSupercargoProvider_Configure(t *testing.T) {
 		configModel := SupercargoProviderModel{
 			HubAddress: types.StringValue("localhost:50051"),
 			Token:      types.StringUnknown(),
+			Audience:   types.StringNull(),
+		}
+
+		req := provider.ConfigureRequest{
+			Config: newTestProviderConfig(ctx, t, schemaResp.Schema, configModel),
+		}
+		var resp provider.ConfigureResponse
+
+		p.Configure(ctx, req, &resp)
+		require.False(t, resp.Diagnostics.HasError(), "unexpected diagnostics: %v", resp.Diagnostics)
+
+		require.NotNil(t, resp.ResourceData)
+		data, ok := resp.ResourceData.(*ProviderData)
+		require.True(t, ok)
+		assert.Equal(t, "unknown", data.HubAddress)
+		assert.Nil(t, data.HubClient)
+	})
+
+	t.Run("unknown audience sets unknown provider data and nil client", func(t *testing.T) {
+		p := New("dev")()
+		var schemaResp provider.SchemaResponse
+		p.Schema(ctx, provider.SchemaRequest{}, &schemaResp)
+
+		configModel := SupercargoProviderModel{
+			HubAddress: types.StringValue("localhost:50051"),
+			Token:      types.StringValue("some-token"),
+			Audience:   types.StringUnknown(),
 		}
 
 		req := provider.ConfigureRequest{
@@ -118,6 +149,7 @@ func TestSupercargoProvider_Configure(t *testing.T) {
 		configModel := SupercargoProviderModel{
 			HubAddress: types.StringNull(),
 			Token:      types.StringValue("mock-local-token"),
+			Audience:   types.StringNull(),
 		}
 
 		req := provider.ConfigureRequest{
@@ -145,6 +177,35 @@ func TestSupercargoProvider_Configure(t *testing.T) {
 		configModel := SupercargoProviderModel{
 			HubAddress: types.StringValue(mockAddr),
 			Token:      types.StringValue("test-token"),
+			Audience:   types.StringNull(),
+		}
+
+		req := provider.ConfigureRequest{
+			Config: newTestProviderConfig(ctx, t, schemaResp.Schema, configModel),
+		}
+		var resp provider.ConfigureResponse
+
+		p.Configure(ctx, req, &resp)
+		require.False(t, resp.Diagnostics.HasError(), "unexpected diagnostics: %v", resp.Diagnostics)
+
+		require.NotNil(t, resp.ResourceData)
+		data, ok := resp.ResourceData.(*ProviderData)
+		require.True(t, ok)
+		assert.Equal(t, mockAddr, data.HubAddress)
+		assert.NotNil(t, data.HubClient)
+	})
+
+	t.Run("successful configuration with custom audience", func(t *testing.T) {
+		_, _, mockAddr := startMockHubServer(t)
+
+		p := New("dev")()
+		var schemaResp provider.SchemaResponse
+		p.Schema(ctx, provider.SchemaRequest{}, &schemaResp)
+
+		configModel := SupercargoProviderModel{
+			HubAddress: types.StringValue(mockAddr),
+			Token:      types.StringValue("test-token"),
+			Audience:   types.StringValue("https://custom-audience.google.com"),
 		}
 
 		req := provider.ConfigureRequest{
@@ -177,6 +238,7 @@ func TestSupercargoProvider_Configure(t *testing.T) {
 		configModel := SupercargoProviderModel{
 			HubAddress: types.StringValue("localhost:50051"),
 			Token:      types.StringValue("test-token"),
+			Audience:   types.StringNull(),
 		}
 
 		req := provider.ConfigureRequest{

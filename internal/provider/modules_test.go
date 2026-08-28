@@ -127,3 +127,65 @@ func TestModules_BigQueryDeletionProtection(t *testing.T) {
 		}
 	})
 }
+
+func TestModules_DataProductGoldenPath(t *testing.T) {
+	modulesDir := "../../modules"
+	mainPath := filepath.Join(modulesDir, "data_product", "main.tf")
+	mainBytes, err := os.ReadFile(mainPath)
+	if err != nil {
+		t.Fatalf("Failed to read %s: %v", mainPath, err)
+	}
+	mainContent := string(mainBytes)
+
+	t.Run("GatewayContractsLocalComputation", func(t *testing.T) {
+		if !strings.Contains(mainContent, "gateway_contracts =") {
+			t.Errorf("data_product/main.tf missing gateway_contracts local definition")
+		}
+		if !strings.Contains(mainContent, "supercargo_data_product.this.contracts") {
+			t.Errorf("data_product/main.tf gateway_contracts must reference supercargo_data_product.this.contracts")
+		}
+		if !strings.Contains(mainContent, "contracts = local.gateway_contracts") {
+			t.Errorf("data_product/main.tf module.gateway must pass contracts = local.gateway_contracts")
+		}
+	})
+
+	t.Run("GatewayDependsOnDataProduct", func(t *testing.T) {
+		gatewayIdx := strings.Index(mainContent, `module "gateway"`)
+		if gatewayIdx == -1 {
+			t.Fatalf("module gateway not found in %s", mainPath)
+		}
+		gatewayChunk := mainContent[gatewayIdx:]
+		if !strings.Contains(gatewayChunk, "supercargo_data_product.this") {
+			t.Errorf("module gateway must depend on supercargo_data_product.this")
+		}
+	})
+
+	t.Run("ContractsOutputExported", func(t *testing.T) {
+		outputPath := filepath.Join(modulesDir, "data_product", "outputs.tf")
+		outputBytes, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", outputPath, err)
+		}
+		outputContent := string(outputBytes)
+
+		if !strings.Contains(outputContent, `output "contracts"`) {
+			t.Errorf("data_product/outputs.tf missing output \"contracts\"")
+		}
+		if !strings.Contains(outputContent, "supercargo_data_product.this.contracts") {
+			t.Errorf("data_product/outputs.tf output \"contracts\" value must be supercargo_data_product.this.contracts")
+		}
+	})
+
+	t.Run("ProducerExampleUsesGoldenPath", func(t *testing.T) {
+		examplePath := filepath.Join("../../examples", "data-producer", "main.tf")
+		exampleBytes, err := os.ReadFile(examplePath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", examplePath, err)
+		}
+		exampleContent := string(exampleBytes)
+
+		if strings.Contains(exampleContent, "local.contracts") {
+			t.Errorf("examples/data-producer/main.tf should not contain local.contracts, should use golden path")
+		}
+	})
+}

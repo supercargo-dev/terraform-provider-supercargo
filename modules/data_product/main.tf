@@ -2,6 +2,18 @@ locals {
   manifest_content = yamldecode(file(var.manifest_file))
   product_urn      = try(local.manifest_content.meta.urn, "")
   product_id       = length(split(":", local.product_urn)) > 1 ? element(split(":", local.product_urn), length(split(":", local.product_urn)) - 1) : local.product_urn
+
+  gateway_contracts = length(var.contracts) > 0 ? {
+    for k, v in var.contracts : element(split(":", k), length(split(":", k)) - 1) => {
+      id     = k
+      schema = v.schema_json
+    }
+    } : {
+    for k, v in supercargo_data_product.this.contracts : element(split(":", k), length(split(":", k)) - 1) => {
+      id     = v.id
+      schema = v.schema
+    }
+  }
 }
 
 resource "supercargo_data_product" "this" {
@@ -49,14 +61,10 @@ module "gateway" {
   gateway_audience                  = var.gateway_audience
   bigquery_deletion_protection      = var.bigquery_deletion_protection
 
-  contracts = {
-    for k, v in var.contracts : element(split(":", k), length(split(":", k)) - 1) => {
-      id     = k
-      schema = v.schema_json
-    }
-  }
+  contracts = local.gateway_contracts
 
   depends_on = [
-    supercargo_contract_version.this
+    supercargo_data_product.this
   ]
 }
+

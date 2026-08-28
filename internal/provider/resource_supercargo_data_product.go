@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -98,7 +99,14 @@ func (r *supercargoDataProductResource) ModifyPlan(ctx context.Context, req reso
 		}
 	}
 
-	// 3. Validation Logic (Requires Hub Client)
+	// 3. Resolve Contracts
+	resolvedContracts, protoContracts, contractDiags := r.resolveContracts(ctx, plan.ManifestFile.ValueString(), productManifest)
+	resp.Diagnostics.Append(contractDiags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// 4. Validation Logic (Requires Hub Client)
 	if r.client != nil && r.client.HubClient != nil {
 		// Validate Team existence
 		if productManifest.Meta == nil || productManifest.Meta.Owner == nil || productManifest.Meta.Owner.TeamName == "" {
@@ -133,48 +141,37 @@ func (r *supercargoDataProductResource) ModifyPlan(ctx context.Context, req reso
 			}
 		}
 
-		// Validate Output Port Contracts
-		contractsChecked := 0
-		var loadedContracts []*hubv1.DataContract
-		for _, port := range productManifest.OutputPorts {
-			if port == nil || port.Contract == nil || port.Contract.Urn == "" {
+		// Check downstream impact for each contract
+		for _, contract := range protoContracts {
+			if contract == nil || contract.Meta == nil {
 				continue
 			}
-
-			// Fetch contract from Hub with caching
-			contractCacheKey := fmt.Sprintf("contract:%s:%s", port.Contract.Urn, port.Contract.Version)
-			var contract *hubv1.DataContract
-			if val, ok := r.client.Cache.Load(contractCacheKey); ok {
-				contract = val.(*hubv1.DataContract)
+			impactCacheKey := fmt.Sprintf("impact:%s:%s:%s", contract.Meta.Urn, contract.Meta.Version, contract.Meta.ContentHash)
+			var impact *hubv1.CheckDownstreamImpactResponse
+			if val, ok := r.client.Cache.Load(impactCacheKey); ok {
+				impact = val.(*hubv1.CheckDownstreamImpactResponse)
 			} else {
-				res, err := r.client.HubClient.GetContract(ctx, &hubv1.GetContractRequest{
-					ContractUrn: port.Contract.Urn,
-					Version:     port.Contract.Version,
+				res, err := r.client.HubClient.CheckDownstreamImpact(ctx, &hubv1.CheckDownstreamImpactRequest{
+					Contract: contract,
 				})
 				if err != nil {
-					st, ok := status.FromError(err)
-					if ok && st.Code() == codes.NotFound {
-						resp.Diagnostics.AddError(
-							"Governing Contract Not Found",
-							fmt.Sprintf("Contract '%s' version '%s' was not found in the Hub.", port.Contract.Urn, port.Contract.Version),
-						)
-						return
-					} else if ok && st.Code() != codes.Unavailable {
-						resp.Diagnostics.AddError(
-							"Governance Handshake Failed",
-							fmt.Sprintf("Could not verify contract '%s' in Hub: %s", port.Contract.Urn, st.Message()),
-						)
-						return
-					}
-				} else if res != nil && res.Contract != nil {
-					contract = res.Contract
-					r.client.Cache.Store(contractCacheKey, contract)
+					resp.Diagnostics.AddError(
+						"Governance Handshake Failed",
+						fmt.Sprintf("Could not check compatibility for contract '%s': %s", contract.Meta.Urn, status.Convert(err).Message()),
+					)
+					return
 				}
+				impact = res
+				r.client.Cache.Store(impactCacheKey, impact)
 			}
 
-			if contract != nil {
-				contractsChecked++
-				loadedContracts = append(loadedContracts, contract)
+			if impact != nil && impact.Severity == hubv1.ImpactSeverity_IMPACT_SEVERITY_BREAKING {
+				resp.Diagnostics.AddError(
+					"Breaking Change Detected (Plan-Time Governance)",
+					fmt.Sprintf("Proposed changes to %s are incompatible with the existing contract version. Breaking changes: %s",
+						contract.Meta.Urn, strings.Join(impact.BreakingChanges, ", ")),
+				)
+				return
 			}
 		}
 
@@ -182,7 +179,10 @@ func (r *supercargoDataProductResource) ModifyPlan(ctx context.Context, req reso
 		if !plan.PartitioningField.IsNull() && !plan.PartitioningField.IsUnknown() && plan.PartitioningField.ValueString() != "" {
 			partitioningField := plan.PartitioningField.ValueString()
 			fieldFound := false
-			for _, contract := range loadedContracts {
+			for _, contract := range protoContracts {
+				if contract == nil {
+					continue
+				}
 				for _, f := range contract.Schema {
 					if f != nil && f.Name == partitioningField {
 						fieldFound = true
@@ -194,16 +194,60 @@ func (r *supercargoDataProductResource) ModifyPlan(ctx context.Context, req reso
 				}
 			}
 
-			if contractsChecked > 0 && !fieldFound {
+			if len(protoContracts) > 0 && !fieldFound {
 				resp.Diagnostics.AddError(
 					"Invalid Partitioning Field",
 					fmt.Sprintf("The partitioning field '%s' was not found in any of the contracts associated with this data product.", partitioningField),
 				)
+				return
 			}
 		}
 	}
 
+	// 5. Construct concrete types.Map from resolved contracts
+	if len(resolvedContracts) > 0 {
+		contractsMap := make(map[string]supercargoContractModel, len(resolvedContracts))
+		for k, rc := range resolvedContracts {
+			contractsMap[k] = supercargoContractModel{
+				ID:          types.StringValue(rc.URN),
+				Schema:      types.StringValue(rc.SchemaJSON),
+				Version:     types.StringValue(rc.Version),
+				ContentHash: types.StringValue(rc.ContentHash),
+				CommitSha:   types.StringValue(rc.CommitSha),
+			}
+		}
+		mapVal, mapDiags := types.MapValueFrom(ctx, contractObjectType, contractsMap)
+		resp.Diagnostics.Append(mapDiags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		plan.Contracts = mapVal
+	} else if plan.Contracts.IsUnknown() {
+		plan.Contracts = types.MapNull(contractObjectType)
+	}
+
 	resp.Diagnostics.Append(resp.Plan.Set(ctx, &plan)...)
+}
+
+// supercargoContractModel maps a resolved data contract inside the data product.
+type supercargoContractModel struct {
+	ID          types.String `tfsdk:"id"`
+	Schema      types.String `tfsdk:"schema"`
+	Version     types.String `tfsdk:"version"`
+	ContentHash types.String `tfsdk:"content_hash"`
+	CommitSha   types.String `tfsdk:"commit_sha"`
+}
+
+var contractAttrTypes = map[string]attr.Type{
+	"id":           types.StringType,
+	"schema":       types.StringType,
+	"version":      types.StringType,
+	"content_hash": types.StringType,
+	"commit_sha":   types.StringType,
+}
+
+var contractObjectType = types.ObjectType{
+	AttrTypes: contractAttrTypes,
 }
 
 // supercargoDataProductResourceModel maps the resource schema data.
@@ -216,6 +260,7 @@ type supercargoDataProductResourceModel struct {
 	PartitioningField     types.String        `tfsdk:"partitioning_field"`
 	PartitionExpirationMs types.Int64         `tfsdk:"partition_expiration_ms"`
 	ServiceIdentities     types.Map           `tfsdk:"service_identities"`
+	Contracts             types.Map           `tfsdk:"contracts"`
 	SLA                   *supercargoSLAModel `tfsdk:"sla"`
 }
 
@@ -290,6 +335,34 @@ func (r *supercargoDataProductResource) Schema(_ context.Context, _ resource.Sch
 				ElementType:         types.StringType,
 				MarkdownDescription: "Map of component identities (e.g. gateway, shovel) as IAM member strings.",
 			},
+			"contracts": schema.MapNestedAttribute{
+				Computed:            true,
+				MarkdownDescription: "Map of resolved data contracts keyed by contract URN or port name.",
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"id": schema.StringAttribute{
+							Computed:            true,
+							MarkdownDescription: "Contract URN.",
+						},
+						"schema": schema.StringAttribute{
+							Computed:            true,
+							MarkdownDescription: "BigQuery JSON schema.",
+						},
+						"version": schema.StringAttribute{
+							Computed:            true,
+							MarkdownDescription: "Contract semantic version.",
+						},
+						"content_hash": schema.StringAttribute{
+							Computed:            true,
+							MarkdownDescription: "SHA256 content hash of the contract.",
+						},
+						"commit_sha": schema.StringAttribute{
+							Computed:            true,
+							MarkdownDescription: "Git commit SHA of the contract.",
+						},
+					},
+				},
+			},
 			"sla": schema.SingleNestedAttribute{
 				Optional:            true,
 				MarkdownDescription: "Service Level Agreement (SLA) overrides for the data product.",
@@ -357,10 +430,33 @@ func (r *supercargoDataProductResource) Create(ctx context.Context, req resource
 		return
 	}
 
-	// 2. Apply Overrides (Deep Merge)
+	// 2. Resolve and Register Contracts in Hub
+	resolvedContracts, protoContracts, contractDiags := r.resolveContracts(ctx, plan.ManifestFile.ValueString(), productManifest)
+	resp.Diagnostics.Append(contractDiags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	for _, contract := range protoContracts {
+		if contract == nil {
+			continue
+		}
+		_, err := r.client.HubClient.RegisterContract(ctx, &hubv1.RegisterContractRequest{
+			Contract: contract,
+		})
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Error Registering Contract",
+				fmt.Sprintf("Could not register contract '%s' in Supercargo Hub: %s", contract.Meta.Urn, status.Convert(err).Message()),
+			)
+			return
+		}
+	}
+
+	// 3. Apply Overrides (Deep Merge)
 	r.applyOverrides(productManifest, &plan)
 
-	// 3. Register Product in Hub
+	// 4. Register Product in Hub
 	res, err := r.client.HubClient.RegisterProduct(ctx, &hubv1.RegisterProductRequest{
 		Manifest: productManifest,
 	})
@@ -369,9 +465,11 @@ func (r *supercargoDataProductResource) Create(ctx context.Context, req resource
 		return
 	}
 
-	// 4. Update State
-	plan.URN = types.StringValue(res.ProductUrn)
-	plan.Version = types.StringValue(res.Version)
+	// 5. Update State
+	if res != nil {
+		plan.URN = types.StringValue(res.ProductUrn)
+		plan.Version = types.StringValue(res.Version)
+	}
 
 	targetProject := ""
 	if !plan.Project.IsNull() && !plan.Project.IsUnknown() {
@@ -379,37 +477,43 @@ func (r *supercargoDataProductResource) Create(ctx context.Context, req resource
 	}
 
 	// Ensure overrides that were applied are reflected in the computed fields if they weren't in HCL
-	if plan.Project.IsUnknown() || plan.Project.IsNull() {
-		if len(productManifest.OutputPorts) > 0 && productManifest.OutputPorts[0] != nil && productManifest.OutputPorts[0].Physical != nil && productManifest.OutputPorts[0].Physical.Bigquery != nil && productManifest.OutputPorts[0].Physical.Bigquery.Project != "" {
-			targetProject = productManifest.OutputPorts[0].Physical.Bigquery.Project
-			plan.Project = types.StringValue(targetProject)
-		} else {
-			plan.Project = types.StringNull()
+	manifestProject := ""
+	for _, port := range productManifest.OutputPorts {
+		if port != nil && port.Physical != nil && port.Physical.Bigquery != nil && port.Physical.Bigquery.Project != "" {
+			manifestProject = port.Physical.Bigquery.Project
+			if plan.Project.IsUnknown() || plan.Project.IsNull() {
+				targetProject = manifestProject
+				plan.Project = types.StringValue(targetProject)
+			}
+			if plan.Location.IsUnknown() || plan.Location.IsNull() {
+				plan.Location = types.StringValue(port.Physical.Bigquery.Location)
+			}
+			if plan.PartitioningField.IsUnknown() || plan.PartitioningField.IsNull() {
+				plan.PartitioningField = types.StringValue(port.Physical.Bigquery.PartitionBy)
+			}
+			if plan.PartitionExpirationMs.IsUnknown() || plan.PartitionExpirationMs.IsNull() {
+				plan.PartitionExpirationMs = durationToMs(port.Physical)
+			}
+			break
 		}
+	}
+	if plan.Project.IsUnknown() || plan.Project.IsNull() {
+		plan.Project = types.StringNull()
 	}
 	if plan.Location.IsUnknown() || plan.Location.IsNull() {
-		if len(productManifest.OutputPorts) > 0 && productManifest.OutputPorts[0] != nil && productManifest.OutputPorts[0].Physical != nil && productManifest.OutputPorts[0].Physical.Bigquery != nil && productManifest.OutputPorts[0].Physical.Bigquery.Location != "" {
-			plan.Location = types.StringValue(productManifest.OutputPorts[0].Physical.Bigquery.Location)
-		} else {
-			plan.Location = types.StringNull()
-		}
+		plan.Location = types.StringNull()
 	}
 	if plan.PartitioningField.IsUnknown() || plan.PartitioningField.IsNull() {
-		if len(productManifest.OutputPorts) > 0 && productManifest.OutputPorts[0] != nil && productManifest.OutputPorts[0].Physical != nil && productManifest.OutputPorts[0].Physical.Bigquery != nil && productManifest.OutputPorts[0].Physical.Bigquery.PartitionBy != "" {
-			plan.PartitioningField = types.StringValue(productManifest.OutputPorts[0].Physical.Bigquery.PartitionBy)
-		} else {
-			plan.PartitioningField = types.StringNull()
-		}
+		plan.PartitioningField = types.StringNull()
 	}
 	if plan.PartitionExpirationMs.IsUnknown() || plan.PartitionExpirationMs.IsNull() {
-		if len(productManifest.OutputPorts) > 0 && productManifest.OutputPorts[0] != nil {
-			plan.PartitionExpirationMs = durationToMs(productManifest.OutputPorts[0].Physical)
-		} else {
-			plan.PartitionExpirationMs = types.Int64Null()
-		}
+		plan.PartitionExpirationMs = types.Int64Null()
 	}
 
-	productUrn := res.ProductUrn
+	productUrn := ""
+	if res != nil {
+		productUrn = res.ProductUrn
+	}
 	if productUrn == "" && productManifest.Meta != nil {
 		productUrn = productManifest.Meta.Urn
 	}
@@ -419,6 +523,23 @@ func (r *supercargoDataProductResource) Create(ctx context.Context, req resource
 		return
 	}
 	plan.ServiceIdentities = identitiesMap
+
+	contractsMap := make(map[string]supercargoContractModel, len(resolvedContracts))
+	for k, rc := range resolvedContracts {
+		contractsMap[k] = supercargoContractModel{
+			ID:          types.StringValue(rc.URN),
+			Schema:      types.StringValue(rc.SchemaJSON),
+			Version:     types.StringValue(rc.Version),
+			ContentHash: types.StringValue(rc.ContentHash),
+			CommitSha:   types.StringValue(rc.CommitSha),
+		}
+	}
+	mapVal, mapDiags := types.MapValueFrom(ctx, contractObjectType, contractsMap)
+	resp.Diagnostics.Append(mapDiags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	plan.Contracts = mapVal
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
@@ -484,6 +605,10 @@ func (r *supercargoDataProductResource) Read(ctx context.Context, req resource.R
 		state.PartitioningField = types.StringNull()
 		state.PartitionExpirationMs = types.Int64Null()
 		state.ServiceIdentities = types.MapNull(types.StringType)
+	}
+
+	if state.Contracts.IsNull() || state.Contracts.IsUnknown() {
+		state.Contracts = types.MapNull(contractObjectType)
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
@@ -624,4 +749,134 @@ func calculateServiceIdentities(ctx context.Context, targetProject, productUrn s
 		identities[comp] = types.StringValue("serviceAccount:" + email)
 	}
 	return types.MapValueFrom(ctx, types.StringType, identities)
+}
+
+func (r *supercargoDataProductResource) resolveContracts(ctx context.Context, manifestPath string, m *hubv1.ProductManifest) (map[string]*manifest.ResolvedContract, map[string]*hubv1.DataContract, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	if m == nil || len(m.OutputPorts) == 0 {
+		return make(map[string]*manifest.ResolvedContract), make(map[string]*hubv1.DataContract), diags
+	}
+
+	resolvedContracts := make(map[string]*manifest.ResolvedContract, len(m.OutputPorts))
+	protoContracts := make(map[string]*hubv1.DataContract, len(m.OutputPorts))
+
+	// Attempt bulk local resolution first
+	allResolved, _ := manifest.ResolveContracts(manifestPath, m)
+
+	for _, port := range m.OutputPorts {
+		if port == nil || port.Contract == nil {
+			continue
+		}
+		mapKey := port.Contract.Urn
+		if mapKey == "" {
+			mapKey = port.Name
+		}
+
+		var rc *manifest.ResolvedContract
+		if allResolved != nil {
+			rc = allResolved[mapKey]
+		}
+
+		if rc == nil {
+			// Attempt single-port local resolution
+			singleManifest := &hubv1.ProductManifest{OutputPorts: []*hubv1.OutputPort{port}}
+			singleResolved, err := manifest.ResolveContracts(manifestPath, singleManifest)
+			if err == nil && len(singleResolved) > 0 {
+				rc = singleResolved[mapKey]
+			}
+		}
+
+		var protoCont *hubv1.DataContract
+		if rc != nil {
+			var err error
+			protoCont, err = resolvedContractToProto(rc)
+			if err != nil {
+				diags.AddError("Error Converting Contract Schema", fmt.Sprintf("Failed to parse schema for contract %q: %s", rc.URN, err.Error()))
+				return nil, nil, diags
+			}
+		} else {
+			// Polyrepo fallback: Fetch from Hub if client is available
+			if r.client != nil && r.client.HubClient != nil && port.Contract.Urn != "" {
+				contractCacheKey := fmt.Sprintf("contract:%s:%s", port.Contract.Urn, port.Contract.Version)
+				if val, ok := r.client.Cache.Load(contractCacheKey); ok {
+					protoCont = val.(*hubv1.DataContract)
+				} else {
+					res, err := r.client.HubClient.GetContract(ctx, &hubv1.GetContractRequest{
+						ContractUrn: port.Contract.Urn,
+						Version:     port.Contract.Version,
+					})
+					if err != nil {
+						st, ok := status.FromError(err)
+						if ok && st.Code() == codes.NotFound {
+							diags.AddError(
+								"Governing Contract Not Found",
+								fmt.Sprintf("Contract '%s' version '%s' was not found in the Hub.", port.Contract.Urn, port.Contract.Version),
+							)
+							return nil, nil, diags
+						} else if ok && st.Code() != codes.Unavailable {
+							diags.AddError(
+								"Governance Handshake Failed",
+								fmt.Sprintf("Could not verify contract '%s' in Hub: %s", port.Contract.Urn, st.Message()),
+							)
+							return nil, nil, diags
+						}
+					} else if res != nil && res.Contract != nil {
+						protoCont = res.Contract
+						r.client.Cache.Store(contractCacheKey, protoCont)
+					}
+				}
+
+				if protoCont != nil {
+					schemaJSON, err := protoToSchemaJSON(protoCont.Schema)
+					if err != nil {
+						diags.AddError("Error Converting Contract Schema", fmt.Sprintf("Failed to convert schema for contract %q: %s", port.Contract.Urn, err.Error()))
+						return nil, nil, diags
+					}
+					meta := protoCont.Meta
+					urnVal := port.Contract.Urn
+					versionVal := port.Contract.Version
+					contentHash := ""
+					commitSha := ""
+					dataAsset := ""
+					if meta != nil {
+						if meta.Urn != "" {
+							urnVal = meta.Urn
+						}
+						if meta.Version != "" {
+							versionVal = meta.Version
+						}
+						contentHash = meta.ContentHash
+						commitSha = meta.CommitSha
+						dataAsset = meta.DataAsset
+					}
+					rc = &manifest.ResolvedContract{
+						URN:         urnVal,
+						Version:     versionVal,
+						Name:        port.Name,
+						SchemaJSON:  schemaJSON,
+						ContentHash: contentHash,
+						CommitSha:   commitSha,
+						DataAsset:   dataAsset,
+					}
+				}
+			}
+
+			if rc == nil {
+				if r.client == nil || r.client.HubClient == nil {
+					// Cannot perform polyrepo fallback without client; continue gracefully
+					continue
+				}
+				diags.AddError(
+					"Error Resolving Contracts",
+					fmt.Sprintf("Contract for port %q (URN: %q, version: %q) could not be resolved from local files or Hub.", port.Name, port.Contract.Urn, port.Contract.Version),
+				)
+				return nil, nil, diags
+			}
+		}
+
+		resolvedContracts[mapKey] = rc
+		protoContracts[mapKey] = protoCont
+	}
+
+	return resolvedContracts, protoContracts, diags
 }
