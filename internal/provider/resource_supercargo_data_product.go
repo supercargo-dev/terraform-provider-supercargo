@@ -880,4 +880,3 @@ func (r *supercargoDataProductResource) resolveContracts(ctx context.Context, ma
 
 	return resolvedContracts, protoContracts, diags
 }
-

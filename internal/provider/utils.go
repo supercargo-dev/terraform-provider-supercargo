@@ -351,4 +351,3 @@ func resolvedContractToProto(rc *manifest.ResolvedContract) (*hubv1.DataContract
 		Schema: fields,
 	}, nil
 }
-

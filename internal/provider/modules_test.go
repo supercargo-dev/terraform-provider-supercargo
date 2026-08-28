@@ -189,5 +189,3 @@ func TestModules_DataProductGoldenPath(t *testing.T) {
 		}
 	})
 }
-
-

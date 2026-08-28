@@ -1627,4 +1627,3 @@ schema:
 		assert.False(t, stateModel.Contracts.IsNull())
 	})
 }
-

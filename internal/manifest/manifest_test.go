@@ -355,4 +355,3 @@ output_ports:
 		assert.Contains(t, err.Error(), "missing")
 	})
 }
-

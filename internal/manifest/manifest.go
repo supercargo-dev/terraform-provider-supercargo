@@ -447,4 +447,3 @@ func normalizeBQMode(m string) string {
 		return m
 	}
 }
-
