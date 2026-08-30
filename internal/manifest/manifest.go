@@ -85,25 +85,46 @@ func Load(path string) (*hubv1.ProductManifest, error) {
 	return manifest, nil
 }
 
-// ResolveContracts resolves contract YAML files and BigQuery schema JSON files for all output ports in a product manifest.
+// ResolveContracts resolves contract YAML files and BigQuery schema JSON files for all input and output ports in a product manifest.
 func ResolveContracts(manifestPath string, manifest *hubv1.ProductManifest) (map[string]*ResolvedContract, error) {
-	if manifest == nil || len(manifest.OutputPorts) == 0 {
+	if manifest == nil || (len(manifest.OutputPorts) == 0 && len(manifest.InputPorts) == 0) {
 		return make(map[string]*ResolvedContract), nil
 	}
 
 	manifestClean := filepath.Clean(manifestPath)
 	manifestDir := filepath.Dir(manifestClean)
-	resolved := make(map[string]*ResolvedContract, len(manifest.OutputPorts))
+	totalPorts := len(manifest.OutputPorts) + len(manifest.InputPorts)
+	resolved := make(map[string]*ResolvedContract, totalPorts)
 
+	type portRef struct {
+		name     string
+		contract *hubv1.ContractPointer
+	}
+	ports := make([]portRef, 0, totalPorts)
 	for _, port := range manifest.OutputPorts {
-		if port == nil || port.Contract == nil {
+		if port != nil && port.Contract != nil {
+			ports = append(ports, portRef{name: port.Name, contract: port.Contract})
+		}
+	}
+	for _, port := range manifest.InputPorts {
+		if port != nil && port.Contract != nil {
+			ports = append(ports, portRef{name: port.Name, contract: port.Contract})
+		}
+	}
+
+	for _, port := range ports {
+		portName := port.name
+		contractURN := port.contract.Urn
+		contractVersion := port.contract.Version
+		explicitPath := port.contract.Path
+
+		mapKey := contractURN
+		if mapKey == "" {
+			mapKey = portName
+		}
+		if _, exists := resolved[mapKey]; exists {
 			continue
 		}
-
-		portName := port.Name
-		contractURN := port.Contract.Urn
-		contractVersion := port.Contract.Version
-		explicitPath := port.Contract.Path
 
 		baseNames := candidateBaseNames(portName, contractURN)
 		versions := candidateVersions(contractVersion)
@@ -170,9 +191,8 @@ func ResolveContracts(manifestPath string, manifest *hubv1.ProductManifest) (map
 			}
 		}
 
-		mapKey := contractURN
-		if mapKey == "" {
-			mapKey = portName
+		if contractURN != "" {
+			mapKey = contractURN
 		}
 
 		resolved[mapKey] = &ResolvedContract{

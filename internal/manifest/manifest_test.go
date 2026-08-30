@@ -354,4 +354,112 @@ output_ports:
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "missing")
 	})
+
+	t.Run("resolves contracts declared in input_ports for both brownfield pubsub and managed streams", func(t *testing.T) {
+		dir := t.TempDir()
+		manifestPath := filepath.Join(dir, "dataproduct.yaml")
+		contractsDir := filepath.Join(dir, "contracts")
+		require.NoError(t, os.MkdirAll(contractsDir, 0755))
+
+		manifestYAML := `meta:
+  urn: urn:supercargo:hub:product:rockify-analytics
+  version: v1.0.0
+  owner:
+    team_name: rockify
+input_ports:
+  - name: subscriptions
+    source: pubsub://projects/rockify-data/topics/rockify-subscription-events
+    contract:
+      urn: urn:supercargo:hub:contract:rockify-subscriptions
+      version: "1.0.0"
+  - name: telemetry
+    source: pubsub://managed
+    contract:
+      urn: urn:supercargo:hub:contract:rockify-telemetry
+      version: "1.0.0"
+`
+		require.NoError(t, os.WriteFile(manifestPath, []byte(manifestYAML), 0644))
+
+		subContractYAML := `meta:
+  urn: urn:supercargo:hub:contract:rockify-subscriptions
+  version: "1.0.0"
+schema:
+  - name: user_id
+    type: DATA_TYPE_STRING
+    mode: FIELD_MODE_REQUIRED
+  - name: email
+    type: DATA_TYPE_STRING
+    mode: FIELD_MODE_REQUIRED
+`
+		require.NoError(t, os.WriteFile(filepath.Join(contractsDir, "rockify-subscriptions.1.0.0.contract.yaml"), []byte(subContractYAML), 0644))
+
+		telContractYAML := `meta:
+  urn: urn:supercargo:hub:contract:rockify-telemetry
+  version: "1.0.0"
+schema:
+  - name: event_id
+    type: DATA_TYPE_STRING
+    mode: FIELD_MODE_REQUIRED
+  - name: duration_ms
+    type: DATA_TYPE_INT64
+    mode: FIELD_MODE_REQUIRED
+`
+		require.NoError(t, os.WriteFile(filepath.Join(contractsDir, "rockify-telemetry.1.0.0.contract.yaml"), []byte(telContractYAML), 0644))
+
+		m, err := Load(manifestPath)
+		require.NoError(t, err)
+		require.NotNil(t, m)
+		require.Len(t, m.InputPorts, 2)
+		assert.Equal(t, "pubsub://projects/rockify-data/topics/rockify-subscription-events", m.InputPorts[0].Source)
+		assert.Equal(t, "pubsub://managed", m.InputPorts[1].Source)
+
+		resolved, err := ResolveContracts(manifestPath, m)
+		require.NoError(t, err)
+		require.NotNil(t, resolved)
+		require.Len(t, resolved, 2, "Both input port contracts should be resolved")
+
+		subCont, ok := resolved["urn:supercargo:hub:contract:rockify-subscriptions"]
+		require.True(t, ok)
+		assert.Equal(t, "urn:supercargo:hub:contract:rockify-subscriptions", subCont.URN)
+		assert.Equal(t, "1.0.0", subCont.Version)
+		assert.NotEmpty(t, subCont.SchemaJSON)
+
+		telCont, ok := resolved["urn:supercargo:hub:contract:rockify-telemetry"]
+		require.True(t, ok)
+		assert.Equal(t, "urn:supercargo:hub:contract:rockify-telemetry", telCont.URN)
+		assert.Equal(t, "1.0.0", telCont.Version)
+		assert.NotEmpty(t, telCont.SchemaJSON)
+	})
+}
+
+func TestRockify_DataproductManifestAndContracts(t *testing.T) {
+	manifestPath := filepath.Join("..", "..", "..", "rockify", "dataproduct.yaml")
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		t.Skipf("rockify/dataproduct.yaml does not exist at %s (skipping external monorepo test in standalone provider CI)", manifestPath)
+	}
+
+	m, err := Load(manifestPath)
+	require.NoError(t, err)
+	require.NotNil(t, m)
+	require.NotNil(t, m.Meta)
+	assert.Equal(t, "urn:supercargo:hub:product:rockify-analytics:v1", m.Meta.Urn)
+	require.Len(t, m.InputPorts, 4, "Must declare 4 input ports for the 4 Rockify microservices")
+
+	resolved, err := ResolveContracts(manifestPath, m)
+	require.NoError(t, err)
+	require.Len(t, resolved, 4, "All 4 contracts must be resolved")
+
+	expectedContracts := []string{
+		"urn:supercargo:hub:contract:rockify-subscriptions",
+		"urn:supercargo:hub:contract:rockify-playback",
+		"urn:supercargo:hub:contract:rockify-telemetry",
+		"urn:supercargo:hub:contract:rockify-recommendations",
+	}
+
+	for _, cURN := range expectedContracts {
+		rc, ok := resolved[cURN]
+		require.True(t, ok, "Contract %s must be present in resolved map", cURN)
+		assert.NotEmpty(t, rc.SchemaJSON, "Schema JSON must not be empty for %s", cURN)
+		assert.Equal(t, "1.0.0", rc.Version)
+	}
 }

@@ -348,3 +348,58 @@ func TestModules_DataProductPushInvokerAndIAMEncapsulation(t *testing.T) {
 		}
 	})
 }
+
+func TestModules_DataProductDeclarativeIngress(t *testing.T) {
+	modulesDir := "../../modules"
+	dpDir := filepath.Join(modulesDir, "data_product")
+
+	t.Run("IngressResourceDefinitions", func(t *testing.T) {
+		ingressPath := filepath.Join(dpDir, "ingress.tf")
+		ingressBytes, err := os.ReadFile(ingressPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s (ingress.tf must exist in modules/data_product): %v", ingressPath, err)
+		}
+		ingressContent := string(ingressBytes)
+
+		if !strings.Contains(ingressContent, "pubsub_input_ports") {
+			t.Errorf("modules/data_product/ingress.tf missing pubsub_input_ports local")
+		}
+		if !strings.Contains(ingressContent, "managed_pubsub_ports") {
+			t.Errorf("modules/data_product/ingress.tf missing managed_pubsub_ports local")
+		}
+		if !strings.Contains(ingressContent, `resource "google_pubsub_topic" "managed_input"`) {
+			t.Errorf("modules/data_product/ingress.tf missing google_pubsub_topic.managed_input resource")
+		}
+		if !strings.Contains(ingressContent, `resource "google_pubsub_subscription" "input_push"`) {
+			t.Errorf("modules/data_product/ingress.tf missing google_pubsub_subscription.input_push resource")
+		}
+		if !strings.Contains(ingressContent, "/pubsub/push/") {
+			t.Errorf("modules/data_product/ingress.tf push endpoint must route to /pubsub/push/<contract_urn>")
+		}
+		if !strings.Contains(ingressContent, "module.gateway.push_invoker_service_account_email") {
+			t.Errorf("modules/data_product/ingress.tf push subscription must use module.gateway.push_invoker_service_account_email for OIDC auth")
+		}
+		if !strings.Contains(ingressContent, "module.gateway.dlq_topic_id") {
+			t.Errorf("modules/data_product/ingress.tf push subscription must configure dead_letter_topic with module.gateway.dlq_topic_id")
+		}
+		if !strings.Contains(ingressContent, `resource "google_pubsub_subscription_iam_member" "pubsub_input_dlq_subscriber"`) {
+			t.Errorf("modules/data_product/ingress.tf missing google_pubsub_subscription_iam_member.pubsub_input_dlq_subscriber for PubSub SA DLQ subscriber role")
+		}
+	})
+
+	t.Run("OutputsExported", func(t *testing.T) {
+		outputPath := filepath.Join(dpDir, "outputs.tf")
+		outputBytes, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", outputPath, err)
+		}
+		outputContent := string(outputBytes)
+
+		if !strings.Contains(outputContent, `output "managed_input_topics"`) {
+			t.Errorf("modules/data_product/outputs.tf missing output \"managed_input_topics\"")
+		}
+		if !strings.Contains(outputContent, `output "input_subscription_ids"`) {
+			t.Errorf("modules/data_product/outputs.tf missing output \"input_subscription_ids\"")
+		}
+	})
+}
