@@ -23,6 +23,26 @@ output "clean_topic_id" {
   value       = module.gateway.clean_topic_id
 }
 
+output "dlq_topic_id" {
+  description = "The ID of the Dead Letter Queue topic"
+  value       = module.gateway.dlq_topic_id
+}
+
+output "push_invoker_service_account_email" {
+  description = "The email of the Pub/Sub Push Invoker Service Account"
+  value       = module.gateway.push_invoker_service_account_email
+}
+
+output "raw_subscription_id" {
+  description = "The ID of the Raw Pub/Sub Push Subscription"
+  value       = module.gateway.raw_subscription_id
+}
+
+output "dlq_subscription_id" {
+  description = "The ID of the Dead Letter Queue Subscription"
+  value       = module.gateway.dlq_subscription_id
+}
+
 output "bigquery_table_ids" {
   description = "A map of contract names to BigQuery table IDs"
   value       = module.gateway.bigquery_table_ids

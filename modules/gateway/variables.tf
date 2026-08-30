@@ -175,6 +175,13 @@ variable "authorized_invokers" {
   default     = []
 }
 
+variable "authorized_invoker_service_accounts" {
+  description = "List of service account emails authorized to invoke the gateway service"
+  type        = list(string)
+  default     = []
+}
+
+
 variable "auth_enforce" {
   description = "Whether to enforce OIDC authentication (Shadow Mode if false)"
   type        = bool
