@@ -58,3 +58,14 @@ output "contracts" {
   value       = supercargo_data_product.this.contracts
 }
 
+output "managed_input_topics" {
+  description = "Map of managed input port names to their created Pub/Sub topic IDs"
+  value       = { for k, v in google_pubsub_topic.managed_input : k => v.id }
+}
+
+output "input_subscription_ids" {
+  description = "Map of input port names to their Pub/Sub push subscription IDs"
+  value       = { for k, v in google_pubsub_subscription.input_push : k => v.id }
+}
+
+
