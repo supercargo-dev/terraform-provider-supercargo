@@ -463,4 +463,3 @@ func TestRockify_DataproductManifestAndContracts(t *testing.T) {
 		assert.Equal(t, "1.0.0", rc.Version)
 	}
 }
-
