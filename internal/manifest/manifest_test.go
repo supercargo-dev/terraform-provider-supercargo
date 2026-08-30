@@ -431,3 +431,36 @@ schema:
 		assert.NotEmpty(t, telCont.SchemaJSON)
 	})
 }
+
+func TestRockify_DataproductManifestAndContracts(t *testing.T) {
+	manifestPath := filepath.Join("..", "..", "..", "rockify", "dataproduct.yaml")
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		t.Fatalf("rockify/dataproduct.yaml does not exist at %s", manifestPath)
+	}
+
+	m, err := Load(manifestPath)
+	require.NoError(t, err)
+	require.NotNil(t, m)
+	require.NotNil(t, m.Meta)
+	assert.Equal(t, "urn:supercargo:hub:product:rockify-analytics:v1", m.Meta.Urn)
+	require.Len(t, m.InputPorts, 4, "Must declare 4 input ports for the 4 Rockify microservices")
+
+	resolved, err := ResolveContracts(manifestPath, m)
+	require.NoError(t, err)
+	require.Len(t, resolved, 4, "All 4 contracts must be resolved")
+
+	expectedContracts := []string{
+		"urn:supercargo:hub:contract:rockify-subscriptions",
+		"urn:supercargo:hub:contract:rockify-playback",
+		"urn:supercargo:hub:contract:rockify-telemetry",
+		"urn:supercargo:hub:contract:rockify-recommendations",
+	}
+
+	for _, cURN := range expectedContracts {
+		rc, ok := resolved[cURN]
+		require.True(t, ok, "Contract %s must be present in resolved map", cURN)
+		assert.NotEmpty(t, rc.SchemaJSON, "Schema JSON must not be empty for %s", cURN)
+		assert.Equal(t, "1.0.0", rc.Version)
+	}
+}
+
