@@ -435,7 +435,7 @@ schema:
 func TestRockify_DataproductManifestAndContracts(t *testing.T) {
 	manifestPath := filepath.Join("..", "..", "..", "rockify", "dataproduct.yaml")
 	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
-		t.Fatalf("rockify/dataproduct.yaml does not exist at %s", manifestPath)
+		t.Skipf("rockify/dataproduct.yaml does not exist at %s (skipping external monorepo test in standalone provider CI)", manifestPath)
 	}
 
 	m, err := Load(manifestPath)
