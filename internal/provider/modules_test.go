@@ -189,3 +189,90 @@ func TestModules_DataProductGoldenPath(t *testing.T) {
 		}
 	})
 }
+
+func TestModules_GatewayPushInvokerAndIAMEncapsulation(t *testing.T) {
+	modulesDir := "../../modules"
+	gwDir := filepath.Join(modulesDir, "gateway")
+
+	t.Run("AuthorizedInvokerServiceAccountsVariable", func(t *testing.T) {
+		varPath := filepath.Join(gwDir, "variables.tf")
+		varBytes, err := os.ReadFile(varPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", varPath, err)
+		}
+		varContent := string(varBytes)
+
+		if !strings.Contains(varContent, `variable "authorized_invoker_service_accounts"`) {
+			t.Errorf("modules/gateway/variables.tf missing authorized_invoker_service_accounts variable")
+		}
+		if !strings.Contains(varContent, "default     = []") && !strings.Contains(varContent, "default = []") {
+			t.Errorf("modules/gateway/variables.tf authorized_invoker_service_accounts must default to []")
+		}
+		if !strings.Contains(varContent, "List of service account emails authorized to invoke the gateway service") {
+			t.Errorf("modules/gateway/variables.tf authorized_invoker_service_accounts missing expected description")
+		}
+	})
+
+	t.Run("NormalizationLogicInMain", func(t *testing.T) {
+		mainPath := filepath.Join(gwDir, "main.tf")
+		mainBytes, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		mainContent := string(mainBytes)
+
+		if !strings.Contains(mainContent, "all_authorized_invokers") {
+			t.Errorf("modules/gateway/main.tf missing all_authorized_invokers local")
+		}
+		if !strings.Contains(mainContent, `startswith(sa, "serviceAccount:")`) {
+			t.Errorf("modules/gateway/main.tf missing startswith(sa, \"serviceAccount:\") normalization")
+		}
+		if !strings.Contains(mainContent, "compact(var.authorized_invoker_service_accounts)") {
+			t.Errorf("modules/gateway/main.tf missing compact(var.authorized_invoker_service_accounts)")
+		}
+
+		invokerResIdx := strings.Index(mainContent, `resource "google_cloud_run_v2_service_iam_member" "authorized_invokers"`)
+		if invokerResIdx == -1 {
+			t.Fatalf("authorized_invokers IAM member resource not found in %s", mainPath)
+		}
+		invokerChunk := mainContent[invokerResIdx:]
+		nextRes := strings.Index(invokerChunk[len(`resource "google_cloud_run_v2_service_iam_member" "authorized_invokers"`):], "\nresource \"")
+		if nextRes != -1 {
+			invokerChunk = invokerChunk[:len(`resource "google_cloud_run_v2_service_iam_member" "authorized_invokers"`)+nextRes]
+		}
+		if !strings.Contains(invokerChunk, "local.all_authorized_invokers") {
+			t.Errorf("google_cloud_run_v2_service_iam_member.authorized_invokers must iterate over local.all_authorized_invokers")
+		}
+	})
+
+	t.Run("OutputsExported", func(t *testing.T) {
+		outputPath := filepath.Join(gwDir, "outputs.tf")
+		outputBytes, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", outputPath, err)
+		}
+		outputContent := string(outputBytes)
+
+		if !strings.Contains(outputContent, `output "push_invoker_service_account_email"`) {
+			t.Errorf("modules/gateway/outputs.tf missing push_invoker_service_account_email output")
+		}
+		if !strings.Contains(outputContent, "google_service_account.push_invoker.email") {
+			t.Errorf("modules/gateway/outputs.tf push_invoker_service_account_email must reference google_service_account.push_invoker.email")
+		}
+
+		if !strings.Contains(outputContent, `output "raw_subscription_id"`) {
+			t.Errorf("modules/gateway/outputs.tf missing raw_subscription_id output")
+		}
+		if !strings.Contains(outputContent, "google_pubsub_subscription.raw_push.id") {
+			t.Errorf("modules/gateway/outputs.tf raw_subscription_id must reference google_pubsub_subscription.raw_push.id")
+		}
+
+		if !strings.Contains(outputContent, `output "dlq_subscription_id"`) {
+			t.Errorf("modules/gateway/outputs.tf missing dlq_subscription_id output")
+		}
+		if !strings.Contains(outputContent, "google_pubsub_subscription.dlq_sub.id") {
+			t.Errorf("modules/gateway/outputs.tf dlq_subscription_id must reference google_pubsub_subscription.dlq_sub.id")
+		}
+	})
+}
+

@@ -32,3 +32,19 @@ output "service_account_email" {
   description = "The email of the Gateway Service Account"
   value       = google_service_account.gateway.email
 }
+
+output "push_invoker_service_account_email" {
+  description = "The email of the Pub/Sub Push Invoker Service Account"
+  value       = google_service_account.push_invoker.email
+}
+
+output "raw_subscription_id" {
+  description = "The ID of the Raw push subscription"
+  value       = google_pubsub_subscription.raw_push.id
+}
+
+output "dlq_subscription_id" {
+  description = "The ID of the Dead Letter Queue subscription"
+  value       = google_pubsub_subscription.dlq_sub.id
+}
+
