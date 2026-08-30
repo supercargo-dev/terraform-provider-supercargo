@@ -348,5 +348,3 @@ func TestModules_DataProductPushInvokerAndIAMEncapsulation(t *testing.T) {
 		}
 	})
 }
-
-
