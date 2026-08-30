@@ -753,23 +753,43 @@ func calculateServiceIdentities(ctx context.Context, targetProject, productUrn s
 
 func (r *supercargoDataProductResource) resolveContracts(ctx context.Context, manifestPath string, m *hubv1.ProductManifest) (map[string]*manifest.ResolvedContract, map[string]*hubv1.DataContract, diag.Diagnostics) {
 	var diags diag.Diagnostics
-	if m == nil || len(m.OutputPorts) == 0 {
+	if m == nil || (len(m.OutputPorts) == 0 && len(m.InputPorts) == 0) {
 		return make(map[string]*manifest.ResolvedContract), make(map[string]*hubv1.DataContract), diags
 	}
 
-	resolvedContracts := make(map[string]*manifest.ResolvedContract, len(m.OutputPorts))
-	protoContracts := make(map[string]*hubv1.DataContract, len(m.OutputPorts))
+	type portRef struct {
+		name     string
+		contract *hubv1.ContractPointer
+	}
+	totalPorts := len(m.OutputPorts) + len(m.InputPorts)
+	ports := make([]portRef, 0, totalPorts)
+	for _, p := range m.OutputPorts {
+		if p != nil && p.Contract != nil {
+			ports = append(ports, portRef{name: p.Name, contract: p.Contract})
+		}
+	}
+	for _, p := range m.InputPorts {
+		if p != nil && p.Contract != nil {
+			ports = append(ports, portRef{name: p.Name, contract: p.Contract})
+		}
+	}
+
+	resolvedContracts := make(map[string]*manifest.ResolvedContract, len(ports))
+	protoContracts := make(map[string]*hubv1.DataContract, len(ports))
 
 	// Attempt bulk local resolution first
 	allResolved, _ := manifest.ResolveContracts(manifestPath, m)
 
-	for _, port := range m.OutputPorts {
-		if port == nil || port.Contract == nil {
+	for _, port := range ports {
+		if port.contract == nil {
 			continue
 		}
-		mapKey := port.Contract.Urn
+		mapKey := port.contract.Urn
 		if mapKey == "" {
-			mapKey = port.Name
+			mapKey = port.name
+		}
+		if _, exists := resolvedContracts[mapKey]; exists {
+			continue
 		}
 
 		var rc *manifest.ResolvedContract
@@ -779,7 +799,9 @@ func (r *supercargoDataProductResource) resolveContracts(ctx context.Context, ma
 
 		if rc == nil {
 			// Attempt single-port local resolution
-			singleManifest := &hubv1.ProductManifest{OutputPorts: []*hubv1.OutputPort{port}}
+			singleManifest := &hubv1.ProductManifest{
+				OutputPorts: []*hubv1.OutputPort{{Name: port.name, Contract: port.contract}},
+			}
 			singleResolved, err := manifest.ResolveContracts(manifestPath, singleManifest)
 			if err == nil && len(singleResolved) > 0 {
 				rc = singleResolved[mapKey]
@@ -796,27 +818,27 @@ func (r *supercargoDataProductResource) resolveContracts(ctx context.Context, ma
 			}
 		} else {
 			// Polyrepo fallback: Fetch from Hub if client is available
-			if r.client != nil && r.client.HubClient != nil && port.Contract.Urn != "" {
-				contractCacheKey := fmt.Sprintf("contract:%s:%s", port.Contract.Urn, port.Contract.Version)
+			if r.client != nil && r.client.HubClient != nil && port.contract.Urn != "" {
+				contractCacheKey := fmt.Sprintf("contract:%s:%s", port.contract.Urn, port.contract.Version)
 				if val, ok := r.client.Cache.Load(contractCacheKey); ok {
 					protoCont = val.(*hubv1.DataContract)
 				} else {
 					res, err := r.client.HubClient.GetContract(ctx, &hubv1.GetContractRequest{
-						ContractUrn: port.Contract.Urn,
-						Version:     port.Contract.Version,
+						ContractUrn: port.contract.Urn,
+						Version:     port.contract.Version,
 					})
 					if err != nil {
 						st, ok := status.FromError(err)
 						if ok && st.Code() == codes.NotFound {
 							diags.AddError(
 								"Governing Contract Not Found",
-								fmt.Sprintf("Contract '%s' version '%s' was not found in the Hub.", port.Contract.Urn, port.Contract.Version),
+								fmt.Sprintf("Contract '%s' version '%s' was not found in the Hub.", port.contract.Urn, port.contract.Version),
 							)
 							return nil, nil, diags
 						} else if ok && st.Code() != codes.Unavailable {
 							diags.AddError(
 								"Governance Handshake Failed",
-								fmt.Sprintf("Could not verify contract '%s' in Hub: %s", port.Contract.Urn, st.Message()),
+								fmt.Sprintf("Could not verify contract '%s' in Hub: %s", port.contract.Urn, st.Message()),
 							)
 							return nil, nil, diags
 						}
@@ -829,12 +851,12 @@ func (r *supercargoDataProductResource) resolveContracts(ctx context.Context, ma
 				if protoCont != nil {
 					schemaJSON, err := protoToSchemaJSON(protoCont.Schema)
 					if err != nil {
-						diags.AddError("Error Converting Contract Schema", fmt.Sprintf("Failed to convert schema for contract %q: %s", port.Contract.Urn, err.Error()))
+						diags.AddError("Error Converting Contract Schema", fmt.Sprintf("Failed to convert schema for contract %q: %s", port.contract.Urn, err.Error()))
 						return nil, nil, diags
 					}
 					meta := protoCont.Meta
-					urnVal := port.Contract.Urn
-					versionVal := port.Contract.Version
+					urnVal := port.contract.Urn
+					versionVal := port.contract.Version
 					contentHash := ""
 					commitSha := ""
 					dataAsset := ""
@@ -852,7 +874,7 @@ func (r *supercargoDataProductResource) resolveContracts(ctx context.Context, ma
 					rc = &manifest.ResolvedContract{
 						URN:         urnVal,
 						Version:     versionVal,
-						Name:        port.Name,
+						Name:        port.name,
 						SchemaJSON:  schemaJSON,
 						ContentHash: contentHash,
 						CommitSha:   commitSha,
@@ -868,7 +890,7 @@ func (r *supercargoDataProductResource) resolveContracts(ctx context.Context, ma
 				}
 				diags.AddError(
 					"Error Resolving Contracts",
-					fmt.Sprintf("Contract for port %q (URN: %q, version: %q) could not be resolved from local files or Hub.", port.Name, port.Contract.Urn, port.Contract.Version),
+					fmt.Sprintf("Contract for port %q (URN: %q, version: %q) could not be resolved from local files or Hub.", port.name, port.contract.Urn, port.contract.Version),
 				)
 				return nil, nil, diags
 			}

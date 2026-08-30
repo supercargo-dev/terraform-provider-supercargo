@@ -1327,6 +1327,90 @@ schema:
 		assert.NotEmpty(t, c.ContentHash.ValueString())
 	})
 
+	t.Run("resolves input port contracts and populates plan.Contracts", func(t *testing.T) {
+		mockSrv, providerData, _ := startMockHubServer(t)
+		r := &supercargoDataProductResource{client: providerData}
+		var schemaResp resource.SchemaResponse
+		r.Schema(ctx, resource.SchemaRequest{}, &schemaResp)
+
+		dir := t.TempDir()
+		manifestPath := filepath.Join(dir, "product.yaml")
+		contractsDir := filepath.Join(dir, "contracts")
+		require.NoError(t, os.MkdirAll(contractsDir, 0755))
+
+		manifestYAML := `meta:
+  urn: urn:supercargo:hub:product:rockify-streaming
+  version: v1.0.0
+  owner:
+    team_name: rockify-team
+input_ports:
+  - name: streaming-orders
+    source: pubsub://projects/rockify-data/topics/rockify-orders
+    contract:
+      urn: urn:supercargo:hub:contract:rockify-orders
+      version: "1.0.0"
+`
+		require.NoError(t, os.WriteFile(manifestPath, []byte(manifestYAML), 0644))
+
+		contractYAML := `meta:
+  urn: urn:supercargo:hub:contract:rockify-orders
+  version: "1.0.0"
+schema:
+  - name: order_id
+    type: DATA_TYPE_STRING
+    mode: FIELD_MODE_REQUIRED
+`
+		require.NoError(t, os.WriteFile(filepath.Join(contractsDir, "rockify-orders.1.0.0.contract.yaml"), []byte(contractYAML), 0644))
+
+		mockSrv.mu.Lock()
+		mockSrv.GetTeamHook = func(ctx context.Context, req *hubv1.GetTeamRequest) (*hubv1.GetTeamResponse, error) {
+			return &hubv1.GetTeamResponse{Team: &platformv1.Team{Name: req.Name}}, nil
+		}
+		mockSrv.CheckDownstreamImpactHook = func(ctx context.Context, req *hubv1.CheckDownstreamImpactRequest) (*hubv1.CheckDownstreamImpactResponse, error) {
+			return &hubv1.CheckDownstreamImpactResponse{
+				Severity: hubv1.ImpactSeverity_IMPACT_SEVERITY_NONE,
+			}, nil
+		}
+		mockSrv.mu.Unlock()
+
+		planModel := supercargoDataProductResourceModel{
+			ManifestFile:          types.StringValue(manifestPath),
+			URN:                   types.StringNull(),
+			Version:               types.StringNull(),
+			Project:               types.StringNull(),
+			Location:              types.StringNull(),
+			PartitioningField:     types.StringNull(),
+			PartitionExpirationMs: types.Int64Null(),
+			ServiceIdentities:     types.MapNull(types.StringType),
+			Contracts:             types.MapNull(contractObjectType),
+		}
+
+		req := resource.ModifyPlanRequest{
+			Plan: newTestPlan(ctx, t, schemaResp.Schema, planModel),
+		}
+		var resp resource.ModifyPlanResponse
+		resp.Plan = newTestPlan(ctx, t, schemaResp.Schema, planModel)
+
+		r.ModifyPlan(ctx, req, &resp)
+		require.False(t, resp.Diagnostics.HasError(), "unexpected diagnostics: %v", resp.Diagnostics)
+
+		var plannedModel supercargoDataProductResourceModel
+		diags := resp.Plan.Get(ctx, &plannedModel)
+		require.False(t, diags.HasError())
+		assert.False(t, plannedModel.Contracts.IsNull())
+
+		var contracts map[string]supercargoContractModel
+		diags = plannedModel.Contracts.ElementsAs(ctx, &contracts, false)
+		require.False(t, diags.HasError())
+		require.Len(t, contracts, 1)
+
+		c, ok := contracts["urn:supercargo:hub:contract:rockify-orders"]
+		require.True(t, ok)
+		assert.Equal(t, "urn:supercargo:hub:contract:rockify-orders", c.ID.ValueString())
+		assert.Equal(t, "1.0.0", c.Version.ValueString())
+		assert.NotEmpty(t, c.Schema.ValueString())
+	})
+
 	t.Run("breaking change detected in CheckDownstreamImpact adds error", func(t *testing.T) {
 		mockSrv, providerData, _ := startMockHubServer(t)
 		r := &supercargoDataProductResource{client: providerData}
