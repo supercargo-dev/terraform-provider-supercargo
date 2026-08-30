@@ -224,8 +224,8 @@ func TestModules_GatewayPushInvokerAndIAMEncapsulation(t *testing.T) {
 		if !strings.Contains(mainContent, "all_authorized_invokers") {
 			t.Errorf("modules/gateway/main.tf missing all_authorized_invokers local")
 		}
-		if !strings.Contains(mainContent, `startswith(sa, "serviceAccount:")`) {
-			t.Errorf("modules/gateway/main.tf missing startswith(sa, \"serviceAccount:\") normalization")
+		if !strings.Contains(mainContent, `startswith(trimspace(sa), "serviceAccount:")`) && !strings.Contains(mainContent, `startswith(sa, "serviceAccount:")`) {
+			t.Errorf("modules/gateway/main.tf missing startswith(trimspace(sa), \"serviceAccount:\") normalization")
 		}
 		if !strings.Contains(mainContent, "compact(var.authorized_invoker_service_accounts)") {
 			t.Errorf("modules/gateway/main.tf missing compact(var.authorized_invoker_service_accounts)")

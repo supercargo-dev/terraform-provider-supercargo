@@ -192,8 +192,8 @@ resource "google_pubsub_topic_iam_member" "gateway_publisher_dlq" {
 }
 
 locals {
-  normalized_invoker_sas  = [for sa in compact(var.authorized_invoker_service_accounts) : startswith(sa, "serviceAccount:") ? sa : "serviceAccount:${sa}"]
-  all_authorized_invokers = toset(concat(var.authorized_invokers, local.normalized_invoker_sas))
+  normalized_invoker_sas  = [for sa in compact(var.authorized_invoker_service_accounts) : startswith(trimspace(sa), "serviceAccount:") ? trimspace(sa) : "serviceAccount:${trimspace(sa)}"]
+  all_authorized_invokers = toset(compact(concat(var.authorized_invokers, local.normalized_invoker_sas)))
 }
 
 resource "google_cloud_run_v2_service_iam_member" "authorized_invokers" {
