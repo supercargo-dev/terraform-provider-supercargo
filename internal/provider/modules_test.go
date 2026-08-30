@@ -276,3 +276,77 @@ func TestModules_GatewayPushInvokerAndIAMEncapsulation(t *testing.T) {
 	})
 }
 
+func TestModules_DataProductPushInvokerAndIAMEncapsulation(t *testing.T) {
+	modulesDir := "../../modules"
+	dpDir := filepath.Join(modulesDir, "data_product")
+
+	t.Run("AuthorizedInvokerVariables", func(t *testing.T) {
+		varPath := filepath.Join(dpDir, "variables.tf")
+		varBytes, err := os.ReadFile(varPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", varPath, err)
+		}
+		varContent := string(varBytes)
+
+		if !strings.Contains(varContent, `variable "authorized_invokers"`) {
+			t.Errorf("modules/data_product/variables.tf missing authorized_invokers variable")
+		}
+		if !strings.Contains(varContent, `variable "authorized_invoker_service_accounts"`) {
+			t.Errorf("modules/data_product/variables.tf missing authorized_invoker_service_accounts variable")
+		}
+	})
+
+	t.Run("GatewayModulePassthrough", func(t *testing.T) {
+		mainPath := filepath.Join(dpDir, "main.tf")
+		mainBytes, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		mainContent := string(mainBytes)
+
+		gatewayIdx := strings.Index(mainContent, `module "gateway"`)
+		if gatewayIdx == -1 {
+			t.Fatalf("module gateway not found in %s", mainPath)
+		}
+		gatewayChunk := mainContent[gatewayIdx:]
+
+		if !strings.Contains(gatewayChunk, "authorized_invokers                 = var.authorized_invokers") &&
+			!strings.Contains(gatewayChunk, "authorized_invokers = var.authorized_invokers") {
+			t.Errorf("module gateway in data_product/main.tf must pass authorized_invokers = var.authorized_invokers")
+		}
+		if !strings.Contains(gatewayChunk, "authorized_invoker_service_accounts = var.authorized_invoker_service_accounts") &&
+			!strings.Contains(gatewayChunk, "authorized_invoker_service_accounts= var.authorized_invoker_service_accounts") {
+			t.Errorf("module gateway in data_product/main.tf must pass authorized_invoker_service_accounts = var.authorized_invoker_service_accounts")
+		}
+	})
+
+	t.Run("OutputsExported", func(t *testing.T) {
+		outputPath := filepath.Join(dpDir, "outputs.tf")
+		outputBytes, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", outputPath, err)
+		}
+		outputContent := string(outputBytes)
+
+		outputs := []struct {
+			name     string
+			expected string
+		}{
+			{name: "dlq_topic_id", expected: "module.gateway.dlq_topic_id"},
+			{name: "push_invoker_service_account_email", expected: "module.gateway.push_invoker_service_account_email"},
+			{name: "raw_subscription_id", expected: "module.gateway.raw_subscription_id"},
+			{name: "dlq_subscription_id", expected: "module.gateway.dlq_subscription_id"},
+		}
+
+		for _, out := range outputs {
+			if !strings.Contains(outputContent, `output "`+out.name+`"`) {
+				t.Errorf("modules/data_product/outputs.tf missing output %q", out.name)
+			}
+			if !strings.Contains(outputContent, out.expected) {
+				t.Errorf("modules/data_product/outputs.tf output %q must reference %q", out.name, out.expected)
+			}
+		}
+	})
+}
+
+

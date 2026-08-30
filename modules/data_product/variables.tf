@@ -149,3 +149,15 @@ variable "bigquery_deletion_protection" {
   default     = true
 }
 
+variable "authorized_invokers" {
+  description = "List of IAM members authorized to invoke the gateway"
+  type        = list(string)
+  default     = []
+}
+
+variable "authorized_invoker_service_accounts" {
+  description = "List of service account emails authorized to invoke the gateway service"
+  type        = list(string)
+  default     = []
+}
+
