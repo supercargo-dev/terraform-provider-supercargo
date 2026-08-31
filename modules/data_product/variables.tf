@@ -68,7 +68,7 @@ variable "pubsub_maximum_backoff" {
 variable "pubsub_message_retention_duration" {
   description = "The duration to retain messages in subscriptions."
   type        = string
-  default     = "86400s" # 1 day
+  default     = "600s" # 10 minutes
 }
 
 variable "pubsub_expiration_policy_ttl" {
