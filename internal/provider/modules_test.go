@@ -72,7 +72,7 @@ func TestModules_BigQueryDeletionProtection(t *testing.T) {
 	modulesDir := "../../modules"
 
 	t.Run("VariableDefaultsToTrue", func(t *testing.T) {
-		bqModules := []string{"gateway", "security_vault", "data_product"}
+		bqModules := []string{"gateway", "security_vault", "data_product", "hub"}
 		for _, mod := range bqModules {
 			varPath := filepath.Join(modulesDir, mod, "variables.tf")
 			contentBytes, err := os.ReadFile(varPath)
@@ -99,6 +99,7 @@ func TestModules_BigQueryDeletionProtection(t *testing.T) {
 			{moduleName: "gateway", tableName: "validated_data"},
 			{moduleName: "security_vault", tableName: "lookup_table"},
 			{moduleName: "security_vault", tableName: "rtbf_shred_queue"},
+			{moduleName: "hub", tableName: "outbox_events"},
 		}
 
 		for _, tc := range tableChecks {
@@ -400,6 +401,222 @@ func TestModules_DataProductDeclarativeIngress(t *testing.T) {
 		}
 		if !strings.Contains(outputContent, `output "input_subscription_ids"`) {
 			t.Errorf("modules/data_product/outputs.tf missing output \"input_subscription_ids\"")
+		}
+	})
+}
+
+func TestModules_HubAuditSink(t *testing.T) {
+	modulesDir := "../../modules"
+	hubDir := filepath.Join(modulesDir, "hub")
+
+	t.Run("VariablesDefinedWithCorrectDefaults", func(t *testing.T) {
+		varPath := filepath.Join(hubDir, "variables.tf")
+		varBytes, err := os.ReadFile(varPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", varPath, err)
+		}
+		varContent := string(varBytes)
+
+		requiredVars := []struct {
+			name         string
+			defaultValue string
+		}{
+			{name: "enable_audit_sink", defaultValue: "true"},
+			{name: "audit_dataset_id", defaultValue: `"supercargo_audit"`},
+			{name: "audit_table_id", defaultValue: `"outbox_events"`},
+			{name: "audit_view_id", defaultValue: `"outbox_events_view"`},
+			{name: "bigquery_location", defaultValue: `""`},
+			{name: "bigquery_deletion_protection", defaultValue: "true"},
+		}
+
+		for _, rv := range requiredVars {
+			if !strings.Contains(varContent, `variable "`+rv.name+`"`) {
+				t.Errorf("modules/hub/variables.tf missing variable %q", rv.name)
+			}
+			if !strings.Contains(varContent, rv.defaultValue) {
+				t.Errorf("modules/hub/variables.tf variable %q missing default %s", rv.name, rv.defaultValue)
+			}
+		}
+	})
+
+	t.Run("BigQueryAPIEnabled", func(t *testing.T) {
+		mainPath := filepath.Join(hubDir, "main.tf")
+		mainBytes, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		mainContent := string(mainBytes)
+
+		if !strings.Contains(mainContent, `"bigquery.googleapis.com"`) {
+			t.Errorf("modules/hub/main.tf missing \"bigquery.googleapis.com\" in google_project_service.hub_apis")
+		}
+	})
+
+	t.Run("BigQueryDatasetConfigured", func(t *testing.T) {
+		mainPath := filepath.Join(hubDir, "main.tf")
+		mainBytes, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		mainContent := string(mainBytes)
+
+		if !strings.Contains(mainContent, `resource "google_bigquery_dataset" "supercargo_audit"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_bigquery_dataset\" \"supercargo_audit\"")
+		}
+		if !strings.Contains(mainContent, "dataset_id                 = var.audit_dataset_id") && !strings.Contains(mainContent, "dataset_id = var.audit_dataset_id") {
+			t.Errorf("dataset must use var.audit_dataset_id")
+		}
+		if !strings.Contains(mainContent, "location                   = local.bq_location") && !strings.Contains(mainContent, "location = local.bq_location") {
+			t.Errorf("dataset must use local.bq_location")
+		}
+		if !strings.Contains(mainContent, "delete_contents_on_destroy = !var.bigquery_deletion_protection") && !strings.Contains(mainContent, "delete_contents_on_destroy = ! var.bigquery_deletion_protection") {
+			t.Errorf("dataset must use delete_contents_on_destroy = !var.bigquery_deletion_protection")
+		}
+	})
+
+	t.Run("BigQueryRawTableConfigured", func(t *testing.T) {
+		mainPath := filepath.Join(hubDir, "main.tf")
+		mainBytes, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		mainContent := string(mainBytes)
+
+		if !strings.Contains(mainContent, `resource "google_bigquery_table" "outbox_events"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_bigquery_table\" \"outbox_events\"")
+		}
+		if !strings.Contains(mainContent, "dataset_id          = google_bigquery_dataset.supercargo_audit[0].dataset_id") &&
+			!strings.Contains(mainContent, "dataset_id = google_bigquery_dataset.supercargo_audit[0].dataset_id") {
+			t.Errorf("outbox_events table must reference google_bigquery_dataset.supercargo_audit[0].dataset_id")
+		}
+		if !strings.Contains(mainContent, "table_id            = var.audit_table_id") &&
+			!strings.Contains(mainContent, "table_id = var.audit_table_id") {
+			t.Errorf("outbox_events table must use var.audit_table_id")
+		}
+		if !strings.Contains(mainContent, "deletion_protection = var.bigquery_deletion_protection") {
+			t.Errorf("outbox_events table must use deletion_protection = var.bigquery_deletion_protection")
+		}
+		if !strings.Contains(mainContent, `field = "publish_time"`) && !strings.Contains(mainContent, `field  = "publish_time"`) {
+			t.Errorf("outbox_events table must partition by publish_time")
+		}
+		// Schema fields
+		for _, field := range []string{"subscription_name", "message_id", "publish_time", "attributes", "data", "JSON", "STRING"} {
+			if !strings.Contains(mainContent, field) {
+				t.Errorf("outbox_events table schema missing field or type %q", field)
+			}
+		}
+	})
+
+	t.Run("BigQueryViewConfigured", func(t *testing.T) {
+		mainPath := filepath.Join(hubDir, "main.tf")
+		mainBytes, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		mainContent := string(mainBytes)
+
+		if !strings.Contains(mainContent, `resource "google_bigquery_table" "outbox_events_view"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_bigquery_table\" \"outbox_events_view\"")
+		}
+		if !strings.Contains(mainContent, "dataset_id          = google_bigquery_dataset.supercargo_audit[0].dataset_id") &&
+			!strings.Contains(mainContent, "dataset_id = google_bigquery_dataset.supercargo_audit[0].dataset_id") {
+			t.Errorf("outbox_events_view must reference google_bigquery_dataset.supercargo_audit[0].dataset_id")
+		}
+		if !strings.Contains(mainContent, "table_id            = var.audit_view_id") &&
+			!strings.Contains(mainContent, "table_id = var.audit_view_id") {
+			t.Errorf("outbox_events_view must use var.audit_view_id")
+		}
+		if !strings.Contains(mainContent, "deletion_protection = false") {
+			t.Errorf("outbox_events_view must set deletion_protection = false")
+		}
+
+		viewChecks := []string{
+			"COALESCE(JSON_VALUE(attributes, '$.doc_id'), message_id) AS event_id",
+			"JSON_VALUE(attributes, '$.urn') AS urn",
+			"JSON_VALUE(attributes, '$.action') AS action",
+			"JSON_VALUE(attributes, '$.doc_id') AS doc_id",
+			"SAFE.PARSE_JSON(data) AS payload",
+			"publish_time AS timestamp",
+		}
+		for _, vc := range viewChecks {
+			if !strings.Contains(mainContent, vc) {
+				t.Errorf("outbox_events_view query missing %q", vc)
+			}
+		}
+	})
+
+	t.Run("IAMBindingsConfigured", func(t *testing.T) {
+		mainPath := filepath.Join(hubDir, "main.tf")
+		mainBytes, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		mainContent := string(mainBytes)
+
+		if !strings.Contains(mainContent, `resource "google_bigquery_dataset_iam_member" "pubsub_audit_bq_writer"`) {
+			t.Errorf("modules/hub/main.tf missing resource \"google_bigquery_dataset_iam_member\" \"pubsub_audit_bq_writer\"")
+		}
+		if !strings.Contains(mainContent, `role       = "roles/bigquery.dataEditor"`) && !strings.Contains(mainContent, `role = "roles/bigquery.dataEditor"`) {
+			t.Errorf("pubsub_audit_bq_writer missing roles/bigquery.dataEditor")
+		}
+		if !strings.Contains(mainContent, `resource "google_bigquery_dataset_iam_member" "pubsub_audit_bq_metadata"`) {
+			t.Errorf("modules/hub/main.tf missing resource \"google_bigquery_dataset_iam_member\" \"pubsub_audit_bq_metadata\"")
+		}
+		if !strings.Contains(mainContent, `role       = "roles/bigquery.metadataViewer"`) && !strings.Contains(mainContent, `role = "roles/bigquery.metadataViewer"`) {
+			t.Errorf("pubsub_audit_bq_metadata missing roles/bigquery.metadataViewer")
+		}
+		if !strings.Contains(mainContent, `serviceAccount:service-${var.project_number}@gcp-sa-pubsub.iam.gserviceaccount.com`) {
+			t.Errorf("IAM member must use serviceAccount:service-${var.project_number}@gcp-sa-pubsub.iam.gserviceaccount.com")
+		}
+	})
+
+	t.Run("PubSubSubscriptionConfigured", func(t *testing.T) {
+		mainPath := filepath.Join(hubDir, "main.tf")
+		mainBytes, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		mainContent := string(mainBytes)
+
+		if !strings.Contains(mainContent, `resource "google_pubsub_subscription" "outbox_audit_bq"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_pubsub_subscription\" \"outbox_audit_bq\"")
+		}
+		if !strings.Contains(mainContent, "topic   = var.control_plane_topic") && !strings.Contains(mainContent, "topic = var.control_plane_topic") {
+			t.Errorf("outbox_audit_bq subscription must use topic = var.control_plane_topic")
+		}
+		if !strings.Contains(mainContent, "write_metadata      = true") && !strings.Contains(mainContent, "write_metadata = true") {
+			t.Errorf("outbox_audit_bq subscription must set write_metadata = true")
+		}
+		if !strings.Contains(mainContent, "drop_unknown_fields = true") && !strings.Contains(mainContent, "drop_unknown_fields  = true") {
+			t.Errorf("outbox_audit_bq subscription must set drop_unknown_fields = true")
+		}
+		if !strings.Contains(mainContent, "google_bigquery_dataset_iam_member.pubsub_audit_bq_writer") ||
+			!strings.Contains(mainContent, "google_bigquery_dataset_iam_member.pubsub_audit_bq_metadata") {
+			t.Errorf("outbox_audit_bq subscription must depend on pubsub_audit_bq_writer and pubsub_audit_bq_metadata")
+		}
+		if !strings.Contains(mainContent, `ttl = ""`) {
+			t.Errorf("outbox_audit_bq subscription must configure permanent retention via expiration_policy { ttl = \"\" }")
+		}
+	})
+
+	t.Run("OutputsExported", func(t *testing.T) {
+		outputPath := filepath.Join(hubDir, "outputs.tf")
+		outputBytes, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", outputPath, err)
+		}
+		outputContent := string(outputBytes)
+
+		outputs := []string{
+			"audit_dataset_id",
+			"audit_table_id",
+			"audit_view_id",
+			"audit_subscription_id",
+		}
+		for _, out := range outputs {
+			if !strings.Contains(outputContent, `output "`+out+`"`) {
+				t.Errorf("modules/hub/outputs.tf missing output %q", out)
+			}
 		}
 	})
 }
