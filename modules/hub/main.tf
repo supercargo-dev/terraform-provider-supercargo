@@ -636,9 +636,14 @@ resource "google_pubsub_subscription" "outbox_audit_bq" {
   name    = "supercargo-audit-bq-${random_id.suffix.hex}"
   topic   = var.control_plane_topic
 
+  expiration_policy {
+    ttl = ""
+  }
+
   bigquery_config {
     table               = "${var.project_id}.${google_bigquery_dataset.supercargo_audit[0].dataset_id}.${google_bigquery_table.outbox_events[0].table_id}"
     use_topic_schema    = false
+    use_table_schema    = false
     write_metadata      = true
     drop_unknown_fields = true
   }

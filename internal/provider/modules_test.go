@@ -594,6 +594,9 @@ func TestModules_HubAuditSink(t *testing.T) {
 			!strings.Contains(mainContent, "google_bigquery_dataset_iam_member.pubsub_audit_bq_metadata") {
 			t.Errorf("outbox_audit_bq subscription must depend on pubsub_audit_bq_writer and pubsub_audit_bq_metadata")
 		}
+		if !strings.Contains(mainContent, `ttl = ""`) {
+			t.Errorf("outbox_audit_bq subscription must configure permanent retention via expiration_policy { ttl = \"\" }")
+		}
 	})
 
 	t.Run("OutputsExported", func(t *testing.T) {
