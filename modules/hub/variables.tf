@@ -128,3 +128,40 @@ variable "topic_routing" {
   type        = map(string)
   default     = {}
 }
+
+variable "enable_audit_sink" {
+  description = "Whether to provision the BigQuery audit sink and Pub/Sub subscription for outbox events"
+  type        = bool
+  default     = true
+}
+
+variable "audit_dataset_id" {
+  description = "The BigQuery dataset ID for storing raw and materialized audit outbox events"
+  type        = string
+  default     = "supercargo_audit"
+}
+
+variable "audit_table_id" {
+  description = "The BigQuery table ID for raw outbox events"
+  type        = string
+  default     = "outbox_events"
+}
+
+variable "audit_view_id" {
+  description = "The BigQuery view ID for canonical outbox events"
+  type        = string
+  default     = "outbox_events_view"
+}
+
+variable "bigquery_location" {
+  description = "The BigQuery dataset location (defaults to region if empty)"
+  type        = string
+  default     = ""
+}
+
+variable "bigquery_deletion_protection" {
+  description = "Whether to enable deletion protection on BigQuery datasets and tables"
+  type        = bool
+  default     = true
+}
+

@@ -2,8 +2,13 @@ resource "random_id" "suffix" {
   byte_length = 2
 }
 
+locals {
+  bq_location = var.bigquery_location != "" ? var.bigquery_location : var.region
+}
+
 resource "google_project_service" "hub_apis" {
   for_each = toset([
+    "bigquery.googleapis.com",
     "run.googleapis.com",
     "firestore.googleapis.com",
     "datastore.googleapis.com",
@@ -529,33 +534,119 @@ resource "google_cloud_run_v2_service_iam_member" "additional_invokers" {
   member   = each.value
 }
 
-output "service_url" {
-  value = google_cloud_run_v2_service.hub.uri
+# --- BigQuery Audit Sink Infrastructure ---
+
+resource "google_bigquery_dataset" "supercargo_audit" {
+  count                      = var.enable_audit_sink ? 1 : 0
+  project                    = var.project_id
+  dataset_id                 = var.audit_dataset_id
+  location                   = local.bq_location
+  delete_contents_on_destroy = !var.bigquery_deletion_protection
+
+  depends_on = [google_project_service.hub_apis]
 }
 
-output "service_name" {
-  value = google_cloud_run_v2_service.hub.name
+resource "google_bigquery_table" "outbox_events" {
+  count               = var.enable_audit_sink ? 1 : 0
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.supercargo_audit[0].dataset_id
+  table_id            = var.audit_table_id
+  deletion_protection = var.bigquery_deletion_protection
+
+  time_partitioning {
+    type  = "DAY"
+    field = "publish_time"
+  }
+
+  schema = jsonencode([
+    {
+      name        = "subscription_name"
+      type        = "STRING"
+      mode        = "REQUIRED"
+      description = "Name of the Pub/Sub subscription delivering the event"
+    },
+    {
+      name        = "message_id"
+      type        = "STRING"
+      mode        = "REQUIRED"
+      description = "Unique Pub/Sub message ID"
+    },
+    {
+      name        = "publish_time"
+      type        = "TIMESTAMP"
+      mode        = "REQUIRED"
+      description = "Timestamp when message was published to Pub/Sub"
+    },
+    {
+      name        = "attributes"
+      type        = "JSON"
+      mode        = "NULLABLE"
+      description = "Pub/Sub message attributes map as JSON"
+    },
+    {
+      name        = "data"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Raw message payload string"
+    }
+  ])
 }
 
-output "deployment_project_id" {
-  value = var.project_id
+resource "google_bigquery_table" "outbox_events_view" {
+  count               = var.enable_audit_sink ? 1 : 0
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.supercargo_audit[0].dataset_id
+  table_id            = var.audit_view_id
+  deletion_protection = false
+
+  view {
+    query          = <<EOF
+SELECT
+  COALESCE(JSON_VALUE(attributes, '$.doc_id'), message_id) AS event_id,
+  JSON_VALUE(attributes, '$.urn') AS urn,
+  JSON_VALUE(attributes, '$.action') AS action,
+  JSON_VALUE(attributes, '$.doc_id') AS doc_id,
+  SAFE.PARSE_JSON(data) AS payload,
+  publish_time AS timestamp
+FROM `${var.project_id}.${google_bigquery_dataset.supercargo_audit[0].dataset_id}.${google_bigquery_table.outbox_events[0].table_id}`
+EOF
+    use_legacy_sql = false
+  }
 }
 
-output "iap_client_id" {
-  value = var.iap_client_id
+resource "google_bigquery_dataset_iam_member" "pubsub_audit_bq_writer" {
+  count      = var.enable_audit_sink ? 1 : 0
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.supercargo_audit[0].dataset_id
+  role       = "roles/bigquery.dataEditor"
+  member     = "serviceAccount:service-${var.project_number}@gcp-sa-pubsub.iam.gserviceaccount.com"
 }
 
-output "contract_changed_topic_id" {
-  value = google_pubsub_topic.contract_changed.id
+resource "google_bigquery_dataset_iam_member" "pubsub_audit_bq_metadata" {
+  count      = var.enable_audit_sink ? 1 : 0
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.supercargo_audit[0].dataset_id
+  role       = "roles/bigquery.metadataViewer"
+  member     = "serviceAccount:service-${var.project_number}@gcp-sa-pubsub.iam.gserviceaccount.com"
 }
 
-output "contract_deleted_topic_id" {
-  value = google_pubsub_topic.contract_deleted.id
-}
+resource "google_pubsub_subscription" "outbox_audit_bq" {
+  count   = var.enable_audit_sink ? 1 : 0
+  project = var.project_id
+  name    = "supercargo-audit-bq-${random_id.suffix.hex}"
+  topic   = var.control_plane_topic
 
-output "shovel_service_account_email" {
-  description = "The service account email of the Metadata Shovel service"
-  value       = google_service_account.shovel_runtime.email
+  bigquery_config {
+    table               = "${var.project_id}.${google_bigquery_dataset.supercargo_audit[0].dataset_id}.${google_bigquery_table.outbox_events[0].table_id}"
+    use_topic_schema    = false
+    write_metadata      = true
+    drop_unknown_fields = true
+  }
+
+  depends_on = [
+    google_bigquery_dataset_iam_member.pubsub_audit_bq_writer,
+    google_bigquery_dataset_iam_member.pubsub_audit_bq_metadata
+  ]
 }
 
 # --- Event-Driven Alert Relay Infrastructure ---
