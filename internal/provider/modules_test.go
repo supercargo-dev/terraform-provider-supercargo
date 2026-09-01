@@ -587,7 +587,7 @@ func TestModules_HubAuditSink(t *testing.T) {
 		if !strings.Contains(mainContent, "write_metadata      = true") && !strings.Contains(mainContent, "write_metadata = true") {
 			t.Errorf("outbox_audit_bq subscription must set write_metadata = true")
 		}
-		if !strings.Contains(mainContent, "drop_unknown_fields = true") && !strings.Contains(mainContent, "drop_unknown_fields = true") {
+		if !strings.Contains(mainContent, "drop_unknown_fields = true") && !strings.Contains(mainContent, "drop_unknown_fields  = true") {
 			t.Errorf("outbox_audit_bq subscription must set drop_unknown_fields = true")
 		}
 		if !strings.Contains(mainContent, "google_bigquery_dataset_iam_member.pubsub_audit_bq_writer") ||
@@ -620,4 +620,3 @@ func TestModules_HubAuditSink(t *testing.T) {
 		}
 	})
 }
-
