@@ -739,4 +739,8 @@ resource "google_pubsub_subscription" "events_push" {
     minimum_backoff = "10s"
     maximum_backoff = "600s"
   }
+
+  expiration_policy {
+    ttl = ""
+  }
 }
