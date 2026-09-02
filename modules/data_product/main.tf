@@ -9,7 +9,7 @@ locals {
       schema = v.schema_json
     }
     } : {
-    for k, v in supercargo_data_product.this.contracts : element(split(":", k), length(split(":", k)) - 1) => {
+    for k, v in(supercargo_data_product.this.contracts != null ? supercargo_data_product.this.contracts : {}) : element(split(":", k), length(split(":", k)) - 1) => {
       id     = v.id
       schema = v.schema
     }
