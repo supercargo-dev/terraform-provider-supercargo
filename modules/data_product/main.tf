@@ -62,6 +62,14 @@ module "gateway" {
   bigquery_deletion_protection        = var.bigquery_deletion_protection
   authorized_invokers                 = var.authorized_invokers
   authorized_invoker_service_accounts = var.authorized_invoker_service_accounts
+  enable_dlq_alerts                   = var.enable_dlq_alerts
+  dlq_alert_threshold                 = var.dlq_alert_threshold
+  dlq_unacked_message_age_seconds     = var.dlq_unacked_message_age_seconds
+  dlq_runbook_url                     = var.dlq_runbook_url
+  alert_slack_channel                 = var.alert_slack_channel
+  alert_email_address                 = var.alert_email_address
+  alert_pagerduty_service_key         = var.alert_pagerduty_service_key
+  alert_notification_channels         = var.alert_notification_channels
 
   contracts = local.gateway_contracts
 

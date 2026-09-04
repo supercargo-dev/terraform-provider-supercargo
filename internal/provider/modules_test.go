@@ -620,3 +620,426 @@ func TestModules_HubAuditSink(t *testing.T) {
 		}
 	})
 }
+
+func extractHCLBlock(content, header string) string {
+	idx := strings.Index(content, header)
+	if idx == -1 {
+		return ""
+	}
+	braceIdx := strings.Index(content[idx:], "{")
+	if braceIdx == -1 {
+		return content[idx:]
+	}
+	start := idx + braceIdx
+	depth := 0
+	for i := start; i < len(content); i++ {
+		if content[i] == '{' {
+			depth++
+		} else if content[i] == '}' {
+			depth--
+			if depth == 0 {
+				return content[idx : i+1]
+			}
+		}
+	}
+	return content[idx:]
+}
+
+func TestModules_GatewayDLQMonitoring(t *testing.T) {
+	modulesDir := "../../modules"
+	gwDir := filepath.Join(modulesDir, "gateway")
+
+	t.Run("GatewayVariablesAndDefaults", func(t *testing.T) {
+		varPath := filepath.Join(gwDir, "variables.tf")
+		varBytes, err := os.ReadFile(varPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", varPath, err)
+		}
+		varContent := string(varBytes)
+
+		expectedVars := []struct {
+			name         string
+			varType      string
+			defaultValue string
+			sensitive    bool
+		}{
+			{name: "enable_dlq_alerts", varType: "bool", defaultValue: "true"},
+			{name: "dlq_alert_threshold", varType: "number", defaultValue: "0"},
+			{name: "dlq_unacked_message_age_seconds", varType: "number", defaultValue: "300"},
+			{name: "dlq_runbook_url", varType: "string", defaultValue: `"https://docs.supercargo.dev/operations/runbooks/dlq-remediation"`},
+			{name: "alert_pagerduty_service_key", varType: "string", defaultValue: `""`, sensitive: true},
+			{name: "alert_notification_channels", varType: "list(string)", defaultValue: "[]"},
+		}
+
+		for _, ev := range expectedVars {
+			if !strings.Contains(varContent, `variable "`+ev.name+`"`) {
+				t.Errorf("modules/gateway/variables.tf missing variable %q", ev.name)
+				continue
+			}
+			chunk := extractHCLBlock(varContent, `variable "`+ev.name+`"`)
+			if !strings.Contains(chunk, "type") || !strings.Contains(chunk, ev.varType) {
+				t.Errorf("modules/gateway/variables.tf variable %q missing type %s", ev.name, ev.varType)
+			}
+			if !strings.Contains(chunk, "default") || !strings.Contains(chunk, ev.defaultValue) {
+				t.Errorf("modules/gateway/variables.tf variable %q missing default %s", ev.name, ev.defaultValue)
+			}
+			if ev.sensitive && (!strings.Contains(chunk, "sensitive") || !strings.Contains(chunk, "true")) {
+				t.Errorf("modules/gateway/variables.tf variable %q must be sensitive = true", ev.name)
+			}
+		}
+	})
+
+	t.Run("PagerDutyNotificationChannel", func(t *testing.T) {
+		monPath := filepath.Join(gwDir, "monitoring.tf")
+		monBytes, err := os.ReadFile(monPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", monPath, err)
+		}
+		monContent := string(monBytes)
+
+		pdRes := `resource "google_monitoring_notification_channel" "pagerduty"`
+		if !strings.Contains(monContent, pdRes) {
+			t.Fatalf("modules/gateway/monitoring.tf missing %s", pdRes)
+		}
+		chunk := extractHCLBlock(monContent, pdRes)
+		if !strings.Contains(chunk, "var.alert_pagerduty_service_key") {
+			t.Errorf("pagerduty notification channel missing var.alert_pagerduty_service_key count guard")
+		}
+		if !strings.Contains(chunk, `type         = "pagerduty"`) && !strings.Contains(chunk, `type = "pagerduty"`) {
+			t.Errorf("pagerduty notification channel missing type = \"pagerduty\"")
+		}
+		if !strings.Contains(chunk, "sensitive_labels") {
+			t.Errorf("pagerduty notification channel must use sensitive_labels block")
+		}
+		if !strings.Contains(chunk, "service_key = var.alert_pagerduty_service_key") && !strings.Contains(chunk, "service_key= var.alert_pagerduty_service_key") {
+			t.Errorf("pagerduty notification channel sensitive_labels must configure service_key = var.alert_pagerduty_service_key")
+		}
+		if strings.Contains(chunk, "\n  labels =") || strings.Contains(chunk, "\n  labels{") {
+			t.Errorf("pagerduty notification channel must not use regular labels block, only sensitive_labels")
+		}
+		if !strings.Contains(chunk, "time_sleep.wait_for_gateway_apis") {
+			t.Errorf("pagerduty notification channel must depend on time_sleep.wait_for_gateway_apis")
+		}
+	})
+
+	t.Run("NotificationChannelAggregation", func(t *testing.T) {
+		monPath := filepath.Join(gwDir, "monitoring.tf")
+		monBytes, err := os.ReadFile(monPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", monPath, err)
+		}
+		monContent := string(monBytes)
+
+		if !strings.Contains(monContent, "all_alert_notification_channels =") && !strings.Contains(monContent, "all_alert_notification_channels=") {
+			t.Fatalf("modules/gateway/monitoring.tf missing local.all_alert_notification_channels definition")
+		}
+		chunk := extractHCLBlock(monContent, "all_alert_notification_channels")
+		if !strings.Contains(chunk, "google_monitoring_notification_channel.slack") {
+			t.Errorf("local.all_alert_notification_channels missing Slack channel reference")
+		}
+		if !strings.Contains(chunk, "google_monitoring_notification_channel.email") {
+			t.Errorf("local.all_alert_notification_channels missing Email channel reference")
+		}
+		if !strings.Contains(chunk, "google_monitoring_notification_channel.pagerduty") {
+			t.Errorf("local.all_alert_notification_channels missing PagerDuty channel reference")
+		}
+		if !strings.Contains(chunk, "var.alert_notification_channels") {
+			t.Errorf("local.all_alert_notification_channels missing var.alert_notification_channels reference")
+		}
+
+		for _, tier1Res := range []string{`resource "google_monitoring_alert_policy" "tier1_validation_failure"`, `resource "google_monitoring_alert_policy" "tier1_absence_of_data"`} {
+			tChunk := extractHCLBlock(monContent, tier1Res)
+			if !strings.Contains(tChunk, "local.all_alert_notification_channels") {
+				t.Errorf("%s must use notification_channels = local.all_alert_notification_channels", tier1Res)
+			}
+		}
+	})
+
+	t.Run("DLQUndeliveredMessagesAlertPolicy", func(t *testing.T) {
+		monPath := filepath.Join(gwDir, "monitoring.tf")
+		monBytes, err := os.ReadFile(monPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", monPath, err)
+		}
+		monContent := string(monBytes)
+
+		resName := `resource "google_monitoring_alert_policy" "dlq_undelivered_messages"`
+		if !strings.Contains(monContent, resName) {
+			t.Fatalf("modules/gateway/monitoring.tf missing %s", resName)
+		}
+		chunk := extractHCLBlock(monContent, resName)
+
+		if !strings.Contains(chunk, "var.enable_dlq_alerts") {
+			t.Errorf("dlq_undelivered_messages missing count = var.enable_dlq_alerts guard")
+		}
+		if !strings.Contains(chunk, `combiner     = "OR"`) && !strings.Contains(chunk, `combiner = "OR"`) {
+			t.Errorf("dlq_undelivered_messages combiner must be \"OR\"")
+		}
+		if !strings.Contains(chunk, `[Tier 1] DLQ Quarantined Messages Backlog (${var.product_id}) - ${random_id.suffix.hex}`) {
+			t.Errorf("dlq_undelivered_messages display_name must follow Tier 1 convention")
+		}
+		if !strings.Contains(chunk, `resource.type = \"pubsub_subscription\"`) && !strings.Contains(chunk, `resource.type=\"pubsub_subscription\"`) {
+			t.Errorf("dlq_undelivered_messages filter missing resource.type = \"pubsub_subscription\"")
+		}
+		if !strings.Contains(chunk, `resource.labels.subscription_id = \"${google_pubsub_subscription.dlq_sub.name}\"`) &&
+			!strings.Contains(chunk, `resource.labels.subscription_id=\"${google_pubsub_subscription.dlq_sub.name}\"`) {
+			t.Errorf("dlq_undelivered_messages filter missing subscription_id = google_pubsub_subscription.dlq_sub.name")
+		}
+		if !strings.Contains(chunk, `metric.type = \"pubsub.googleapis.com/subscription/num_undelivered_messages\"`) &&
+			!strings.Contains(chunk, `metric.type=\"pubsub.googleapis.com/subscription/num_undelivered_messages\"`) {
+			t.Errorf("dlq_undelivered_messages filter missing metric.type = pubsub.googleapis.com/subscription/num_undelivered_messages")
+		}
+		if !strings.Contains(chunk, `comparison      = "COMPARISON_GT"`) && !strings.Contains(chunk, `comparison = "COMPARISON_GT"`) {
+			t.Errorf("dlq_undelivered_messages missing comparison = \"COMPARISON_GT\"")
+		}
+		if !strings.Contains(chunk, "threshold_value = var.dlq_alert_threshold") && !strings.Contains(chunk, "threshold_value= var.dlq_alert_threshold") {
+			t.Errorf("dlq_undelivered_messages missing threshold_value = var.dlq_alert_threshold")
+		}
+		if !strings.Contains(chunk, `duration        = "0s"`) && !strings.Contains(chunk, `duration = "0s"`) {
+			t.Errorf("dlq_undelivered_messages missing duration = \"0s\"")
+		}
+		if !strings.Contains(chunk, `alignment_period   = "60s"`) && !strings.Contains(chunk, `alignment_period = "60s"`) {
+			t.Errorf("dlq_undelivered_messages missing alignment_period = \"60s\"")
+		}
+		if !strings.Contains(chunk, `per_series_aligner = "ALIGN_MAX"`) && !strings.Contains(chunk, `per_series_aligner = "ALIGN_MAX"`) {
+			t.Errorf("dlq_undelivered_messages missing per_series_aligner = \"ALIGN_MAX\"")
+		}
+		if !strings.Contains(chunk, "trigger {") || !strings.Contains(chunk, "count = 1") {
+			t.Errorf("dlq_undelivered_messages missing trigger { count = 1 }")
+		}
+		if !strings.Contains(chunk, "local.all_alert_notification_channels") {
+			t.Errorf("dlq_undelivered_messages must use notification_channels = local.all_alert_notification_channels")
+		}
+		if !strings.Contains(chunk, "time_sleep.wait_for_gateway_apis") || !strings.Contains(chunk, "google_pubsub_subscription.dlq_sub") {
+			t.Errorf("dlq_undelivered_messages must depend on time_sleep.wait_for_gateway_apis and google_pubsub_subscription.dlq_sub")
+		}
+		if !strings.Contains(chunk, "documentation {") {
+			t.Errorf("dlq_undelivered_messages missing documentation block")
+		}
+		if !strings.Contains(chunk, `mime_type = "text/markdown"`) {
+			t.Errorf("dlq_undelivered_messages documentation missing mime_type = \"text/markdown\"")
+		}
+		if !strings.Contains(chunk, "google_pubsub_topic.dlq.id") {
+			t.Errorf("dlq_undelivered_messages documentation missing google_pubsub_topic.dlq.id")
+		}
+		if !strings.Contains(chunk, "google_pubsub_subscription.dlq_sub.id") {
+			t.Errorf("dlq_undelivered_messages documentation missing google_pubsub_subscription.dlq_sub.id")
+		}
+		if !strings.Contains(chunk, "gcloud pubsub subscriptions pull ${google_pubsub_subscription.dlq_sub.name} --limit=5 --auto-ack=false") {
+			t.Errorf("dlq_undelivered_messages documentation missing triage CLI command")
+		}
+		if !strings.Contains(chunk, "var.dlq_runbook_url") {
+			t.Errorf("dlq_undelivered_messages documentation missing var.dlq_runbook_url")
+		}
+	})
+
+	t.Run("DLQMessageAgeAlertPolicy", func(t *testing.T) {
+		monPath := filepath.Join(gwDir, "monitoring.tf")
+		monBytes, err := os.ReadFile(monPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", monPath, err)
+		}
+		monContent := string(monBytes)
+
+		resName := `resource "google_monitoring_alert_policy" "dlq_message_age"`
+		if !strings.Contains(monContent, resName) {
+			t.Fatalf("modules/gateway/monitoring.tf missing %s", resName)
+		}
+		chunk := extractHCLBlock(monContent, resName)
+
+		if !strings.Contains(chunk, "var.enable_dlq_alerts") {
+			t.Errorf("dlq_message_age missing count = var.enable_dlq_alerts guard")
+		}
+		if !strings.Contains(chunk, `combiner     = "OR"`) && !strings.Contains(chunk, `combiner = "OR"`) {
+			t.Errorf("dlq_message_age combiner must be \"OR\"")
+		}
+		if !strings.Contains(chunk, `[Tier 1] DLQ Message Latency Exceeded (${var.product_id}) - ${random_id.suffix.hex}`) {
+			t.Errorf("dlq_message_age display_name must follow Tier 1 convention")
+		}
+		if !strings.Contains(chunk, `resource.type = \"pubsub_subscription\"`) && !strings.Contains(chunk, `resource.type=\"pubsub_subscription\"`) {
+			t.Errorf("dlq_message_age filter missing resource.type = \"pubsub_subscription\"")
+		}
+		if !strings.Contains(chunk, `resource.labels.subscription_id = \"${google_pubsub_subscription.dlq_sub.name}\"`) &&
+			!strings.Contains(chunk, `resource.labels.subscription_id=\"${google_pubsub_subscription.dlq_sub.name}\"`) {
+			t.Errorf("dlq_message_age filter missing subscription_id = google_pubsub_subscription.dlq_sub.name")
+		}
+		if !strings.Contains(chunk, `metric.type = \"pubsub.googleapis.com/subscription/oldest_unacked_message_age\"`) &&
+			!strings.Contains(chunk, `metric.type=\"pubsub.googleapis.com/subscription/oldest_unacked_message_age\"`) {
+			t.Errorf("dlq_message_age filter missing metric.type = pubsub.googleapis.com/subscription/oldest_unacked_message_age")
+		}
+		if !strings.Contains(chunk, `comparison      = "COMPARISON_GT"`) && !strings.Contains(chunk, `comparison = "COMPARISON_GT"`) {
+			t.Errorf("dlq_message_age missing comparison = \"COMPARISON_GT\"")
+		}
+		if !strings.Contains(chunk, "threshold_value = var.dlq_unacked_message_age_seconds") && !strings.Contains(chunk, "threshold_value= var.dlq_unacked_message_age_seconds") {
+			t.Errorf("dlq_message_age missing threshold_value = var.dlq_unacked_message_age_seconds")
+		}
+		if !strings.Contains(chunk, `duration        = "0s"`) && !strings.Contains(chunk, `duration = "0s"`) {
+			t.Errorf("dlq_message_age missing duration = \"0s\"")
+		}
+		if !strings.Contains(chunk, `alignment_period   = "60s"`) && !strings.Contains(chunk, `alignment_period = "60s"`) {
+			t.Errorf("dlq_message_age missing alignment_period = \"60s\"")
+		}
+		if !strings.Contains(chunk, `per_series_aligner = "ALIGN_MAX"`) && !strings.Contains(chunk, `per_series_aligner = "ALIGN_MAX"`) {
+			t.Errorf("dlq_message_age missing per_series_aligner = \"ALIGN_MAX\"")
+		}
+		if !strings.Contains(chunk, "trigger {") || !strings.Contains(chunk, "count = 1") {
+			t.Errorf("dlq_message_age missing trigger { count = 1 }")
+		}
+		if !strings.Contains(chunk, "local.all_alert_notification_channels") {
+			t.Errorf("dlq_message_age must use notification_channels = local.all_alert_notification_channels")
+		}
+		if !strings.Contains(chunk, "time_sleep.wait_for_gateway_apis") || !strings.Contains(chunk, "google_pubsub_subscription.dlq_sub") {
+			t.Errorf("dlq_message_age must depend on time_sleep.wait_for_gateway_apis and google_pubsub_subscription.dlq_sub")
+		}
+		if !strings.Contains(chunk, "documentation {") {
+			t.Errorf("dlq_message_age missing documentation block")
+		}
+		if !strings.Contains(chunk, `mime_type = "text/markdown"`) {
+			t.Errorf("dlq_message_age documentation missing mime_type = \"text/markdown\"")
+		}
+		if !strings.Contains(chunk, "google_pubsub_topic.dlq.id") {
+			t.Errorf("dlq_message_age documentation missing google_pubsub_topic.dlq.id")
+		}
+		if !strings.Contains(chunk, "google_pubsub_subscription.dlq_sub.id") {
+			t.Errorf("dlq_message_age documentation missing google_pubsub_subscription.dlq_sub.id")
+		}
+		if !strings.Contains(chunk, "gcloud pubsub subscriptions pull ${google_pubsub_subscription.dlq_sub.name} --limit=5 --auto-ack=false") {
+			t.Errorf("dlq_message_age documentation missing triage CLI command")
+		}
+		if !strings.Contains(chunk, "var.dlq_runbook_url") {
+			t.Errorf("dlq_message_age documentation missing var.dlq_runbook_url")
+		}
+	})
+
+	t.Run("OutputsSafeIndexing", func(t *testing.T) {
+		outputPath := filepath.Join(gwDir, "outputs.tf")
+		outputBytes, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", outputPath, err)
+		}
+		outputContent := string(outputBytes)
+
+		if !strings.Contains(outputContent, `output "dlq_alert_policy_undelivered_id"`) {
+			t.Errorf("modules/gateway/outputs.tf missing output \"dlq_alert_policy_undelivered_id\"")
+		}
+		if !strings.Contains(outputContent, "try(google_monitoring_alert_policy.dlq_undelivered_messages[0].name, \"\")") {
+			t.Errorf("modules/gateway/outputs.tf dlq_alert_policy_undelivered_id must use try(google_monitoring_alert_policy.dlq_undelivered_messages[0].name, \"\")")
+		}
+
+		if !strings.Contains(outputContent, `output "dlq_alert_policy_age_id"`) {
+			t.Errorf("modules/gateway/outputs.tf missing output \"dlq_alert_policy_age_id\"")
+		}
+		if !strings.Contains(outputContent, "try(google_monitoring_alert_policy.dlq_message_age[0].name, \"\")") {
+			t.Errorf("modules/gateway/outputs.tf dlq_alert_policy_age_id must use try(google_monitoring_alert_policy.dlq_message_age[0].name, \"\")")
+		}
+	})
+}
+
+func TestModules_DataProductDLQMonitoring(t *testing.T) {
+	modulesDir := "../../modules"
+	dpDir := filepath.Join(modulesDir, "data_product")
+
+	t.Run("DataProductVariablesAndDefaults", func(t *testing.T) {
+		varPath := filepath.Join(dpDir, "variables.tf")
+		varBytes, err := os.ReadFile(varPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", varPath, err)
+		}
+		varContent := string(varBytes)
+
+		expectedVars := []struct {
+			name         string
+			varType      string
+			defaultValue string
+			sensitive    bool
+		}{
+			{name: "enable_dlq_alerts", varType: "bool", defaultValue: "true"},
+			{name: "dlq_alert_threshold", varType: "number", defaultValue: "0"},
+			{name: "dlq_unacked_message_age_seconds", varType: "number", defaultValue: "300"},
+			{name: "dlq_runbook_url", varType: "string", defaultValue: `"https://docs.supercargo.dev/operations/runbooks/dlq-remediation"`},
+			{name: "alert_slack_channel", varType: "string", defaultValue: `""`},
+			{name: "alert_email_address", varType: "string", defaultValue: `""`},
+			{name: "alert_pagerduty_service_key", varType: "string", defaultValue: `""`, sensitive: true},
+			{name: "alert_notification_channels", varType: "list(string)", defaultValue: "[]"},
+		}
+
+		for _, ev := range expectedVars {
+			if !strings.Contains(varContent, `variable "`+ev.name+`"`) {
+				t.Errorf("modules/data_product/variables.tf missing variable %q", ev.name)
+				continue
+			}
+			chunk := extractHCLBlock(varContent, `variable "`+ev.name+`"`)
+			if !strings.Contains(chunk, "type") || !strings.Contains(chunk, ev.varType) {
+				t.Errorf("modules/data_product/variables.tf variable %q missing type %s", ev.name, ev.varType)
+			}
+			if !strings.Contains(chunk, "default") || !strings.Contains(chunk, ev.defaultValue) {
+				t.Errorf("modules/data_product/variables.tf variable %q missing default %s", ev.name, ev.defaultValue)
+			}
+			if ev.sensitive && (!strings.Contains(chunk, "sensitive") || !strings.Contains(chunk, "true")) {
+				t.Errorf("modules/data_product/variables.tf variable %q must be sensitive = true", ev.name)
+			}
+		}
+	})
+
+	t.Run("GatewayModulePassthrough", func(t *testing.T) {
+		mainPath := filepath.Join(dpDir, "main.tf")
+		mainBytes, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		mainContent := string(mainBytes)
+
+		gatewayIdx := strings.Index(mainContent, `module "gateway"`)
+		if gatewayIdx == -1 {
+			t.Fatalf("module gateway not found in %s", mainPath)
+		}
+		gatewayChunk := mainContent[gatewayIdx:]
+
+		forwardedVars := []string{
+			"enable_dlq_alerts",
+			"dlq_alert_threshold",
+			"dlq_unacked_message_age_seconds",
+			"dlq_runbook_url",
+			"alert_slack_channel",
+			"alert_email_address",
+			"alert_pagerduty_service_key",
+			"alert_notification_channels",
+		}
+
+		for _, v := range forwardedVars {
+			expectedWithSpaces := v + " = var." + v
+			expectedWithoutSpaces := v + "= var." + v
+			if !strings.Contains(gatewayChunk, expectedWithSpaces) &&
+				!strings.Contains(gatewayChunk, expectedWithoutSpaces) &&
+				!strings.Contains(gatewayChunk, "= var."+v) {
+				t.Errorf("module gateway in data_product/main.tf missing passthrough for %s", v)
+			}
+		}
+	})
+
+	t.Run("OutputsExported", func(t *testing.T) {
+		outputPath := filepath.Join(dpDir, "outputs.tf")
+		outputBytes, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", outputPath, err)
+		}
+		outputContent := string(outputBytes)
+
+		outputs := []struct {
+			name     string
+			expected string
+		}{
+			{name: "dlq_alert_policy_undelivered_id", expected: "module.gateway.dlq_alert_policy_undelivered_id"},
+			{name: "dlq_alert_policy_age_id", expected: "module.gateway.dlq_alert_policy_age_id"},
+		}
+
+		for _, out := range outputs {
+			if !strings.Contains(outputContent, `output "`+out.name+`"`) {
+				t.Errorf("modules/data_product/outputs.tf missing output %q", out.name)
+			}
+			if !strings.Contains(outputContent, out.expected) {
+				t.Errorf("modules/data_product/outputs.tf output %q must reference %q", out.name, out.expected)
+			}
+		}
+	})
+}

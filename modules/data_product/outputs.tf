@@ -68,4 +68,15 @@ output "input_subscription_ids" {
   value       = { for k, v in google_pubsub_subscription.input_push : k => v.id }
 }
 
+output "dlq_alert_policy_undelivered_id" {
+  description = "The ID of the Cloud Monitoring alert policy for DLQ undelivered messages"
+  value       = module.gateway.dlq_alert_policy_undelivered_id
+}
+
+output "dlq_alert_policy_age_id" {
+  description = "The ID of the Cloud Monitoring alert policy for DLQ oldest unacked message age"
+  value       = module.gateway.dlq_alert_policy_age_id
+}
+
+
 

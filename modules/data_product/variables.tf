@@ -161,3 +161,53 @@ variable "authorized_invoker_service_accounts" {
   default     = []
 }
 
+variable "enable_dlq_alerts" {
+  description = "Whether to enable Cloud Monitoring alert policies for DLQ"
+  type        = bool
+  default     = true
+}
+
+variable "dlq_alert_threshold" {
+  description = "Threshold count of undelivered messages in DLQ to trigger alert"
+  type        = number
+  default     = 0
+}
+
+variable "dlq_unacked_message_age_seconds" {
+  description = "Threshold age (in seconds) of oldest unacknowledged message in DLQ to trigger alert"
+  type        = number
+  default     = 300
+}
+
+variable "dlq_runbook_url" {
+  description = "Runbook URL for DLQ incident remediation"
+  type        = string
+  default     = "https://docs.supercargo.dev/operations/runbooks/dlq-remediation"
+}
+
+variable "alert_slack_channel" {
+  description = "Slack channel for alerts (e.g. #team-alerts)"
+  type        = string
+  default     = ""
+}
+
+variable "alert_email_address" {
+  description = "Email address for alerts"
+  type        = string
+  default     = ""
+}
+
+variable "alert_pagerduty_service_key" {
+  description = "PagerDuty integration/service key for alert routing"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "alert_notification_channels" {
+  description = "List of existing Cloud Monitoring notification channel IDs to attach to alerts"
+  type        = list(string)
+  default     = []
+}
+
+
