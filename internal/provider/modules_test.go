@@ -1044,8 +1044,3 @@ func TestModules_DataProductDLQMonitoring(t *testing.T) {
 	})
 }
 
-func TestModules_DLQMonitoring(t *testing.T) {
-	TestModules_GatewayDLQMonitoring(t)
-	TestModules_DataProductDLQMonitoring(t)
-}
-

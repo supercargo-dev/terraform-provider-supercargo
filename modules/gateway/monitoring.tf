@@ -8,6 +8,7 @@ resource "google_monitoring_notification_channel" "slack" {
   labels = {
     "channel_name" = var.alert_slack_channel
   }
+  depends_on = [time_sleep.wait_for_gateway_apis]
 }
 
 resource "google_monitoring_notification_channel" "email" {
@@ -18,6 +19,7 @@ resource "google_monitoring_notification_channel" "email" {
   labels = {
     "email_address" = var.alert_email_address
   }
+  depends_on = [time_sleep.wait_for_gateway_apis]
 }
 
 resource "google_monitoring_notification_channel" "pagerduty" {
@@ -32,12 +34,12 @@ resource "google_monitoring_notification_channel" "pagerduty" {
 }
 
 locals {
-  all_alert_notification_channels = compact(concat(
+  all_alert_notification_channels = distinct(compact(concat(
     google_monitoring_notification_channel.slack[*].name,
     google_monitoring_notification_channel.email[*].name,
     google_monitoring_notification_channel.pagerduty[*].name,
     var.alert_notification_channels
-  ))
+  )))
   monitored_contracts_summary = length(var.contracts) > 0 ? join(", ", [for k, v in var.contracts : v.id]) : var.product_id
 }
 
