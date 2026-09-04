@@ -405,12 +405,22 @@ func (r *supercargoContractVersionResource) mapToProto(m supercargoContractVersi
 		dataAsset = m.DataAsset.ValueString()
 	}
 
+	contentHash := ""
+	if !m.ContentHash.IsNull() && !m.ContentHash.IsUnknown() {
+		contentHash = m.ContentHash.ValueString()
+	}
+
+	commitSha := ""
+	if !m.CommitSha.IsNull() && !m.CommitSha.IsUnknown() {
+		commitSha = m.CommitSha.ValueString()
+	}
+
 	return &hubv1.DataContract{
 		Meta: &hubv1.Meta{
 			Urn:         m.URN.ValueString(),
 			Version:     m.Version.ValueString(),
-			ContentHash: m.ContentHash.ValueString(),
-			CommitSha:   m.CommitSha.ValueString(),
+			ContentHash: contentHash,
+			CommitSha:   commitSha,
 			DataAsset:   dataAsset,
 		},
 		Schema: protoSchema,
