@@ -935,6 +935,117 @@ func TestModules_GatewayDLQMonitoring(t *testing.T) {
 	})
 }
 
+func TestModules_DataProductDLQMonitoring(t *testing.T) {
+	modulesDir := "../../modules"
+	dpDir := filepath.Join(modulesDir, "data_product")
+
+	t.Run("DataProductVariablesAndDefaults", func(t *testing.T) {
+		varPath := filepath.Join(dpDir, "variables.tf")
+		varBytes, err := os.ReadFile(varPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", varPath, err)
+		}
+		varContent := string(varBytes)
+
+		expectedVars := []struct {
+			name         string
+			varType      string
+			defaultValue string
+			sensitive    bool
+		}{
+			{name: "enable_dlq_alerts", varType: "bool", defaultValue: "true"},
+			{name: "dlq_alert_threshold", varType: "number", defaultValue: "0"},
+			{name: "dlq_unacked_message_age_seconds", varType: "number", defaultValue: "300"},
+			{name: "dlq_runbook_url", varType: "string", defaultValue: `"https://docs.supercargo.dev/operations/runbooks/dlq-remediation"`},
+			{name: "alert_slack_channel", varType: "string", defaultValue: `""`},
+			{name: "alert_email_address", varType: "string", defaultValue: `""`},
+			{name: "alert_pagerduty_service_key", varType: "string", defaultValue: `""`, sensitive: true},
+			{name: "alert_notification_channels", varType: "list(string)", defaultValue: "[]"},
+		}
+
+		for _, ev := range expectedVars {
+			if !strings.Contains(varContent, `variable "`+ev.name+`"`) {
+				t.Errorf("modules/data_product/variables.tf missing variable %q", ev.name)
+				continue
+			}
+			chunk := extractHCLBlock(varContent, `variable "`+ev.name+`"`)
+			if !strings.Contains(chunk, "type") || !strings.Contains(chunk, ev.varType) {
+				t.Errorf("modules/data_product/variables.tf variable %q missing type %s", ev.name, ev.varType)
+			}
+			if !strings.Contains(chunk, "default") || !strings.Contains(chunk, ev.defaultValue) {
+				t.Errorf("modules/data_product/variables.tf variable %q missing default %s", ev.name, ev.defaultValue)
+			}
+			if ev.sensitive && (!strings.Contains(chunk, "sensitive") || !strings.Contains(chunk, "true")) {
+				t.Errorf("modules/data_product/variables.tf variable %q must be sensitive = true", ev.name)
+			}
+		}
+	})
+
+	t.Run("GatewayModulePassthrough", func(t *testing.T) {
+		mainPath := filepath.Join(dpDir, "main.tf")
+		mainBytes, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		mainContent := string(mainBytes)
+
+		gatewayIdx := strings.Index(mainContent, `module "gateway"`)
+		if gatewayIdx == -1 {
+			t.Fatalf("module gateway not found in %s", mainPath)
+		}
+		gatewayChunk := mainContent[gatewayIdx:]
+
+		forwardedVars := []string{
+			"enable_dlq_alerts",
+			"dlq_alert_threshold",
+			"dlq_unacked_message_age_seconds",
+			"dlq_runbook_url",
+			"alert_slack_channel",
+			"alert_email_address",
+			"alert_pagerduty_service_key",
+			"alert_notification_channels",
+		}
+
+		for _, v := range forwardedVars {
+			expectedWithSpaces := v + " = var." + v
+			expectedWithoutSpaces := v + "= var." + v
+			if !strings.Contains(gatewayChunk, expectedWithSpaces) &&
+				!strings.Contains(gatewayChunk, expectedWithoutSpaces) &&
+				!strings.Contains(gatewayChunk, "= var."+v) {
+				t.Errorf("module gateway in data_product/main.tf missing passthrough for %s", v)
+			}
+		}
+	})
+
+	t.Run("OutputsExported", func(t *testing.T) {
+		outputPath := filepath.Join(dpDir, "outputs.tf")
+		outputBytes, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", outputPath, err)
+		}
+		outputContent := string(outputBytes)
+
+		outputs := []struct {
+			name     string
+			expected string
+		}{
+			{name: "dlq_alert_policy_undelivered_id", expected: "module.gateway.dlq_alert_policy_undelivered_id"},
+			{name: "dlq_alert_policy_age_id", expected: "module.gateway.dlq_alert_policy_age_id"},
+		}
+
+		for _, out := range outputs {
+			if !strings.Contains(outputContent, `output "`+out.name+`"`) {
+				t.Errorf("modules/data_product/outputs.tf missing output %q", out.name)
+			}
+			if !strings.Contains(outputContent, out.expected) {
+				t.Errorf("modules/data_product/outputs.tf output %q must reference %q", out.name, out.expected)
+			}
+		}
+	})
+}
+
 func TestModules_DLQMonitoring(t *testing.T) {
 	TestModules_GatewayDLQMonitoring(t)
+	TestModules_DataProductDLQMonitoring(t)
 }
+
