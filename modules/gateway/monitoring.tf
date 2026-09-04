@@ -20,6 +20,27 @@ resource "google_monitoring_notification_channel" "email" {
   }
 }
 
+resource "google_monitoring_notification_channel" "pagerduty" {
+  count        = var.alert_pagerduty_service_key != "" ? 1 : 0
+  project      = var.project_id
+  display_name = "PagerDuty Alert Channel (${var.product_id}) - ${random_id.suffix.hex}"
+  type         = "pagerduty"
+  sensitive_labels {
+    service_key = var.alert_pagerduty_service_key
+  }
+  depends_on = [time_sleep.wait_for_gateway_apis]
+}
+
+locals {
+  all_alert_notification_channels = compact(concat(
+    google_monitoring_notification_channel.slack[*].name,
+    google_monitoring_notification_channel.email[*].name,
+    google_monitoring_notification_channel.pagerduty[*].name,
+    var.alert_notification_channels
+  ))
+  monitored_contracts_summary = length(var.contracts) > 0 ? join(", ", [for k, v in var.contracts : v.id]) : var.product_id
+}
+
 # --- METRIC DESCRIPTORS ---
 
 resource "google_monitoring_metric_descriptor" "gateway_messages_total" {
@@ -144,10 +165,7 @@ resource "google_monitoring_alert_policy" "tier1_validation_failure" {
     }
   }
 
-  notification_channels = concat(
-    google_monitoring_notification_channel.slack[*].name,
-    google_monitoring_notification_channel.email[*].name
-  )
+  notification_channels = local.all_alert_notification_channels
 
   alert_strategy {
     auto_close = "604800s" # 7 days
@@ -178,10 +196,117 @@ resource "google_monitoring_alert_policy" "tier1_absence_of_data" {
     }
   }
 
-  notification_channels = concat(
-    google_monitoring_notification_channel.slack[*].name,
-    google_monitoring_notification_channel.email[*].name
-  )
+  notification_channels = local.all_alert_notification_channels
+}
+
+# Alert on DLQ quarantined messages backlog
+resource "google_monitoring_alert_policy" "dlq_undelivered_messages" {
+  count        = var.enable_dlq_alerts ? 1 : 0
+  project      = var.project_id
+  display_name = "[Tier 1] DLQ Quarantined Messages Backlog (${var.product_id}) - ${random_id.suffix.hex}"
+  combiner     = "OR"
+  depends_on = [
+    time_sleep.wait_for_gateway_apis,
+    google_pubsub_subscription.dlq_sub
+  ]
+
+  conditions {
+    display_name = "DLQ Undelivered Messages > ${var.dlq_alert_threshold}"
+    condition_threshold {
+      filter          = "resource.type = \"pubsub_subscription\" AND resource.labels.subscription_id = \"${google_pubsub_subscription.dlq_sub.name}\" AND metric.type = \"pubsub.googleapis.com/subscription/num_undelivered_messages\""
+      duration        = "0s"
+      comparison      = "COMPARISON_GT"
+      threshold_value = var.dlq_alert_threshold
+      trigger {
+        count = 1
+      }
+      aggregations {
+        alignment_period   = "60s"
+        per_series_aligner = "ALIGN_MAX"
+      }
+    }
+  }
+
+  documentation {
+    content   = <<-EOT
+      ## Dead-Letter Queue (DLQ) Quarantined Messages Backlog
+
+      - **Product ID**: `${var.product_id}`
+      - **Contract URN(s)**: `${local.monitored_contracts_summary}`
+      - **DLQ Topic ID**: `${google_pubsub_topic.dlq.id}`
+      - **DLQ Subscription ID**: `${google_pubsub_subscription.dlq_sub.id}`
+
+      ### Triage CLI Command
+      ```bash
+      gcloud pubsub subscriptions pull ${google_pubsub_subscription.dlq_sub.name} --limit=5 --auto-ack=false
+      ```
+
+      ### Remediation Runbook
+      Consult the incident runbook: [DLQ Remediation Guide](${var.dlq_runbook_url})
+    EOT
+    mime_type = "text/markdown"
+  }
+
+  notification_channels = local.all_alert_notification_channels
+
+  alert_strategy {
+    auto_close = "604800s" # 7 days
+  }
+}
+
+# Alert on DLQ message latency exceeded
+resource "google_monitoring_alert_policy" "dlq_message_age" {
+  count        = var.enable_dlq_alerts ? 1 : 0
+  project      = var.project_id
+  display_name = "[Tier 1] DLQ Message Latency Exceeded (${var.product_id}) - ${random_id.suffix.hex}"
+  combiner     = "OR"
+  depends_on = [
+    time_sleep.wait_for_gateway_apis,
+    google_pubsub_subscription.dlq_sub
+  ]
+
+  conditions {
+    display_name = "DLQ Message Age > ${var.dlq_unacked_message_age_seconds}s"
+    condition_threshold {
+      filter          = "resource.type = \"pubsub_subscription\" AND resource.labels.subscription_id = \"${google_pubsub_subscription.dlq_sub.name}\" AND metric.type = \"pubsub.googleapis.com/subscription/oldest_unacked_message_age\""
+      duration        = "0s"
+      comparison      = "COMPARISON_GT"
+      threshold_value = var.dlq_unacked_message_age_seconds
+      trigger {
+        count = 1
+      }
+      aggregations {
+        alignment_period   = "60s"
+        per_series_aligner = "ALIGN_MAX"
+      }
+    }
+  }
+
+  documentation {
+    content   = <<-EOT
+      ## Dead-Letter Queue (DLQ) Message Latency Exceeded
+
+      - **Product ID**: `${var.product_id}`
+      - **Contract URN(s)**: `${local.monitored_contracts_summary}`
+      - **DLQ Topic ID**: `${google_pubsub_topic.dlq.id}`
+      - **DLQ Subscription ID**: `${google_pubsub_subscription.dlq_sub.id}`
+
+      ### Triage CLI Command
+      ```bash
+      gcloud pubsub subscriptions pull ${google_pubsub_subscription.dlq_sub.name} --limit=5 --auto-ack=false
+      ```
+
+      ### Remediation Runbook
+      Consult the incident runbook: [DLQ Remediation Guide](${var.dlq_runbook_url})
+    EOT
+    mime_type = "text/markdown"
+  }
+
+  notification_channels = local.all_alert_notification_channels
+
+  alert_strategy {
+    auto_close = "604800s" # 7 days
+  }
 }
 
 # --- TIER 2: IMPORTANT ---

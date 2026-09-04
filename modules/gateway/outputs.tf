@@ -48,3 +48,14 @@ output "dlq_subscription_id" {
   value       = google_pubsub_subscription.dlq_sub.id
 }
 
+output "dlq_alert_policy_undelivered_id" {
+  description = "The ID of the DLQ undelivered messages alert policy"
+  value       = try(google_monitoring_alert_policy.dlq_undelivered_messages[0].name, "")
+}
+
+output "dlq_alert_policy_age_id" {
+  description = "The ID of the DLQ message age alert policy"
+  value       = try(google_monitoring_alert_policy.dlq_message_age[0].name, "")
+}
+
+
