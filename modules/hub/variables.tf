@@ -165,3 +165,21 @@ variable "bigquery_deletion_protection" {
   default     = true
 }
 
+variable "mcp_enabled" {
+  description = "Whether to deploy the Supercargo MCP companion Cloud Run service"
+  type        = bool
+  default     = false
+}
+
+variable "mcp_image_tag" {
+  description = "The image tag for the supercargo-mcp service (Git SHA). Optional for local infra updates."
+  type        = string
+  default     = ""
+}
+
+variable "mcp_max_instances" {
+  description = "The maximum number of instances for the MCP companion service"
+  type        = number
+  default     = 5
+}
+

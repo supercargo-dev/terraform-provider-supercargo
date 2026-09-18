@@ -52,3 +52,13 @@ output "audit_subscription_id" {
   description = "The Pub/Sub subscription ID for the BigQuery audit sink"
   value       = var.enable_audit_sink ? google_pubsub_subscription.outbox_audit_bq[0].id : null
 }
+
+output "mcp_service_url" {
+  description = "The URI of the Supercargo MCP companion Cloud Run service"
+  value       = var.mcp_enabled ? google_cloud_run_v2_service.mcp[0].uri : null
+}
+
+output "mcp_service_name" {
+  description = "The name of the Supercargo MCP companion Cloud Run service"
+  value       = var.mcp_enabled ? google_cloud_run_v2_service.mcp[0].name : null
+}

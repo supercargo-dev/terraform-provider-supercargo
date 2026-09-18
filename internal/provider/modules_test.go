@@ -15,6 +15,7 @@ func TestModules_CloudRunLifecycleDecoupling(t *testing.T) {
 	}{
 		{moduleName: "hub", resourceName: "hub"},
 		{moduleName: "hub", resourceName: "shovel"},
+		{moduleName: "hub", resourceName: "mcp"},
 		{moduleName: "vault", resourceName: "vault"},
 		{moduleName: "gateway", resourceName: "gateway"},
 		{moduleName: "loader", resourceName: "loader"},
@@ -1040,6 +1041,65 @@ func TestModules_DataProductDLQMonitoring(t *testing.T) {
 			if !strings.Contains(outputContent, out.expected) {
 				t.Errorf("modules/data_product/outputs.tf output %q must reference %q", out.name, out.expected)
 			}
+		}
+	})
+}
+
+func TestModules_HubMCPCompanionService(t *testing.T) {
+	modulesDir := "../../modules"
+	hubDir := filepath.Join(modulesDir, "hub")
+
+	t.Run("VariablesConfigured", func(t *testing.T) {
+		varPath := filepath.Join(hubDir, "variables.tf")
+		varBytes, err := os.ReadFile(varPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", varPath, err)
+		}
+		varContent := string(varBytes)
+
+		if !strings.Contains(varContent, `variable "mcp_enabled"`) {
+			t.Errorf("modules/hub/variables.tf missing variable \"mcp_enabled\"")
+		}
+		if !strings.Contains(varContent, `variable "mcp_image_tag"`) {
+			t.Errorf("modules/hub/variables.tf missing variable \"mcp_image_tag\"")
+		}
+		if !strings.Contains(varContent, `variable "mcp_max_instances"`) {
+			t.Errorf("modules/hub/variables.tf missing variable \"mcp_max_instances\"")
+		}
+	})
+
+	t.Run("OutputsConfigured", func(t *testing.T) {
+		outputPath := filepath.Join(hubDir, "outputs.tf")
+		outputBytes, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", outputPath, err)
+		}
+		outputContent := string(outputBytes)
+
+		if !strings.Contains(outputContent, `output "mcp_service_url"`) {
+			t.Errorf("modules/hub/outputs.tf missing output \"mcp_service_url\"")
+		}
+		if !strings.Contains(outputContent, `output "mcp_service_name"`) {
+			t.Errorf("modules/hub/outputs.tf missing output \"mcp_service_name\"")
+		}
+	})
+
+	t.Run("ResourcesConfigured", func(t *testing.T) {
+		mainPath := filepath.Join(hubDir, "main.tf")
+		mainBytes, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		mainContent := string(mainBytes)
+
+		if !strings.Contains(mainContent, `resource "google_service_account" "mcp_runtime"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_service_account\" \"mcp_runtime\"")
+		}
+		if !strings.Contains(mainContent, `resource "google_cloud_run_v2_service_iam_member" "mcp_hub_invoker"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_cloud_run_v2_service_iam_member\" \"mcp_hub_invoker\"")
+		}
+		if !strings.Contains(mainContent, `resource "google_cloud_run_v2_service" "mcp"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_cloud_run_v2_service\" \"mcp\"")
 		}
 	})
 }
