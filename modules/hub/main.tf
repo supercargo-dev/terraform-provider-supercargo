@@ -744,3 +744,142 @@ resource "google_pubsub_subscription" "events_push" {
     ttl = ""
   }
 }
+
+# ----------------------------------------------------------------------------------------------------------------------
+# MCP COMPANION SERVICE (HTTP/SSE Cloud Run Sidecar)
+# ----------------------------------------------------------------------------------------------------------------------
+
+resource "google_service_account" "mcp_runtime" {
+  count        = var.mcp_enabled ? 1 : 0
+  project      = var.project_id
+  account_id   = "supercargo-mcp-sa-${random_id.suffix.hex}"
+  display_name = "Supercargo MCP Companion Runtime Service Account"
+  depends_on   = [time_sleep.wait_for_apis]
+}
+
+resource "google_cloud_run_v2_service_iam_member" "mcp_hub_invoker" {
+  count    = var.mcp_enabled ? 1 : 0
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.hub.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.mcp_runtime[0].email}"
+}
+
+resource "google_cloud_run_v2_service" "mcp" {
+  count               = var.mcp_enabled ? 1 : 0
+  provider            = google-beta
+  project             = var.project_id
+  name                = "supercargo-mcp-${random_id.suffix.hex}"
+  location            = var.region
+  ingress             = var.ingress_type
+  custom_audiences    = var.mcp_oidc_audience != "" ? [var.mcp_oidc_audience] : (var.oidc_audience != "" ? [var.oidc_audience] : [])
+  deletion_protection = false
+
+  depends_on = [time_sleep.wait_for_apis]
+
+  template {
+    service_account  = google_service_account.mcp_runtime[0].email
+    session_affinity = true
+    timeout          = "3600s"
+
+    scaling {
+      min_instance_count = 0
+      max_instance_count = var.mcp_max_instances
+    }
+
+    containers {
+      image = "${var.region}-docker.pkg.dev/${var.image_project_id}/hub/supercargo-mcp:${var.mcp_image_tag == "" ? "latest" : var.mcp_image_tag}"
+
+      ports {
+        container_port = 8085
+        name           = "h2c"
+      }
+
+      resources {
+        limits = {
+          cpu    = "1"
+          memory = "512Mi"
+        }
+      }
+
+      env {
+        name  = "PORT"
+        value = "8085"
+      }
+
+      env {
+        name  = "HUB_URL"
+        value = google_cloud_run_v2_service.hub.uri
+      }
+
+      env {
+        name  = "ENVIRONMENT"
+        value = var.environment
+      }
+
+      env {
+        name  = "GCP_PROJECT_ID"
+        value = var.firestore_project_id
+      }
+
+      env {
+        name  = "IAM_DOMAIN"
+        value = var.iam_domain
+      }
+
+      env {
+        name  = "OIDC_AUDIENCE"
+        value = var.mcp_oidc_audience != "" ? var.mcp_oidc_audience : var.oidc_audience
+      }
+
+      env {
+        name  = "AUTH_ENFORCE"
+        value = var.auth_enforce ? "true" : "false"
+      }
+
+      env {
+        name  = "FORCE_DEPLOY"
+        value = var.force_deploy_trigger
+      }
+
+      startup_probe {
+        http_get {
+          path = "/healthz"
+          port = 8085
+        }
+        initial_delay_seconds = 0
+        period_seconds        = 5
+        timeout_seconds       = 3
+        failure_threshold     = 12
+      }
+
+      liveness_probe {
+        http_get {
+          path = "/healthz"
+          port = 8085
+        }
+        period_seconds    = 10
+        timeout_seconds   = 3
+        failure_threshold = 3
+      }
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      template[0].containers[0].image,
+      client,
+      client_version
+    ]
+  }
+}
+
+resource "google_cloud_run_v2_service_iam_member" "mcp_invokers" {
+  for_each = var.mcp_enabled ? toset(var.mcp_allowed_invokers) : []
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.mcp[0].name
+  role     = "roles/run.invoker"
+  member   = each.value
+}
