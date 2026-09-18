@@ -773,6 +773,7 @@ resource "google_cloud_run_v2_service" "mcp" {
   name                = "supercargo-mcp-${random_id.suffix.hex}"
   location            = var.region
   ingress             = var.ingress_type
+  custom_audiences    = var.mcp_oidc_audience != "" ? [var.mcp_oidc_audience] : (var.oidc_audience != "" ? [var.oidc_audience] : [])
   deletion_protection = false
 
   depends_on = [time_sleep.wait_for_apis]

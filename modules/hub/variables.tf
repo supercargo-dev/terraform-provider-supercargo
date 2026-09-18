@@ -190,7 +190,7 @@ variable "mcp_allowed_invokers" {
 }
 
 variable "mcp_oidc_audience" {
-  description = "Custom OIDC audience for the MCP companion service. Defaults to empty (uses service URI or var.oidc_audience)."
+  description = "Custom OIDC audience for the MCP companion service. In non-development environments, either this or var.oidc_audience must be set to enforce fail-closed token validation."
   type        = string
   default     = ""
 }
