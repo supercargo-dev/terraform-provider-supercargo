@@ -778,7 +778,9 @@ resource "google_cloud_run_v2_service" "mcp" {
   depends_on = [time_sleep.wait_for_apis]
 
   template {
-    service_account = google_service_account.mcp_runtime[0].email
+    service_account  = google_service_account.mcp_runtime[0].email
+    session_affinity = true
+    timeout          = "3600s"
 
     scaling {
       min_instance_count = 0
@@ -827,7 +829,7 @@ resource "google_cloud_run_v2_service" "mcp" {
 
       env {
         name  = "OIDC_AUDIENCE"
-        value = var.oidc_audience
+        value = var.mcp_oidc_audience != "" ? var.mcp_oidc_audience : var.oidc_audience
       }
 
       env {
@@ -870,4 +872,13 @@ resource "google_cloud_run_v2_service" "mcp" {
       client_version
     ]
   }
+}
+
+resource "google_cloud_run_v2_service_iam_member" "mcp_invokers" {
+  for_each = var.mcp_enabled ? toset(var.mcp_allowed_invokers) : []
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.mcp[0].name
+  role     = "roles/run.invoker"
+  member   = each.value
 }

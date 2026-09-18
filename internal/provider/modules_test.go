@@ -1066,6 +1066,12 @@ func TestModules_HubMCPCompanionService(t *testing.T) {
 		if !strings.Contains(varContent, `variable "mcp_max_instances"`) {
 			t.Errorf("modules/hub/variables.tf missing variable \"mcp_max_instances\"")
 		}
+		if !strings.Contains(varContent, `variable "mcp_allowed_invokers"`) {
+			t.Errorf("modules/hub/variables.tf missing variable \"mcp_allowed_invokers\"")
+		}
+		if !strings.Contains(varContent, `variable "mcp_oidc_audience"`) {
+			t.Errorf("modules/hub/variables.tf missing variable \"mcp_oidc_audience\"")
+		}
 	})
 
 	t.Run("OutputsConfigured", func(t *testing.T) {
@@ -1081,6 +1087,9 @@ func TestModules_HubMCPCompanionService(t *testing.T) {
 		}
 		if !strings.Contains(outputContent, `output "mcp_service_name"`) {
 			t.Errorf("modules/hub/outputs.tf missing output \"mcp_service_name\"")
+		}
+		if !strings.Contains(outputContent, `output "mcp_service_account_email"`) {
+			t.Errorf("modules/hub/outputs.tf missing output \"mcp_service_account_email\"")
 		}
 	})
 
@@ -1100,6 +1109,12 @@ func TestModules_HubMCPCompanionService(t *testing.T) {
 		}
 		if !strings.Contains(mainContent, `resource "google_cloud_run_v2_service" "mcp"`) {
 			t.Fatalf("modules/hub/main.tf missing resource \"google_cloud_run_v2_service\" \"mcp\"")
+		}
+		if !strings.Contains(mainContent, `resource "google_cloud_run_v2_service_iam_member" "mcp_invokers"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_cloud_run_v2_service_iam_member\" \"mcp_invokers\"")
+		}
+		if !strings.Contains(mainContent, `session_affinity = true`) {
+			t.Errorf("modules/hub/main.tf missing session_affinity for mcp service")
 		}
 	})
 }

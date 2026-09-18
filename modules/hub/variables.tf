@@ -183,3 +183,15 @@ variable "mcp_max_instances" {
   default     = 5
 }
 
+variable "mcp_allowed_invokers" {
+  description = "List of IAM members authorized to invoke the MCP companion service (e.g. serviceAccount:..., group:...)"
+  type        = list(string)
+  default     = []
+}
+
+variable "mcp_oidc_audience" {
+  description = "Custom OIDC audience for the MCP companion service. Defaults to empty (uses service URI or var.oidc_audience)."
+  type        = string
+  default     = ""
+}
+

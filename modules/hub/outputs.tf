@@ -62,3 +62,9 @@ output "mcp_service_name" {
   description = "The name of the Supercargo MCP companion Cloud Run service"
   value       = var.mcp_enabled ? google_cloud_run_v2_service.mcp[0].name : null
 }
+
+output "mcp_service_account_email" {
+  description = "The service account email of the Supercargo MCP companion service"
+  value       = var.mcp_enabled ? google_service_account.mcp_runtime[0].email : null
+}
+
