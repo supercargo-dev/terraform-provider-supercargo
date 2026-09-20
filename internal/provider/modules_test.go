@@ -193,6 +193,52 @@ func TestModules_DataProductGoldenPath(t *testing.T) {
 			t.Errorf("examples/data-producer/main.tf should not contain local.contracts, should use golden path")
 		}
 	})
+
+	t.Run("ManifestContractParsingAndDeduplication", func(t *testing.T) {
+		if !strings.Contains(mainContent, "manifest_output_ports =") {
+			t.Errorf("data_product/main.tf missing manifest_output_ports local definition")
+		}
+		if !strings.Contains(mainContent, "manifest_input_ports  =") && !strings.Contains(mainContent, "manifest_input_ports =") {
+			t.Errorf("data_product/main.tf missing manifest_input_ports local definition")
+		}
+		if !strings.Contains(mainContent, "manifest_all_ports    =") && !strings.Contains(mainContent, "manifest_all_ports =") {
+			t.Errorf("data_product/main.tf missing manifest_all_ports local definition")
+		}
+		if !strings.Contains(mainContent, "raw_manifest_contracts =") {
+			t.Errorf("data_product/main.tf missing raw_manifest_contracts local definition")
+		}
+		if !strings.Contains(mainContent, "for p in local.manifest_all_ports") {
+			t.Errorf("data_product/main.tf raw_manifest_contracts must iterate over local.manifest_all_ports")
+		}
+		if !strings.Contains(mainContent, "if try(p.contract, null) != null") {
+			t.Errorf("data_product/main.tf raw_manifest_contracts must filter with if try(p.contract, null) != null")
+		}
+		if !strings.Contains(mainContent, "grouped_manifest_contracts =") {
+			t.Errorf("data_product/main.tf missing grouped_manifest_contracts local definition")
+		}
+		if !strings.Contains(mainContent, "c.key => c...") {
+			t.Errorf("data_product/main.tf grouped_manifest_contracts must use grouping syntax c.key => c...")
+		}
+		if !strings.Contains(mainContent, "manifest_gateway_contracts =") {
+			t.Errorf("data_product/main.tf missing manifest_gateway_contracts local definition")
+		}
+		if !strings.Contains(mainContent, "local.grouped_manifest_contracts") {
+			t.Errorf("data_product/main.tf manifest_gateway_contracts must map from local.grouped_manifest_contracts")
+		}
+	})
+
+	t.Run("ManifestSchemaResolutionPrecedence", func(t *testing.T) {
+		if !strings.Contains(mainContent, "schemas/") {
+			t.Errorf("data_product/main.tf missing schemas/ resolution directory")
+		}
+		if !strings.Contains(mainContent, ".bigquery.json") {
+			t.Errorf("data_product/main.tf missing .bigquery.json schema file extension")
+		}
+		schemaBlock := extractHCLBlock(mainContent, "raw_manifest_contracts")
+		if !strings.Contains(schemaBlock, "null") {
+			t.Errorf("data_product/main.tf schema resolution in raw_manifest_contracts must fall back to null")
+		}
+	})
 }
 
 func TestModules_GatewayPushInvokerAndIAMEncapsulation(t *testing.T) {
