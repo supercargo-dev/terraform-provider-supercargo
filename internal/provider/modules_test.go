@@ -143,8 +143,11 @@ func TestModules_DataProductGoldenPath(t *testing.T) {
 		if !strings.Contains(mainContent, "gateway_contracts =") {
 			t.Errorf("data_product/main.tf missing gateway_contracts local definition")
 		}
-		if !strings.Contains(mainContent, "supercargo_data_product.this.contracts") {
-			t.Errorf("data_product/main.tf gateway_contracts must reference supercargo_data_product.this.contracts")
+		if strings.Contains(mainContent, "supercargo_data_product.this.contracts") {
+			t.Errorf("data_product/main.tf gateway_contracts must NOT reference unapplied supercargo_data_product.this.contracts")
+		}
+		if !strings.Contains(mainContent, "manifest_gateway_contracts") {
+			t.Errorf("data_product/main.tf missing manifest_gateway_contracts local definition")
 		}
 		if !strings.Contains(mainContent, "contracts = local.gateway_contracts") {
 			t.Errorf("data_product/main.tf module.gateway must pass contracts = local.gateway_contracts")

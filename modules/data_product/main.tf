@@ -2,18 +2,53 @@ locals {
   manifest_content = yamldecode(file(var.manifest_file))
   product_urn      = try(local.manifest_content.meta.urn, "")
   product_id       = length(split(":", local.product_urn)) > 1 ? element(split(":", local.product_urn), length(split(":", local.product_urn)) - 1) : local.product_urn
+  manifest_dir     = dirname(var.manifest_file)
+
+  # Safely collect ports from manifest
+  manifest_output_ports = try(local.manifest_content.output_ports, null) != null ? local.manifest_content.output_ports : []
+  manifest_input_ports  = try(local.manifest_content.input_ports, null) != null ? local.manifest_content.input_ports : []
+  manifest_all_ports    = concat(local.manifest_output_ports, local.manifest_input_ports)
+
+  # Extract raw contract references
+  raw_manifest_contracts = [
+    for p in local.manifest_all_ports : {
+      key = (
+        length(split(":", try(p.contract.urn, p.name))) > 1
+        ? element(split(":", try(p.contract.urn, p.name)), length(split(":", try(p.contract.urn, p.name))) - 1)
+        : try(p.contract.urn, p.name)
+      )
+      id = try(p.contract.urn, p.name)
+      schema = try(
+        file("${local.manifest_dir}/schemas/${try(p.name, "")}.${try(p.contract.version, "")}.bigquery.json"),
+        file("${local.manifest_dir}/schemas/${replace(try(p.contract.urn, p.name), ":", "_")}.bigquery.json"),
+        file("${local.manifest_dir}/schemas/${try(p.name, "")}.bigquery.json"),
+        file("${local.manifest_dir}/schemas/${length(split(":", try(p.contract.urn, p.name))) > 1 ? element(split(":", try(p.contract.urn, p.name)), length(split(":", try(p.contract.urn, p.name))) - 1) : try(p.contract.urn, p.name)}.${try(p.contract.version, "")}.bigquery.json"),
+        file("${local.manifest_dir}/schemas/${length(split(":", try(p.contract.urn, p.name))) > 1 ? element(split(":", try(p.contract.urn, p.name)), length(split(":", try(p.contract.urn, p.name))) - 1) : try(p.contract.urn, p.name)}.bigquery.json"),
+        file("${local.manifest_dir}/${try(p.name, "")}.bigquery.json"),
+        null
+      )
+    }
+    if try(p.contract, null) != null
+  ]
+
+  # Deduplicate by contract key safely using HCL grouping
+  grouped_manifest_contracts = {
+    for c in local.raw_manifest_contracts : c.key => c...
+  }
+
+  manifest_gateway_contracts = {
+    for k, items in local.grouped_manifest_contracts : k => {
+      id     = items[0].id
+      schema = items[0].schema
+    }
+  }
 
   gateway_contracts = length(var.contracts) > 0 ? {
     for k, v in var.contracts : element(split(":", k), length(split(":", k)) - 1) => {
       id     = k
       schema = v.schema_json
     }
-    } : {
-    for k, v in(supercargo_data_product.this.contracts != null ? supercargo_data_product.this.contracts : {}) : element(split(":", k), length(split(":", k)) - 1) => {
-      id     = v.id
-      schema = v.schema
-    }
-  }
+  } : local.manifest_gateway_contracts
 }
 
 resource "supercargo_data_product" "this" {
