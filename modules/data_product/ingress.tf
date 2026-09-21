@@ -1,5 +1,5 @@
 locals {
-  raw_input_ports = try(local.manifest_content.input_ports, [])
+  raw_input_ports = local.manifest_input_ports
 
   # Filter pubsub input ports
   pubsub_input_ports = {
