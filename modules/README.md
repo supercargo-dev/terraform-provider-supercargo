@@ -14,3 +14,4 @@
 - `security_vault/`: Base security infrastructure for keys and secrets.
 - `vault/`: Provisions the Vault service (Security Plane).
 - `gh-wif/`: Provisions Workload Identity Federation for GitHub Actions.
+- `dataplex_taxonomy/`: Provisions enterprise sensitivity taxonomies and policy tags in Google Cloud Data Catalog / Dataplex.
