@@ -1167,3 +1167,77 @@ func TestModules_HubMCPCompanionService(t *testing.T) {
 		}
 	})
 }
+
+func TestModules_CloudRunProbes(t *testing.T) {
+	modulesDir := "../../modules"
+	testCases := []struct {
+		moduleName   string
+		resourceName string
+	}{
+		{moduleName: "gateway", resourceName: "gateway"},
+		{moduleName: "hub", resourceName: "hub"},
+		{moduleName: "vault", resourceName: "vault"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.moduleName+"/"+tc.resourceName, func(t *testing.T) {
+			path := filepath.Join(modulesDir, tc.moduleName, "main.tf")
+			contentBytes, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("Failed to read %s: %v", path, err)
+			}
+			content := string(contentBytes)
+
+			expectedResource := `resource "google_cloud_run_v2_service" "` + tc.resourceName + `"`
+			idx := strings.Index(content, expectedResource)
+			if idx == -1 {
+				t.Fatalf("Could not find %s in %s", expectedResource, path)
+			}
+
+			chunk := content[idx:]
+			nextResourceIdx := strings.Index(chunk[len(expectedResource):], "\nresource \"")
+			if nextResourceIdx != -1 {
+				chunk = chunk[:len(expectedResource)+nextResourceIdx]
+			}
+
+			// Startup probe assertions
+			if !strings.Contains(chunk, "startup_probe {") {
+				t.Errorf("Resource %s in %s missing startup_probe block", expectedResource, tc.moduleName)
+			}
+			startupChunk := extractHCLBlock(chunk, "startup_probe")
+			if !strings.Contains(startupChunk, `path = "/healthz"`) && !strings.Contains(startupChunk, `path= "/healthz"`) {
+				t.Errorf("Resource %s startup_probe missing path = \"/healthz\"", expectedResource)
+			}
+			if !strings.Contains(startupChunk, "port = 8080") && !strings.Contains(startupChunk, "port= 8080") {
+				t.Errorf("Resource %s startup_probe missing port = 8080", expectedResource)
+			}
+			if !strings.Contains(startupChunk, "period_seconds = 5") && !strings.Contains(startupChunk, "period_seconds        = 5") {
+				t.Errorf("Resource %s startup_probe missing period_seconds = 5", expectedResource)
+			}
+			if !strings.Contains(startupChunk, "failure_threshold = 12") && !strings.Contains(startupChunk, "failure_threshold     = 12") {
+				t.Errorf("Resource %s startup_probe missing failure_threshold = 12", expectedResource)
+			}
+
+			// Liveness probe assertions
+			if !strings.Contains(chunk, "liveness_probe {") {
+				t.Errorf("Resource %s in %s missing liveness_probe block", expectedResource, tc.moduleName)
+			}
+			livenessChunk := extractHCLBlock(chunk, "liveness_probe")
+			if !strings.Contains(livenessChunk, `path = "/healthz"`) && !strings.Contains(livenessChunk, `path= "/healthz"`) {
+				t.Errorf("Resource %s liveness_probe missing path = \"/healthz\"", expectedResource)
+			}
+			if !strings.Contains(livenessChunk, "port = 8080") && !strings.Contains(livenessChunk, "port= 8080") {
+				t.Errorf("Resource %s liveness_probe missing port = 8080", expectedResource)
+			}
+			if !strings.Contains(livenessChunk, "period_seconds = 10") && !strings.Contains(livenessChunk, "period_seconds    = 10") {
+				t.Errorf("Resource %s liveness_probe missing period_seconds = 10", expectedResource)
+			}
+			if !strings.Contains(livenessChunk, "timeout_seconds = 2") && !strings.Contains(livenessChunk, "timeout_seconds   = 2") {
+				t.Errorf("Resource %s liveness_probe missing timeout_seconds = 2", expectedResource)
+			}
+			if !strings.Contains(livenessChunk, "failure_threshold = 3") && !strings.Contains(livenessChunk, "failure_threshold = 3") {
+				t.Errorf("Resource %s liveness_probe missing failure_threshold = 3", expectedResource)
+			}
+		})
+	}
+}
