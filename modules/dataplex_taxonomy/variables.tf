@@ -29,4 +29,10 @@ variable "restricted_categories" {
     PERSONAL  = "Personal and customer identifiers governed by GDPR / privacy regulations"
     SECURITY  = "Security tokens, credentials, and cryptographic material"
   }
+
+  validation {
+    condition     = alltrue([for k in keys(var.restricted_categories) : can(regex("^[a-zA-Z0-9_]+$", k))])
+    error_message = "All keys in restricted_categories must contain only alphanumeric characters and underscores (e.g. FINANCIAL, PERSONAL, PHI)."
+  }
 }
+
