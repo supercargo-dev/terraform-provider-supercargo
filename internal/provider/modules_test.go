@@ -1211,8 +1211,14 @@ func TestModules_CloudRunProbes(t *testing.T) {
 			if !strings.Contains(startupChunk, "port = 8080") && !strings.Contains(startupChunk, "port= 8080") {
 				t.Errorf("Resource %s startup_probe missing port = 8080", expectedResource)
 			}
+			if !strings.Contains(startupChunk, "initial_delay_seconds = 0") && !strings.Contains(startupChunk, "initial_delay_seconds        = 0") {
+				t.Errorf("Resource %s startup_probe missing initial_delay_seconds = 0", expectedResource)
+			}
 			if !strings.Contains(startupChunk, "period_seconds = 5") && !strings.Contains(startupChunk, "period_seconds        = 5") {
 				t.Errorf("Resource %s startup_probe missing period_seconds = 5", expectedResource)
+			}
+			if !strings.Contains(startupChunk, "timeout_seconds = 2") && !strings.Contains(startupChunk, "timeout_seconds       = 2") {
+				t.Errorf("Resource %s startup_probe missing timeout_seconds = 2", expectedResource)
 			}
 			if !strings.Contains(startupChunk, "failure_threshold = 12") && !strings.Contains(startupChunk, "failure_threshold     = 12") {
 				t.Errorf("Resource %s startup_probe missing failure_threshold = 12", expectedResource)
@@ -1235,7 +1241,7 @@ func TestModules_CloudRunProbes(t *testing.T) {
 			if !strings.Contains(livenessChunk, "timeout_seconds = 2") && !strings.Contains(livenessChunk, "timeout_seconds   = 2") {
 				t.Errorf("Resource %s liveness_probe missing timeout_seconds = 2", expectedResource)
 			}
-			if !strings.Contains(livenessChunk, "failure_threshold = 3") && !strings.Contains(livenessChunk, "failure_threshold = 3") {
+			if !strings.Contains(livenessChunk, "failure_threshold = 3") && !strings.Contains(livenessChunk, "failure_threshold     = 3") {
 				t.Errorf("Resource %s liveness_probe missing failure_threshold = 3", expectedResource)
 			}
 		})
