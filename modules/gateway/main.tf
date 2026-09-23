@@ -133,6 +133,27 @@ resource "google_cloud_run_v2_service" "gateway" {
         container_port = 8080
         name           = "h2c"
       }
+
+      startup_probe {
+        http_get {
+          path = "/healthz"
+          port = 8080
+        }
+        initial_delay_seconds = 0
+        period_seconds        = 5
+        timeout_seconds       = 2
+        failure_threshold     = 12
+      }
+
+      liveness_probe {
+        http_get {
+          path = "/healthz"
+          port = 8080
+        }
+        period_seconds    = 10
+        timeout_seconds   = 2
+        failure_threshold = 3
+      }
     }
   }
 
