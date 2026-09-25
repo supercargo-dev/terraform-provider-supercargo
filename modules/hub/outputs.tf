@@ -68,3 +68,33 @@ output "mcp_service_account_email" {
   value       = var.mcp_enabled ? google_service_account.mcp_runtime[0].email : null
 }
 
+output "health_events_topic_name" {
+  description = "The Pub/Sub topic name for asset health transition events"
+  value       = var.enable_health_mesh ? google_pubsub_topic.health_events[0].name : null
+}
+
+output "health_events_topic_id" {
+  description = "The Pub/Sub topic ID for asset health transition events"
+  value       = var.enable_health_mesh ? google_pubsub_topic.health_events[0].id : null
+}
+
+output "catalog_dataset_id" {
+  description = "The BigQuery dataset ID for asset catalog and health history"
+  value       = var.enable_health_mesh ? google_bigquery_dataset.supercargo_catalog[0].dataset_id : null
+}
+
+output "asset_health_history_table_id" {
+  description = "The BigQuery table ID for asset health transition history"
+  value       = var.enable_health_mesh ? google_bigquery_table.asset_health_history[0].table_id : null
+}
+
+output "asset_current_health_view_id" {
+  description = "The BigQuery view ID for latest asset health analytical projection"
+  value       = var.enable_health_mesh ? google_bigquery_table.asset_current_health[0].table_id : null
+}
+
+output "health_events_subscription_name" {
+  description = "The Pub/Sub BigQuery subscription name for health events"
+  value       = var.enable_health_mesh ? google_pubsub_subscription.health_events_bq[0].name : null
+}
+

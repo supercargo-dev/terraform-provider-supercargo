@@ -195,3 +195,33 @@ variable "mcp_oidc_audience" {
   default     = ""
 }
 
+variable "enable_health_mesh" {
+  description = "Whether to provision the Pub/Sub health events mesh, BigQuery catalog dataset, and streaming subscription"
+  type        = bool
+  default     = true
+}
+
+variable "health_events_topic" {
+  description = "Base Pub/Sub topic name for asset health transition events"
+  type        = string
+  default     = "supercargo-health-events"
+}
+
+variable "catalog_dataset_id" {
+  description = "BigQuery dataset ID for asset catalog and health history"
+  type        = string
+  default     = "supercargo_catalog"
+}
+
+variable "health_history_table_id" {
+  description = "BigQuery table ID for asset health transition history"
+  type        = string
+  default     = "asset_health_history"
+}
+
+variable "current_health_view_id" {
+  description = "BigQuery view ID for latest asset health analytical projection"
+  type        = string
+  default     = "asset_current_health"
+}
+
