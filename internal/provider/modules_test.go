@@ -907,8 +907,8 @@ func TestModules_HubHealthMeshAndBigQuerySubscription(t *testing.T) {
 		if !strings.Contains(viewChunk, "deletion_protection = false") {
 			t.Errorf("asset_current_health view must set deletion_protection = false")
 		}
-		if !strings.Contains(viewChunk, "ROW_NUMBER() OVER(PARTITION BY asset_urn ORDER BY timestamp DESC, publish_time DESC) as row_num") {
-			t.Errorf("asset_current_health view query missing deterministic ROW_NUMBER window function")
+		if !strings.Contains(viewChunk, "ROW_NUMBER() OVER(PARTITION BY asset_urn ORDER BY timestamp DESC, publish_time DESC NULLS LAST) as row_num") {
+			t.Errorf("asset_current_health view query missing deterministic ROW_NUMBER window function with NULLS LAST")
 		}
 		if !strings.Contains(viewChunk, "WHERE row_num = 1") {
 			t.Errorf("asset_current_health view query missing WHERE row_num = 1")

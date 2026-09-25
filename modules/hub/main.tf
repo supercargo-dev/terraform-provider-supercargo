@@ -20,6 +20,7 @@ resource "google_project_service" "hub_apis" {
     "dataplex.googleapis.com", // Added Dataplex API
     "monitoring.googleapis.com",
     "logging.googleapis.com",
+    "pubsub.googleapis.com",
   ])
 
   project            = var.project_id
@@ -870,7 +871,7 @@ resource "google_bigquery_table" "asset_current_health" {
     query          = <<EOF
 SELECT * EXCEPT(row_num)
 FROM (
-  SELECT *, ROW_NUMBER() OVER(PARTITION BY asset_urn ORDER BY timestamp DESC, publish_time DESC) as row_num
+  SELECT *, ROW_NUMBER() OVER(PARTITION BY asset_urn ORDER BY timestamp DESC, publish_time DESC NULLS LAST) as row_num
   FROM `${var.project_id}.${google_bigquery_dataset.supercargo_catalog[0].dataset_id}.${google_bigquery_table.asset_health_history[0].table_id}`
 )
 WHERE row_num = 1
@@ -945,6 +946,12 @@ resource "google_cloud_run_v2_service_iam_member" "events_invoker_run" {
   member   = "serviceAccount:${google_service_account.events_invoker.email}"
 }
 
+resource "google_service_account_iam_member" "pubsub_events_invoker_token_creator" {
+  service_account_id = google_service_account.events_invoker.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:service-${var.project_number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
 resource "google_pubsub_subscription" "events_push" {
   project = var.project_id
   name    = "hub-events-push-${random_id.suffix.hex}"
@@ -968,6 +975,11 @@ resource "google_pubsub_subscription" "events_push" {
   expiration_policy {
     ttl = ""
   }
+
+  depends_on = [
+    google_cloud_run_v2_service_iam_member.events_invoker_run,
+    google_service_account_iam_member.pubsub_events_invoker_token_creator
+  ]
 }
 
 # ----------------------------------------------------------------------------------------------------------------------
