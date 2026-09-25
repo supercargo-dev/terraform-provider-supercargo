@@ -101,6 +101,7 @@ func TestModules_BigQueryDeletionProtection(t *testing.T) {
 			{moduleName: "security_vault", tableName: "lookup_table"},
 			{moduleName: "security_vault", tableName: "rtbf_shred_queue"},
 			{moduleName: "hub", tableName: "outbox_events"},
+			{moduleName: "hub", tableName: "asset_health_history"},
 		}
 
 		for _, tc := range tableChecks {
@@ -666,6 +667,280 @@ func TestModules_HubAuditSink(t *testing.T) {
 		for _, out := range outputs {
 			if !strings.Contains(outputContent, `output "`+out+`"`) {
 				t.Errorf("modules/hub/outputs.tf missing output %q", out)
+			}
+		}
+	})
+}
+
+func TestModules_HubHealthMeshAndBigQuerySubscription(t *testing.T) {
+	modulesDir := "../../modules"
+	hubDir := filepath.Join(modulesDir, "hub")
+
+	t.Run("VariablesDefinedWithCorrectDefaults", func(t *testing.T) {
+		varPath := filepath.Join(hubDir, "variables.tf")
+		varBytes, err := os.ReadFile(varPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", varPath, err)
+		}
+		varContent := string(varBytes)
+
+		requiredVars := []struct {
+			name         string
+			defaultValue string
+		}{
+			{name: "enable_health_mesh", defaultValue: "true"},
+			{name: "health_events_topic", defaultValue: `"supercargo-health-events"`},
+			{name: "catalog_dataset_id", defaultValue: `"supercargo_catalog"`},
+			{name: "health_history_table_id", defaultValue: `"asset_health_history"`},
+			{name: "current_health_view_id", defaultValue: `"asset_current_health"`},
+		}
+
+		for _, rv := range requiredVars {
+			if !strings.Contains(varContent, `variable "`+rv.name+`"`) {
+				t.Errorf("modules/hub/variables.tf missing variable %q", rv.name)
+			}
+			if !strings.Contains(varContent, rv.defaultValue) {
+				t.Errorf("modules/hub/variables.tf variable %q missing default %s", rv.name, rv.defaultValue)
+			}
+		}
+	})
+
+	t.Run("PubSubHealthTopicAndPublisherIAMConfigured", func(t *testing.T) {
+		mainPath := filepath.Join(hubDir, "main.tf")
+		mainBytes, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		mainContent := string(mainBytes)
+
+		if !strings.Contains(mainContent, `resource "google_pubsub_topic" "health_events"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_pubsub_topic\" \"health_events\"")
+		}
+		topicChunk := extractHCLBlock(mainContent, `resource "google_pubsub_topic" "health_events"`)
+		if !strings.Contains(topicChunk, "var.enable_health_mesh") {
+			t.Errorf("health_events topic missing count = var.enable_health_mesh guard")
+		}
+		if !strings.Contains(topicChunk, "name    = var.health_events_topic") && !strings.Contains(topicChunk, "name = var.health_events_topic") {
+			t.Errorf("health_events topic must use var.health_events_topic")
+		}
+
+		if !strings.Contains(mainContent, `resource "google_pubsub_topic_iam_member" "hub_health_events_publisher"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_pubsub_topic_iam_member\" \"hub_health_events_publisher\"")
+		}
+		iamChunk := extractHCLBlock(mainContent, `resource "google_pubsub_topic_iam_member" "hub_health_events_publisher"`)
+		if !strings.Contains(iamChunk, `role    = "roles/pubsub.publisher"`) && !strings.Contains(iamChunk, `role = "roles/pubsub.publisher"`) {
+			t.Errorf("hub_health_events_publisher must grant roles/pubsub.publisher")
+		}
+		if !strings.Contains(iamChunk, "google_service_account.hub_runtime.email") {
+			t.Errorf("hub_health_events_publisher must bind google_service_account.hub_runtime.email")
+		}
+
+		// Cloud Run env var
+		if !strings.Contains(mainContent, `"HEALTH_EVENTS_TOPIC"`) {
+			t.Errorf("modules/hub/main.tf Cloud Run service missing HEALTH_EVENTS_TOPIC env var")
+		}
+		if !strings.Contains(mainContent, "value = var.health_events_topic") {
+			t.Errorf("modules/hub/main.tf HEALTH_EVENTS_TOPIC must use var.health_events_topic")
+		}
+	})
+
+	t.Run("BigQueryCatalogDatasetAndIAMConfigured", func(t *testing.T) {
+		mainPath := filepath.Join(hubDir, "main.tf")
+		mainBytes, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		mainContent := string(mainBytes)
+
+		if !strings.Contains(mainContent, `resource "google_bigquery_dataset" "supercargo_catalog"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_bigquery_dataset\" \"supercargo_catalog\"")
+		}
+		dsChunk := extractHCLBlock(mainContent, `resource "google_bigquery_dataset" "supercargo_catalog"`)
+		if !strings.Contains(dsChunk, "var.enable_health_mesh") {
+			t.Errorf("supercargo_catalog dataset missing count = var.enable_health_mesh guard")
+		}
+		if !strings.Contains(dsChunk, "var.catalog_dataset_id") {
+			t.Errorf("supercargo_catalog dataset must use var.catalog_dataset_id")
+		}
+		if !strings.Contains(dsChunk, "local.bq_location") {
+			t.Errorf("supercargo_catalog dataset must use local.bq_location")
+		}
+		if !strings.Contains(dsChunk, "delete_contents_on_destroy = !var.bigquery_deletion_protection") {
+			t.Errorf("supercargo_catalog dataset must set delete_contents_on_destroy = !var.bigquery_deletion_protection")
+		}
+
+		if !strings.Contains(mainContent, `resource "google_bigquery_dataset_iam_member" "pubsub_health_bq_writer"`) {
+			t.Errorf("modules/hub/main.tf missing resource \"google_bigquery_dataset_iam_member\" \"pubsub_health_bq_writer\"")
+		}
+		writerChunk := extractHCLBlock(mainContent, `resource "google_bigquery_dataset_iam_member" "pubsub_health_bq_writer"`)
+		if !strings.Contains(writerChunk, `roles/bigquery.dataEditor`) {
+			t.Errorf("pubsub_health_bq_writer missing roles/bigquery.dataEditor")
+		}
+		if !strings.Contains(writerChunk, "serviceAccount:service-${var.project_number}@gcp-sa-pubsub.iam.gserviceaccount.com") {
+			t.Errorf("pubsub_health_bq_writer must bind Pub/Sub service agent")
+		}
+
+		if !strings.Contains(mainContent, `resource "google_bigquery_dataset_iam_member" "pubsub_health_bq_metadata"`) {
+			t.Errorf("modules/hub/main.tf missing resource \"google_bigquery_dataset_iam_member\" \"pubsub_health_bq_metadata\"")
+		}
+		metaChunk := extractHCLBlock(mainContent, `resource "google_bigquery_dataset_iam_member" "pubsub_health_bq_metadata"`)
+		if !strings.Contains(metaChunk, `roles/bigquery.metadataViewer`) {
+			t.Errorf("pubsub_health_bq_metadata missing roles/bigquery.metadataViewer")
+		}
+		if !strings.Contains(metaChunk, "serviceAccount:service-${var.project_number}@gcp-sa-pubsub.iam.gserviceaccount.com") {
+			t.Errorf("pubsub_health_bq_metadata must bind Pub/Sub service agent")
+		}
+	})
+
+	t.Run("BigQueryHealthHistoryTableConfigured", func(t *testing.T) {
+		mainPath := filepath.Join(hubDir, "main.tf")
+		mainBytes, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		mainContent := string(mainBytes)
+
+		if !strings.Contains(mainContent, `resource "google_bigquery_table" "asset_health_history"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_bigquery_table\" \"asset_health_history\"")
+		}
+		tableChunk := extractHCLBlock(mainContent, `resource "google_bigquery_table" "asset_health_history"`)
+		if !strings.Contains(tableChunk, "var.enable_health_mesh") {
+			t.Errorf("asset_health_history missing count = var.enable_health_mesh guard")
+		}
+		if !strings.Contains(tableChunk, "google_bigquery_dataset.supercargo_catalog[0].dataset_id") {
+			t.Errorf("asset_health_history must reference supercargo_catalog dataset")
+		}
+		if !strings.Contains(tableChunk, "var.health_history_table_id") {
+			t.Errorf("asset_health_history must use var.health_history_table_id")
+		}
+		if !strings.Contains(tableChunk, "deletion_protection = var.bigquery_deletion_protection") {
+			t.Errorf("asset_health_history must use deletion_protection = var.bigquery_deletion_protection")
+		}
+		if !strings.Contains(tableChunk, `field = "timestamp"`) && !strings.Contains(tableChunk, `field  = "timestamp"`) {
+			t.Errorf("asset_health_history missing time_partitioning field = timestamp")
+		}
+		if !strings.Contains(tableChunk, `"asset_urn"`) || !strings.Contains(tableChunk, `"current_state"`) {
+			t.Errorf("asset_health_history missing clustering on [\"asset_urn\", \"current_state\"]")
+		}
+
+		schemaFields := []string{
+			"event_id",
+			"asset_urn",
+			"previous_state",
+			"current_state",
+			"reason",
+			"incident_type",
+			"run_id",
+			"reporter",
+			"status_source_urn",
+			"timestamp",
+			"downstream_urns",
+			"impacted_teams",
+			"subscription_name",
+			"message_id",
+			"publish_time",
+			"attributes",
+		}
+		for _, field := range schemaFields {
+			if !strings.Contains(tableChunk, `"`+field+`"`) {
+				t.Errorf("asset_health_history table schema missing field %q", field)
+			}
+		}
+	})
+
+	t.Run("PubSubBigQuerySubscriptionConfigured", func(t *testing.T) {
+		mainPath := filepath.Join(hubDir, "main.tf")
+		mainBytes, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		mainContent := string(mainBytes)
+
+		if !strings.Contains(mainContent, `resource "google_pubsub_subscription" "health_events_bq"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_pubsub_subscription\" \"health_events_bq\"")
+		}
+		subChunk := extractHCLBlock(mainContent, `resource "google_pubsub_subscription" "health_events_bq"`)
+		if !strings.Contains(subChunk, "var.enable_health_mesh") {
+			t.Errorf("health_events_bq subscription missing count = var.enable_health_mesh guard")
+		}
+		if !strings.Contains(subChunk, "google_pubsub_topic.health_events[0].name") {
+			t.Errorf("health_events_bq subscription must reference google_pubsub_topic.health_events[0].name")
+		}
+		if !strings.Contains(subChunk, "use_table_schema    = true") && !strings.Contains(subChunk, "use_table_schema = true") {
+			t.Errorf("health_events_bq subscription must set use_table_schema = true")
+		}
+		if !strings.Contains(subChunk, "write_metadata      = true") && !strings.Contains(subChunk, "write_metadata = true") {
+			t.Errorf("health_events_bq subscription must set write_metadata = true")
+		}
+		if !strings.Contains(subChunk, "drop_unknown_fields = true") && !strings.Contains(subChunk, "drop_unknown_fields = true") {
+			t.Errorf("health_events_bq subscription must set drop_unknown_fields = true")
+		}
+		if !strings.Contains(subChunk, `ttl = ""`) {
+			t.Errorf("health_events_bq subscription must set expiration_policy ttl = \"\"")
+		}
+		if !strings.Contains(subChunk, "pubsub_health_bq_writer") || !strings.Contains(subChunk, "pubsub_health_bq_metadata") {
+			t.Errorf("health_events_bq subscription must depend on pubsub_health_bq_writer and pubsub_health_bq_metadata")
+		}
+	})
+
+	t.Run("BigQueryCurrentHealthViewConfigured", func(t *testing.T) {
+		mainPath := filepath.Join(hubDir, "main.tf")
+		mainBytes, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		mainContent := string(mainBytes)
+
+		if !strings.Contains(mainContent, `resource "google_bigquery_table" "asset_current_health"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_bigquery_table\" \"asset_current_health\"")
+		}
+		viewChunk := extractHCLBlock(mainContent, `resource "google_bigquery_table" "asset_current_health"`)
+		if !strings.Contains(viewChunk, "var.enable_health_mesh") {
+			t.Errorf("asset_current_health view missing count = var.enable_health_mesh guard")
+		}
+		if !strings.Contains(viewChunk, "google_bigquery_dataset.supercargo_catalog[0].dataset_id") {
+			t.Errorf("asset_current_health view must reference supercargo_catalog dataset")
+		}
+		if !strings.Contains(viewChunk, "var.current_health_view_id") {
+			t.Errorf("asset_current_health view must use var.current_health_view_id")
+		}
+		if !strings.Contains(viewChunk, "deletion_protection = false") {
+			t.Errorf("asset_current_health view must set deletion_protection = false")
+		}
+		if !strings.Contains(viewChunk, "ROW_NUMBER() OVER(PARTITION BY asset_urn ORDER BY timestamp DESC, publish_time DESC) as row_num") {
+			t.Errorf("asset_current_health view query missing deterministic ROW_NUMBER window function")
+		}
+		if !strings.Contains(viewChunk, "WHERE row_num = 1") {
+			t.Errorf("asset_current_health view query missing WHERE row_num = 1")
+		}
+	})
+
+	t.Run("ConditionalOutputsExported", func(t *testing.T) {
+		outputPath := filepath.Join(hubDir, "outputs.tf")
+		outputBytes, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", outputPath, err)
+		}
+		outputContent := string(outputBytes)
+
+		outputs := []struct {
+			name      string
+			condition string
+		}{
+			{name: "health_events_topic_name", condition: "var.enable_health_mesh ? google_pubsub_topic.health_events[0].name : null"},
+			{name: "health_events_topic_id", condition: "var.enable_health_mesh ? google_pubsub_topic.health_events[0].id : null"},
+			{name: "catalog_dataset_id", condition: "var.enable_health_mesh ? google_bigquery_dataset.supercargo_catalog[0].dataset_id : null"},
+			{name: "asset_health_history_table_id", condition: "var.enable_health_mesh ? google_bigquery_table.asset_health_history[0].table_id : null"},
+			{name: "asset_current_health_view_id", condition: "var.enable_health_mesh ? google_bigquery_table.asset_current_health[0].table_id : null"},
+			{name: "health_events_subscription_name", condition: "var.enable_health_mesh ? google_pubsub_subscription.health_events_bq[0].name : null"},
+		}
+
+		for _, out := range outputs {
+			if !strings.Contains(outputContent, `output "`+out.name+`"`) {
+				t.Errorf("modules/hub/outputs.tf missing output %q", out.name)
+			}
+			if !strings.Contains(outputContent, out.condition) {
+				t.Errorf("modules/hub/outputs.tf output %q must use %q", out.name, out.condition)
 			}
 		}
 	})

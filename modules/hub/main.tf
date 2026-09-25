@@ -366,6 +366,11 @@ resource "google_cloud_run_v2_service" "hub" {
         value = var.force_deploy_trigger
       }
 
+      env {
+        name  = "HEALTH_EVENTS_TOPIC"
+        value = var.health_events_topic
+      }
+
       ports {
         container_port = 8080
         name           = "h2c"
@@ -673,6 +678,205 @@ resource "google_pubsub_subscription" "outbox_audit_bq" {
     google_bigquery_dataset_iam_member.pubsub_audit_bq_writer,
     google_bigquery_dataset_iam_member.pubsub_audit_bq_metadata
   ]
+}
+
+# --- Lineage-Enriched Health Event Mesh & BigQuery Subscription Infrastructure ---
+
+resource "google_pubsub_topic" "health_events" {
+  count   = var.enable_health_mesh ? 1 : 0
+  project = var.project_id
+  name    = var.health_events_topic
+}
+
+resource "google_pubsub_topic_iam_member" "hub_health_events_publisher" {
+  count   = var.enable_health_mesh ? 1 : 0
+  project = var.project_id
+  topic   = google_pubsub_topic.health_events[0].name
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:${google_service_account.hub_runtime.email}"
+}
+
+resource "google_bigquery_dataset" "supercargo_catalog" {
+  count                      = var.enable_health_mesh ? 1 : 0
+  project                    = var.project_id
+  dataset_id                 = var.catalog_dataset_id
+  location                   = local.bq_location
+  delete_contents_on_destroy = !var.bigquery_deletion_protection
+
+  depends_on = [google_project_service.hub_apis]
+}
+
+resource "google_bigquery_dataset_iam_member" "pubsub_health_bq_writer" {
+  count      = var.enable_health_mesh ? 1 : 0
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.supercargo_catalog[0].dataset_id
+  role       = "roles/bigquery.dataEditor"
+  member     = "serviceAccount:service-${var.project_number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
+resource "google_bigquery_dataset_iam_member" "pubsub_health_bq_metadata" {
+  count      = var.enable_health_mesh ? 1 : 0
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.supercargo_catalog[0].dataset_id
+  role       = "roles/bigquery.metadataViewer"
+  member     = "serviceAccount:service-${var.project_number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
+resource "google_bigquery_table" "asset_health_history" {
+  count               = var.enable_health_mesh ? 1 : 0
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.supercargo_catalog[0].dataset_id
+  table_id            = var.health_history_table_id
+  deletion_protection = var.bigquery_deletion_protection
+
+  time_partitioning {
+    type  = "DAY"
+    field = "timestamp"
+  }
+
+  clustering = ["asset_urn", "current_state"]
+
+  schema = jsonencode([
+    {
+      name        = "event_id"
+      type        = "STRING"
+      mode        = "REQUIRED"
+      description = "Unique transition event identifier"
+    },
+    {
+      name        = "asset_urn"
+      type        = "STRING"
+      mode        = "REQUIRED"
+      description = "URN of the asset experiencing the health transition"
+    },
+    {
+      name        = "previous_state"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Previous health state before this transition"
+    },
+    {
+      name        = "current_state"
+      type        = "STRING"
+      mode        = "REQUIRED"
+      description = "Current health state after transition"
+    },
+    {
+      name        = "reason"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Operational reason or error message for transition"
+    },
+    {
+      name        = "incident_type"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Classification of the incident"
+    },
+    {
+      name        = "run_id"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Pipeline execution or orchestration run ID"
+    },
+    {
+      name        = "reporter"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Entity or identity reporting the anomaly"
+    },
+    {
+      name        = "status_source_urn"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Root cause asset URN triggering the status change"
+    },
+    {
+      name        = "timestamp"
+      type        = "TIMESTAMP"
+      mode        = "REQUIRED"
+      description = "Timestamp when the health transition occurred"
+    },
+    {
+      name        = "downstream_urns"
+      type        = "STRING"
+      mode        = "REPEATED"
+      description = "List of direct and transitive downstream assets impacted"
+    },
+    {
+      name        = "impacted_teams"
+      type        = "STRING"
+      mode        = "REPEATED"
+      description = "List of owner teams impacted across the downstream blast radius"
+    },
+    {
+      name        = "subscription_name"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Name of the Pub/Sub subscription delivering the event"
+    },
+    {
+      name        = "message_id"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Pub/Sub message ID"
+    },
+    {
+      name        = "publish_time"
+      type        = "TIMESTAMP"
+      mode        = "NULLABLE"
+      description = "Pub/Sub message publish timestamp"
+    },
+    {
+      name        = "attributes"
+      type        = "JSON"
+      mode        = "NULLABLE"
+      description = "Pub/Sub message attributes map"
+    }
+  ])
+}
+
+resource "google_pubsub_subscription" "health_events_bq" {
+  count   = var.enable_health_mesh ? 1 : 0
+  project = var.project_id
+  name    = "supercargo-health-events-bq-${random_id.suffix.hex}"
+  topic   = google_pubsub_topic.health_events[0].name
+
+  expiration_policy {
+    ttl = ""
+  }
+
+  bigquery_config {
+    table               = "${var.project_id}.${google_bigquery_dataset.supercargo_catalog[0].dataset_id}.${google_bigquery_table.asset_health_history[0].table_id}"
+    use_table_schema    = true
+    write_metadata      = true
+    drop_unknown_fields = true
+  }
+
+  depends_on = [
+    google_bigquery_dataset_iam_member.pubsub_health_bq_writer,
+    google_bigquery_dataset_iam_member.pubsub_health_bq_metadata
+  ]
+}
+
+resource "google_bigquery_table" "asset_current_health" {
+  count               = var.enable_health_mesh ? 1 : 0
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.supercargo_catalog[0].dataset_id
+  table_id            = var.current_health_view_id
+  deletion_protection = false
+
+  view {
+    query          = <<EOF
+SELECT * EXCEPT(row_num)
+FROM (
+  SELECT *, ROW_NUMBER() OVER(PARTITION BY asset_urn ORDER BY timestamp DESC, publish_time DESC) as row_num
+  FROM `${var.project_id}.${google_bigquery_dataset.supercargo_catalog[0].dataset_id}.${google_bigquery_table.asset_health_history[0].table_id}`
+)
+WHERE row_num = 1
+EOF
+    use_legacy_sql = false
+  }
 }
 
 # --- Event-Driven Alert Relay Infrastructure ---
