@@ -1196,7 +1196,6 @@ func TestModules_HubDataformIntegration(t *testing.T) {
 	})
 }
 
-
 func extractHCLBlock(content, header string) string {
 	idx := strings.Index(content, header)
 	if idx == -1 {
