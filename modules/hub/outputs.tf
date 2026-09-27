@@ -98,3 +98,24 @@ output "health_events_subscription_name" {
   value       = var.enable_health_mesh ? google_pubsub_subscription.health_events_bq[0].name : null
 }
 
+output "dataform_events_topic_name" {
+  description = "The Pub/Sub topic name for Dataform workflow execution events"
+  value       = var.enable_dataform_integration ? google_pubsub_topic.dataform_events[0].name : null
+}
+
+output "dataform_events_topic_id" {
+  description = "The Pub/Sub topic ID for Dataform workflow execution events"
+  value       = var.enable_dataform_integration ? google_pubsub_topic.dataform_events[0].id : null
+}
+
+output "dataform_events_dlq_topic_name" {
+  description = "The Pub/Sub dead-letter topic name for Dataform workflow execution events"
+  value       = var.enable_dataform_integration ? google_pubsub_topic.dataform_events_dlq[0].name : null
+}
+
+output "dataform_events_subscription_name" {
+  description = "The Pub/Sub push subscription name for Dataform workflow execution events"
+  value       = var.enable_dataform_integration ? google_pubsub_subscription.dataform_events_push[0].name : null
+}
+
+

@@ -3,8 +3,10 @@ resource "random_id" "suffix" {
 }
 
 locals {
-  bq_location = var.bigquery_location != "" ? var.bigquery_location : var.region
+  bq_location                  = var.bigquery_location != "" ? var.bigquery_location : var.region
+  default_dataform_sink_filter = "resource.type = \"dataform.googleapis.com/Repository\" AND (jsonPayload.terminalState:* OR protoPayload.@type = \"type.googleapis.com/google.cloud.dataform.v1alpha2.WorkflowInvocation\" OR jsonPayload.@type = \"type.googleapis.com/google.cloud.dataform.v1alpha2.WorkflowInvocationCompletionLogEntry\")"
 }
+
 
 resource "google_project_service" "hub_apis" {
   for_each = toset([
@@ -1120,3 +1122,73 @@ resource "google_cloud_run_v2_service_iam_member" "mcp_invokers" {
   role     = "roles/run.invoker"
   member   = each.value
 }
+
+# ----------------------------------------------------------------------------------------------------------------------
+# DATAFORM CLOUD LOGGING SINK & EVENT INGESTION INFRASTRUCTURE
+# ----------------------------------------------------------------------------------------------------------------------
+
+resource "google_pubsub_topic" "dataform_events" {
+  count   = var.enable_dataform_integration ? 1 : 0
+  project = var.project_id
+  name    = var.dataform_events_topic
+}
+
+resource "google_pubsub_topic" "dataform_events_dlq" {
+  count   = var.enable_dataform_integration ? 1 : 0
+  project = var.project_id
+  name    = "${var.dataform_events_topic}-dlq"
+}
+
+resource "google_logging_project_sink" "dataform_events" {
+  count                  = var.enable_dataform_integration ? 1 : 0
+  project                = var.project_id
+  name                   = "supercargo-dataform-events-sink-${random_id.suffix.hex}"
+  destination            = "pubsub.googleapis.com/${google_pubsub_topic.dataform_events[0].id}"
+  filter                 = var.dataform_sink_filter != "" ? var.dataform_sink_filter : local.default_dataform_sink_filter
+  unique_writer_identity = true
+}
+
+resource "google_pubsub_topic_iam_member" "dataform_sink_publisher" {
+  count   = var.enable_dataform_integration ? 1 : 0
+  project = var.project_id
+  topic   = google_pubsub_topic.dataform_events[0].name
+  role    = "roles/pubsub.publisher"
+  member  = google_logging_project_sink.dataform_events[0].writer_identity
+}
+
+resource "google_pubsub_subscription" "dataform_events_push" {
+  count   = var.enable_dataform_integration ? 1 : 0
+  project = var.project_id
+  name    = "hub-dataform-events-push-${random_id.suffix.hex}"
+  topic   = google_pubsub_topic.dataform_events[0].name
+
+  ack_deadline_seconds = 60
+
+  push_config {
+    push_endpoint = "${google_cloud_run_v2_service.hub.uri}/v1/internal/dataform-events"
+    oidc_token {
+      service_account_email = google_service_account.events_invoker.email
+      audience              = var.oidc_audience != "" ? var.oidc_audience : google_cloud_run_v2_service.hub.uri
+    }
+  }
+
+  dead_letter_policy {
+    dead_letter_topic     = google_pubsub_topic.dataform_events_dlq[0].id
+    max_delivery_attempts = 5
+  }
+
+  retry_policy {
+    minimum_backoff = "10s"
+    maximum_backoff = "600s"
+  }
+
+  expiration_policy {
+    ttl = ""
+  }
+
+  depends_on = [
+    google_cloud_run_v2_service_iam_member.events_invoker_run,
+    google_service_account_iam_member.pubsub_events_invoker_token_creator,
+  ]
+}
+

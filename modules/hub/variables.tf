@@ -225,3 +225,22 @@ variable "current_health_view_id" {
   default     = "asset_current_health"
 }
 
+variable "enable_dataform_integration" {
+  description = "Whether to provision the Dataform Cloud Logging sink and Pub/Sub push subscription"
+  type        = bool
+  default     = false
+}
+
+variable "dataform_events_topic" {
+  description = "Base Pub/Sub topic name for Dataform workflow execution events"
+  type        = string
+  default     = "supercargo-dataform-events"
+}
+
+variable "dataform_sink_filter" {
+  description = "Custom Cloud Logging sink filter expression for Dataform events (falls back to default dual-compatible filter if empty)"
+  type        = string
+  default     = ""
+}
+
+
