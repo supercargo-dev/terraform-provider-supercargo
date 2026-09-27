@@ -118,4 +118,9 @@ output "dataform_events_subscription_name" {
   value       = var.enable_dataform_integration ? google_pubsub_subscription.dataform_events_push[0].name : null
 }
 
+output "dataform_events_dlq_subscription_name" {
+  description = "The Pub/Sub pull subscription name for inspecting Dataform dead-letter messages"
+  value       = var.enable_dataform_integration ? google_pubsub_subscription.dataform_events_dlq_pull[0].name : null
+}
+
 

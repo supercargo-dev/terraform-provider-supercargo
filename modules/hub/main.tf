@@ -4,7 +4,7 @@ resource "random_id" "suffix" {
 
 locals {
   bq_location                  = var.bigquery_location != "" ? var.bigquery_location : var.region
-  default_dataform_sink_filter = "resource.type = \"dataform.googleapis.com/Repository\" AND (jsonPayload.terminalState:* OR protoPayload.@type = \"type.googleapis.com/google.cloud.dataform.v1alpha2.WorkflowInvocation\" OR jsonPayload.@type = \"type.googleapis.com/google.cloud.dataform.v1alpha2.WorkflowInvocationCompletionLogEntry\")"
+  default_dataform_sink_filter = "resource.type = \"dataform.googleapis.com/Repository\" AND (jsonPayload.terminalState:* OR protoPayload.@type = \"type.googleapis.com/google.cloud.dataform.v1alpha2.WorkflowInvocation\" OR jsonPayload.@type = \"type.googleapis.com/google.cloud.dataform.logging.v1.WorkflowInvocationCompletionLogEntry\" OR jsonPayload.@type = \"type.googleapis.com/google.cloud.dataform.v1alpha2.WorkflowInvocationCompletionLogEntry\")"
 }
 
 
@@ -1189,6 +1189,37 @@ resource "google_pubsub_subscription" "dataform_events_push" {
   depends_on = [
     google_cloud_run_v2_service_iam_member.events_invoker_run,
     google_service_account_iam_member.pubsub_events_invoker_token_creator,
+    google_pubsub_topic_iam_member.dataform_dlq_publisher,
   ]
+}
+
+resource "google_pubsub_topic_iam_member" "dataform_dlq_publisher" {
+  count   = var.enable_dataform_integration ? 1 : 0
+  project = var.project_id
+  topic   = google_pubsub_topic.dataform_events_dlq[0].name
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:service-${var.project_number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
+resource "google_pubsub_subscription_iam_member" "dataform_push_dlq_subscriber" {
+  count        = var.enable_dataform_integration ? 1 : 0
+  project      = var.project_id
+  subscription = google_pubsub_subscription.dataform_events_push[0].name
+  role         = "roles/pubsub.subscriber"
+  member       = "serviceAccount:service-${var.project_number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
+resource "google_pubsub_subscription" "dataform_events_dlq_pull" {
+  count   = var.enable_dataform_integration ? 1 : 0
+  project = var.project_id
+  name    = "${var.dataform_events_topic}-dlq-sub"
+  topic   = google_pubsub_topic.dataform_events_dlq[0].name
+
+  message_retention_duration = "604800s"
+  retain_acked_messages      = false
+
+  expiration_policy {
+    ttl = ""
+  }
 }
 

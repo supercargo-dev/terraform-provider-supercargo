@@ -1118,8 +1118,51 @@ func TestModules_HubDataformIntegration(t *testing.T) {
 			t.Errorf("dataform_events_push subscription must configure permanent retention via expiration_policy ttl = \"\"")
 		}
 		if !strings.Contains(subChunk, "google_cloud_run_v2_service_iam_member.events_invoker_run") ||
-			!strings.Contains(subChunk, "google_service_account_iam_member.pubsub_events_invoker_token_creator") {
-			t.Errorf("dataform_events_push subscription must depend on events_invoker_run and pubsub_events_invoker_token_creator")
+			!strings.Contains(subChunk, "google_service_account_iam_member.pubsub_events_invoker_token_creator") ||
+			!strings.Contains(subChunk, "google_pubsub_topic_iam_member.dataform_dlq_publisher") {
+			t.Errorf("dataform_events_push subscription must depend on events_invoker_run, pubsub_events_invoker_token_creator, and dataform_dlq_publisher")
+		}
+
+		// Pub/Sub Service Agent Publisher IAM on DLQ topic
+		if !strings.Contains(mainContent, `resource "google_pubsub_topic_iam_member" "dataform_dlq_publisher"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_pubsub_topic_iam_member\" \"dataform_dlq_publisher\"")
+		}
+		dlqPubIamChunk := extractHCLBlock(mainContent, `resource "google_pubsub_topic_iam_member" "dataform_dlq_publisher"`)
+		if !strings.Contains(dlqPubIamChunk, "google_pubsub_topic.dataform_events_dlq[0].name") {
+			t.Errorf("dataform_dlq_publisher must target dataform_events_dlq topic")
+		}
+		if !strings.Contains(dlqPubIamChunk, `"roles/pubsub.publisher"`) {
+			t.Errorf("dataform_dlq_publisher must grant roles/pubsub.publisher")
+		}
+		if !strings.Contains(dlqPubIamChunk, `"serviceAccount:service-${var.project_number}@gcp-sa-pubsub.iam.gserviceaccount.com"`) {
+			t.Errorf("dataform_dlq_publisher must bind Pub/Sub service agent")
+		}
+
+		// Pub/Sub Service Agent Subscriber IAM on Push subscription
+		if !strings.Contains(mainContent, `resource "google_pubsub_subscription_iam_member" "dataform_push_dlq_subscriber"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_pubsub_subscription_iam_member\" \"dataform_push_dlq_subscriber\"")
+		}
+		dlqSubIamChunk := extractHCLBlock(mainContent, `resource "google_pubsub_subscription_iam_member" "dataform_push_dlq_subscriber"`)
+		if !strings.Contains(dlqSubIamChunk, "google_pubsub_subscription.dataform_events_push[0].name") {
+			t.Errorf("dataform_push_dlq_subscriber must target dataform_events_push subscription")
+		}
+		if !strings.Contains(dlqSubIamChunk, `"roles/pubsub.subscriber"`) {
+			t.Errorf("dataform_push_dlq_subscriber must grant roles/pubsub.subscriber")
+		}
+		if !strings.Contains(dlqSubIamChunk, `"serviceAccount:service-${var.project_number}@gcp-sa-pubsub.iam.gserviceaccount.com"`) {
+			t.Errorf("dataform_push_dlq_subscriber must bind Pub/Sub service agent")
+		}
+
+		// DLQ inspection pull subscription
+		if !strings.Contains(mainContent, `resource "google_pubsub_subscription" "dataform_events_dlq_pull"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_pubsub_subscription\" \"dataform_events_dlq_pull\"")
+		}
+		dlqPullChunk := extractHCLBlock(mainContent, `resource "google_pubsub_subscription" "dataform_events_dlq_pull"`)
+		if !strings.Contains(dlqPullChunk, `"${var.dataform_events_topic}-dlq-sub"`) {
+			t.Errorf("dataform_events_dlq_pull must be named \"${var.dataform_events_topic}-dlq-sub\"")
+		}
+		if !strings.Contains(dlqPullChunk, "google_pubsub_topic.dataform_events_dlq[0].name") {
+			t.Errorf("dataform_events_dlq_pull must target dataform_events_dlq")
 		}
 	})
 
@@ -1139,6 +1182,7 @@ func TestModules_HubDataformIntegration(t *testing.T) {
 			{name: "dataform_events_topic_id", condition: "var.enable_dataform_integration ? google_pubsub_topic.dataform_events[0].id : null"},
 			{name: "dataform_events_dlq_topic_name", condition: "var.enable_dataform_integration ? google_pubsub_topic.dataform_events_dlq[0].name : null"},
 			{name: "dataform_events_subscription_name", condition: "var.enable_dataform_integration ? google_pubsub_subscription.dataform_events_push[0].name : null"},
+			{name: "dataform_events_dlq_subscription_name", condition: "var.enable_dataform_integration ? google_pubsub_subscription.dataform_events_dlq_pull[0].name : null"},
 		}
 
 		for _, out := range outputs {
