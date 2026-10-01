@@ -243,4 +243,11 @@ variable "dataform_sink_filter" {
   default     = ""
 }
 
+variable "name_suffix" {
+  description = "Optional deterministic suffix appended to resource names for environment/branch disambiguation. Defaults to empty."
+  type        = string
+  default     = ""
+}
+
+
 

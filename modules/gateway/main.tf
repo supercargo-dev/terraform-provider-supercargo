@@ -1,7 +1,3 @@
-resource "random_id" "suffix" {
-  byte_length = 2
-}
-
 terraform {
   required_providers {
     google = {
@@ -32,14 +28,14 @@ resource "time_sleep" "wait_for_gateway_apis" {
 }
 
 resource "google_service_account" "gateway" {
-  account_id   = "gateway-${var.product_id}-${random_id.suffix.hex}"
+  account_id   = var.service_account_id != "" ? var.service_account_id : "gateway-${var.product_id}-sa${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   display_name = "Gateway Service Account for ${var.product_id}"
   project      = var.project_id
   depends_on   = [time_sleep.wait_for_gateway_apis]
 }
 
 resource "google_cloud_run_v2_service" "gateway" {
-  name     = "gateway-${var.product_id}-${random_id.suffix.hex}"
+  name     = "gateway-${var.product_id}${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   location = var.region
   project  = var.project_id
 
@@ -168,19 +164,19 @@ resource "google_cloud_run_v2_service" "gateway" {
 
 // Topics
 resource "google_pubsub_topic" "raw" {
-  name       = "raw-${var.product_id}-${random_id.suffix.hex}"
+  name       = "raw-${var.product_id}${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   project    = var.project_id
   depends_on = [google_project_service.gateway_apis]
 }
 
 resource "google_pubsub_topic" "clean" {
-  name       = "clean-${var.product_id}-${random_id.suffix.hex}"
+  name       = "clean-${var.product_id}${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   project    = var.project_id
   depends_on = [google_project_service.gateway_apis]
 }
 
 resource "google_pubsub_topic" "dlq" {
-  name       = "dlq-${var.product_id}-${random_id.suffix.hex}"
+  name       = "dlq-${var.product_id}${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   project    = var.project_id
   depends_on = [google_project_service.gateway_apis]
 }
@@ -188,7 +184,7 @@ resource "google_pubsub_topic" "dlq" {
 resource "google_bigquery_table" "validated_data" {
   for_each   = var.contracts
   dataset_id = var.bigquery_dataset_id
-  table_id   = "validated_${replace(each.key, "-", "_")}_${random_id.suffix.hex}"
+  table_id   = "validated_${replace(each.key, "-", "_")}${var.name_suffix != "" ? "_${var.name_suffix}" : ""}"
   project    = var.project_id
 
   deletion_protection = var.bigquery_deletion_protection

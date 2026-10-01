@@ -127,3 +127,10 @@ variable "key_rotation_period" {
     error_message = "key_rotation_period must be a positive integer followed by 's' (e.g. '2592000s')."
   }
 }
+
+variable "name_suffix" {
+  description = "Optional deterministic suffix appended to resource names for environment/branch disambiguation. Defaults to empty."
+  type        = string
+  default     = ""
+}
+
