@@ -2,6 +2,10 @@ output "vault_service_account_email" {
   value = google_service_account.vault_sa.email
 }
 
+output "service_account_email" {
+  value = google_service_account.vault_sa.email
+}
+
 output "master_key_id" {
   value = google_kms_crypto_key.master_key.id
 }

@@ -28,6 +28,16 @@ output "contract_deleted_topic_id" {
   value       = google_pubsub_topic.contract_deleted.id
 }
 
+output "hub_service_account_email" {
+  description = "The service account email of the Hub runtime service"
+  value       = google_service_account.hub_runtime.email
+}
+
+output "service_account_email" {
+  description = "The service account email of the Hub runtime service"
+  value       = google_service_account.hub_runtime.email
+}
+
 output "shovel_service_account_email" {
   description = "The service account email of the Metadata Shovel service"
   value       = google_service_account.shovel_runtime.email
