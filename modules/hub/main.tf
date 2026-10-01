@@ -317,7 +317,10 @@ resource "google_cloud_run_v2_service" "hub" {
 
   deletion_protection = false
 
-  depends_on = [time_sleep.wait_for_apis]
+  depends_on = [
+    time_sleep.wait_for_apis,
+    google_project_iam_member.hub_firestore_user,
+  ]
 
   template {
     service_account = google_service_account.hub_runtime.email
@@ -518,7 +521,10 @@ resource "google_project_iam_member" "eventarc_pubsub_publisher" {
 
 # Eventarc Trigger for Firestore /outbox
 resource "google_eventarc_trigger" "outbox_trigger" {
-  depends_on              = [google_project_iam_member.eventarc_pubsub_publisher]
+  depends_on = [
+    google_project_iam_member.eventarc_pubsub_publisher,
+    google_project_iam_member.eventarc_receiver,
+  ]
   project                 = var.project_id
   name                    = "shovel-trigger${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   location                = var.region
