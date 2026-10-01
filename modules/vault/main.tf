@@ -18,12 +18,8 @@ resource "time_sleep" "wait_for_vault_apis" {
   create_duration = "30s"
 }
 
-resource "random_id" "suffix" {
-  byte_length = 2
-}
-
 resource "google_service_account" "vault_sa" {
-  account_id   = "supercargo-vault-${random_id.suffix.hex}"
+  account_id   = "vault-sa${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   display_name = "Supercargo Vault Service Account"
   project      = var.project_id
   depends_on   = [time_sleep.wait_for_vault_apis]
@@ -31,7 +27,7 @@ resource "google_service_account" "vault_sa" {
 
 resource "google_secret_manager_secret" "vault_master_key" {
   project   = var.project_id
-  secret_id = "supercargo-vault-master-key-${random_id.suffix.hex}"
+  secret_id = "supercargo-vault-master-key${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   replication {
     auto {}
   }
@@ -56,7 +52,7 @@ resource "google_secret_manager_secret_iam_member" "vault_sa_secret_accessor" {
 
 resource "google_secret_manager_secret" "global_pepper" {
   project   = var.project_id
-  secret_id = "supercargo-vault-global-pepper-${random_id.suffix.hex}"
+  secret_id = "supercargo-vault-global-pepper${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   replication {
     auto {}
   }
@@ -151,14 +147,14 @@ resource "google_pubsub_topic_iam_member" "vault_pubsub_publisher" {
 }
 
 resource "google_pubsub_topic" "key_created" {
-  name       = "com.supercargo.security.key_created.v1-${random_id.suffix.hex}"
+  name       = "key-created${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   project    = var.project_id
   depends_on = [time_sleep.wait_for_vault_apis]
 }
 
 resource "google_cloud_run_v2_service" "vault" {
   provider = google-beta
-  name     = "${var.service_name}-${random_id.suffix.hex}"
+  name     = "${var.service_name}${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   location = var.region
   project  = var.project_id
 

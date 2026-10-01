@@ -1,7 +1,3 @@
-resource "random_id" "suffix" {
-  byte_length = 2
-}
-
 locals {
   bq_location                  = var.bigquery_location != "" ? var.bigquery_location : var.region
   default_dataform_sink_filter = "resource.type = \"dataform.googleapis.com/Repository\" AND (jsonPayload.terminalState:* OR protoPayload.@type = \"type.googleapis.com/google.cloud.dataform.v1alpha2.WorkflowInvocation\" OR jsonPayload.@type = \"type.googleapis.com/google.cloud.dataform.logging.v1.WorkflowInvocationCompletionLogEntry\" OR jsonPayload.@type = \"type.googleapis.com/google.cloud.dataform.v1alpha2.WorkflowInvocationCompletionLogEntry\")"
@@ -272,7 +268,7 @@ resource "time_sleep" "wait_for_apis" {
 
 resource "google_service_account" "hub_runtime" {
   project      = var.project_id
-  account_id   = "hub-runtime-${random_id.suffix.hex}"
+  account_id   = "hub-runtime-sa${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   display_name = "Hub Runtime Service Account"
   depends_on   = [time_sleep.wait_for_apis]
 }
@@ -305,7 +301,7 @@ resource "google_service_account_iam_member" "hub_token_creator" {
 resource "google_cloud_run_v2_service" "hub" {
   provider = google-beta
   project  = var.project_id
-  name     = "hub-${random_id.suffix.hex}"
+  name     = "hub${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   location = var.region
 
   launch_stage = "BETA"
@@ -414,7 +410,7 @@ resource "google_cloud_run_v2_service" "hub" {
 # Metadata Shovel Service Account
 resource "google_service_account" "shovel_runtime" {
   project      = var.project_id
-  account_id   = "metadata-shovel-sa-${random_id.suffix.hex}"
+  account_id   = "metadata-shovel-sa${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   display_name = "Metadata Shovel Runtime Service Account"
 }
 
@@ -437,7 +433,7 @@ resource "google_project_iam_member" "shovel_firestore_user" {
 resource "google_cloud_run_v2_service" "shovel" {
   provider            = google-beta
   project             = var.project_id
-  name                = "metadata-shovel-${random_id.suffix.hex}"
+  name                = "metadata-shovel${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   location            = var.region
   ingress             = "INGRESS_TRAFFIC_INTERNAL_ONLY" # Triggered by Eventarc only
   deletion_protection = false
@@ -494,7 +490,7 @@ resource "google_cloud_run_v2_service_iam_member" "eventarc_invoker" {
 # Service Account for Eventarc Trigger
 resource "google_service_account" "eventarc_trigger_sa" {
   project      = var.project_id
-  account_id   = "eventarc-trigger-sa-${random_id.suffix.hex}"
+  account_id   = "eventarc-sa${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   display_name = "Eventarc Trigger Service Account"
 }
 
@@ -524,7 +520,7 @@ resource "google_project_iam_member" "eventarc_pubsub_publisher" {
 resource "google_eventarc_trigger" "outbox_trigger" {
   depends_on              = [google_project_iam_member.eventarc_pubsub_publisher]
   project                 = var.project_id
-  name                    = "metadata-shovel-trigger-${random_id.suffix.hex}"
+  name                    = "shovel-trigger${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   location                = var.region
   event_data_content_type = "application/protobuf"
 
@@ -662,7 +658,7 @@ resource "google_bigquery_dataset_iam_member" "pubsub_audit_bq_metadata" {
 resource "google_pubsub_subscription" "outbox_audit_bq" {
   count   = var.enable_audit_sink ? 1 : 0
   project = var.project_id
-  name    = "supercargo-audit-bq-${random_id.suffix.hex}"
+  name    = "supercargo-audit-bq${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   topic   = var.control_plane_topic
 
   expiration_policy {
@@ -842,7 +838,7 @@ resource "google_bigquery_table" "asset_health_history" {
 resource "google_pubsub_subscription" "health_events_bq" {
   count   = var.enable_health_mesh ? 1 : 0
   project = var.project_id
-  name    = "supercargo-health-events-bq-${random_id.suffix.hex}"
+  name    = "supercargo-health-events-bq${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   topic   = google_pubsub_topic.health_events[0].name
 
   expiration_policy {
@@ -886,17 +882,17 @@ EOF
 
 resource "google_pubsub_topic" "events" {
   project = var.project_id
-  name    = "supercargo-events-${random_id.suffix.hex}"
+  name    = "supercargo-events${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
 }
 
 resource "google_pubsub_topic" "contract_changed" {
   project = var.project_id
-  name    = "catalog-contract-changed-${random_id.suffix.hex}"
+  name    = "catalog-contract-changed${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
 }
 
 resource "google_pubsub_topic" "contract_deleted" {
   project = var.project_id
-  name    = "catalog-contract-deleted-${random_id.suffix.hex}"
+  name    = "catalog-contract-deleted${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
 }
 
 resource "google_pubsub_topic_iam_member" "shovel_events_publisher" {
@@ -936,7 +932,7 @@ resource "google_pubsub_topic_iam_member" "hub_contract_deleted_publisher" {
 
 resource "google_service_account" "events_invoker" {
   project      = var.project_id
-  account_id   = "hub-events-invoker-${random_id.suffix.hex}"
+  account_id   = "events-invoker-sa${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   display_name = "Hub Alert Relay Push Invoker"
 }
 
@@ -956,7 +952,7 @@ resource "google_service_account_iam_member" "pubsub_events_invoker_token_creato
 
 resource "google_pubsub_subscription" "events_push" {
   project = var.project_id
-  name    = "hub-events-push-${random_id.suffix.hex}"
+  name    = "hub-events-push${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   topic   = google_pubsub_topic.events.name
 
   ack_deadline_seconds = 60
@@ -991,7 +987,7 @@ resource "google_pubsub_subscription" "events_push" {
 resource "google_service_account" "mcp_runtime" {
   count        = var.mcp_enabled ? 1 : 0
   project      = var.project_id
-  account_id   = "supercargo-mcp-sa-${random_id.suffix.hex}"
+  account_id   = "supercargo-mcp-sa${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   display_name = "Supercargo MCP Companion Runtime Service Account"
   depends_on   = [time_sleep.wait_for_apis]
 }
@@ -1009,7 +1005,7 @@ resource "google_cloud_run_v2_service" "mcp" {
   count               = var.mcp_enabled ? 1 : 0
   provider            = google-beta
   project             = var.project_id
-  name                = "supercargo-mcp-${random_id.suffix.hex}"
+  name                = "supercargo-mcp${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   location            = var.region
   ingress             = var.ingress_type
   custom_audiences    = var.mcp_oidc_audience != "" ? [var.mcp_oidc_audience] : (var.oidc_audience != "" ? [var.oidc_audience] : [])
@@ -1142,7 +1138,7 @@ resource "google_pubsub_topic" "dataform_events_dlq" {
 resource "google_logging_project_sink" "dataform_events" {
   count                  = var.enable_dataform_integration ? 1 : 0
   project                = var.project_id
-  name                   = "supercargo-dataform-events-sink-${random_id.suffix.hex}"
+  name                   = "supercargo-dataform-events-sink${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   destination            = "pubsub.googleapis.com/${google_pubsub_topic.dataform_events[0].id}"
   filter                 = var.dataform_sink_filter != "" ? var.dataform_sink_filter : local.default_dataform_sink_filter
   unique_writer_identity = true
@@ -1159,7 +1155,7 @@ resource "google_pubsub_topic_iam_member" "dataform_sink_publisher" {
 resource "google_pubsub_subscription" "dataform_events_push" {
   count   = var.enable_dataform_integration ? 1 : 0
   project = var.project_id
-  name    = "hub-dataform-events-push-${random_id.suffix.hex}"
+  name    = "hub-dataform-events-push${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
   topic   = google_pubsub_topic.dataform_events[0].name
 
   ack_deadline_seconds = 60

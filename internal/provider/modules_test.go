@@ -3,6 +3,7 @@ package provider
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -1038,8 +1039,8 @@ func TestModules_HubDataformIntegration(t *testing.T) {
 		if !strings.Contains(sinkChunk, "count") || !strings.Contains(sinkChunk, "var.enable_dataform_integration") {
 			t.Errorf("dataform_events sink missing count = var.enable_dataform_integration guard")
 		}
-		if !strings.Contains(sinkChunk, `"supercargo-dataform-events-sink-${random_id.suffix.hex}"`) {
-			t.Errorf("dataform_events sink name must use \"supercargo-dataform-events-sink-${random_id.suffix.hex}\"")
+		if !strings.Contains(sinkChunk, `"supercargo-dataform-events-sink${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
+			t.Errorf("dataform_events sink name must use \"supercargo-dataform-events-sink${var.name_suffix != \"\" ? \"-${var.name_suffix}\" : \"\"}\"")
 		}
 		if !strings.Contains(sinkChunk, `"pubsub.googleapis.com/${google_pubsub_topic.dataform_events[0].id}"`) {
 			t.Errorf("dataform_events sink destination must target google_pubsub_topic.dataform_events[0].id")
@@ -1090,8 +1091,8 @@ func TestModules_HubDataformIntegration(t *testing.T) {
 		if !strings.Contains(subChunk, "count") || !strings.Contains(subChunk, "var.enable_dataform_integration") {
 			t.Errorf("dataform_events_push subscription missing count = var.enable_dataform_integration guard")
 		}
-		if !strings.Contains(subChunk, `"hub-dataform-events-push-${random_id.suffix.hex}"`) {
-			t.Errorf("dataform_events_push subscription name must use \"hub-dataform-events-push-${random_id.suffix.hex}\"")
+		if !strings.Contains(subChunk, `"hub-dataform-events-push${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
+			t.Errorf("dataform_events_push subscription name must use \"hub-dataform-events-push${var.name_suffix != \"\" ? \"-${var.name_suffix}\" : \"\"}\"")
 		}
 		if !strings.Contains(subChunk, "google_pubsub_topic.dataform_events[0].name") {
 			t.Errorf("dataform_events_push subscription topic must use google_pubsub_topic.dataform_events[0].name")
@@ -1350,7 +1351,7 @@ func TestModules_GatewayDLQMonitoring(t *testing.T) {
 		if !strings.Contains(chunk, `combiner     = "OR"`) && !strings.Contains(chunk, `combiner = "OR"`) {
 			t.Errorf("dlq_undelivered_messages combiner must be \"OR\"")
 		}
-		if !strings.Contains(chunk, `[Tier 1] DLQ Quarantined Messages Backlog (${var.product_id}) - ${random_id.suffix.hex}`) {
+		if !strings.Contains(chunk, `[Tier 1] DLQ Quarantined Messages Backlog (${var.product_id})`) {
 			t.Errorf("dlq_undelivered_messages display_name must follow Tier 1 convention")
 		}
 		if !strings.Contains(chunk, `resource.type = \"pubsub_subscription\"`) && !strings.Contains(chunk, `resource.type=\"pubsub_subscription\"`) {
@@ -1428,7 +1429,7 @@ func TestModules_GatewayDLQMonitoring(t *testing.T) {
 		if !strings.Contains(chunk, `combiner     = "OR"`) && !strings.Contains(chunk, `combiner = "OR"`) {
 			t.Errorf("dlq_message_age combiner must be \"OR\"")
 		}
-		if !strings.Contains(chunk, `[Tier 1] DLQ Message Latency Exceeded (${var.product_id}) - ${random_id.suffix.hex}`) {
+		if !strings.Contains(chunk, `[Tier 1] DLQ Message Latency Exceeded (${var.product_id})`) {
 			t.Errorf("dlq_message_age display_name must follow Tier 1 convention")
 		}
 		if !strings.Contains(chunk, `resource.type = \"pubsub_subscription\"`) && !strings.Contains(chunk, `resource.type=\"pubsub_subscription\"`) {
@@ -1771,4 +1772,187 @@ func TestModules_CloudRunProbes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestModules_PlanTimeDeterministicNamingAndSuffix(t *testing.T) {
+	modulesDir := "../../modules"
+
+	t.Run("AbsenceOfRandomIdSuffixInModules", func(t *testing.T) {
+		targets := []string{"hub", "vault", "gateway"}
+		for _, mod := range targets {
+			mainPath := filepath.Join(modulesDir, mod, "main.tf")
+			b, err := os.ReadFile(mainPath)
+			if err != nil {
+				t.Fatalf("Failed to read %s: %v", mainPath, err)
+			}
+			content := string(b)
+			if strings.Contains(content, `resource "random_id" "suffix"`) {
+				t.Errorf("Module %s must not contain resource \"random_id\" \"suffix\"", mod)
+			}
+			if strings.Contains(content, "random_id.suffix") {
+				t.Errorf("Module %s must not reference random_id.suffix", mod)
+			}
+		}
+	})
+
+	t.Run("NameSuffixVariableDeclaredWithEmptyDefault", func(t *testing.T) {
+		targets := []string{"hub", "vault", "gateway"}
+		for _, mod := range targets {
+			varPath := filepath.Join(modulesDir, mod, "variables.tf")
+			b, err := os.ReadFile(varPath)
+			if err != nil {
+				t.Fatalf("Failed to read %s: %v", varPath, err)
+			}
+			content := string(b)
+			if !strings.Contains(content, `variable "name_suffix"`) {
+				t.Errorf("Module %s missing variable \"name_suffix\"", mod)
+			}
+			chunk := extractHCLBlock(content, `variable "name_suffix"`)
+			if !strings.Contains(chunk, `type        = string`) && !strings.Contains(chunk, `type = string`) {
+				t.Errorf("Module %s variable \"name_suffix\" must be type string", mod)
+			}
+			if !strings.Contains(chunk, `default     = ""`) && !strings.Contains(chunk, `default = ""`) {
+				t.Errorf("Module %s variable \"name_suffix\" must default to \"\"", mod)
+			}
+		}
+	})
+
+	t.Run("GatewayServiceAccountIdVariableDeclared", func(t *testing.T) {
+		varPath := filepath.Join(modulesDir, "gateway", "variables.tf")
+		b, err := os.ReadFile(varPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", varPath, err)
+		}
+		content := string(b)
+		if !strings.Contains(content, `variable "service_account_id"`) {
+			t.Errorf("gateway/variables.tf missing variable \"service_account_id\"")
+		}
+		chunk := extractHCLBlock(content, `variable "service_account_id"`)
+		if !strings.Contains(chunk, `type        = string`) && !strings.Contains(chunk, `type = string`) {
+			t.Errorf("gateway variable \"service_account_id\" must be type string")
+		}
+		if !strings.Contains(chunk, `default     = ""`) && !strings.Contains(chunk, `default = ""`) {
+			t.Errorf("gateway variable \"service_account_id\" must default to \"\"")
+		}
+	})
+
+	t.Run("BaseServiceAccountIDsWithin30CharLimit", func(t *testing.T) {
+		files := []string{
+			filepath.Join(modulesDir, "hub", "main.tf"),
+			filepath.Join(modulesDir, "vault", "main.tf"),
+			filepath.Join(modulesDir, "gateway", "main.tf"),
+			filepath.Join(modulesDir, "gateway", "subscriptions.tf"),
+		}
+
+		saPattern := regexp.MustCompile(`account_id\s*=\s*(?:var\.service_account_id\s*!=\s*""\s*\?\s*var\.service_account_id\s*:\s*)?"([^"${]+)`)
+
+		count := 0
+		for _, f := range files {
+			b, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatalf("Failed to read %s: %v", f, err)
+			}
+			matches := saPattern.FindAllStringSubmatch(string(b), -1)
+			for _, m := range matches {
+				count++
+				basePrefix := m[1]
+				if len(basePrefix) > 30 {
+					t.Errorf("File %s: base service account prefix %q exceeds 30 chars (len=%d)", f, basePrefix, len(basePrefix))
+				}
+				if len(basePrefix) > 20 {
+					t.Errorf("File %s: base service account prefix %q is too long (%d chars) to safely accommodate a branch suffix", f, basePrefix, len(basePrefix))
+				}
+			}
+		}
+		if count < 7 {
+			t.Errorf("Expected at least 7 service accounts verified across modules, found %d", count)
+		}
+	})
+
+	t.Run("HubResourcesDeterministicNaming", func(t *testing.T) {
+		mainPath := filepath.Join(modulesDir, "hub", "main.tf")
+		b, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		content := string(b)
+
+		// Check service account IDs
+		if !strings.Contains(content, `"hub-runtime-sa${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
+			t.Errorf("hub_runtime service account ID must be plan-time deterministic with name_suffix")
+		}
+		if !strings.Contains(content, `"metadata-shovel-sa${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
+			t.Errorf("shovel_runtime service account ID must be plan-time deterministic with name_suffix")
+		}
+		if !strings.Contains(content, `"eventarc-sa${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
+			t.Errorf("eventarc_trigger_sa service account ID must be eventarc-sa with name_suffix")
+		}
+		if !strings.Contains(content, `"events-invoker-sa${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
+			t.Errorf("events_invoker service account ID must be events-invoker-sa with name_suffix")
+		}
+		if !strings.Contains(content, `"supercargo-mcp-sa${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
+			t.Errorf("mcp_runtime service account ID must be supercargo-mcp-sa with name_suffix")
+		}
+
+		// Check Cloud Run service names
+		if !strings.Contains(content, `"hub${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
+			t.Errorf("hub Cloud Run service name must be hub with name_suffix")
+		}
+		if !strings.Contains(content, `"metadata-shovel${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
+			t.Errorf("shovel Cloud Run service name must be metadata-shovel with name_suffix")
+		}
+		if !strings.Contains(content, `"supercargo-mcp${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
+			t.Errorf("mcp Cloud Run service name must be supercargo-mcp with name_suffix")
+		}
+	})
+
+	t.Run("VaultResourcesDeterministicNaming", func(t *testing.T) {
+		mainPath := filepath.Join(modulesDir, "vault", "main.tf")
+		b, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		content := string(b)
+
+		if !strings.Contains(content, `"vault-sa${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
+			t.Errorf("vault_sa service account ID must be vault-sa with name_suffix")
+		}
+		if !strings.Contains(content, `"${var.service_name}${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
+			t.Errorf("vault Cloud Run service name must be var.service_name with name_suffix")
+		}
+		if !strings.Contains(content, `"supercargo-vault-master-key${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
+			t.Errorf("vault_master_key secret_id must be supercargo-vault-master-key with name_suffix")
+		}
+		if !strings.Contains(content, `"supercargo-vault-global-pepper${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
+			t.Errorf("global_pepper secret_id must be supercargo-vault-global-pepper with name_suffix")
+		}
+		if !strings.Contains(content, `"key-created${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
+			t.Errorf("key_created topic name must be key-created with name_suffix")
+		}
+	})
+
+	t.Run("GatewayResourcesDeterministicNaming", func(t *testing.T) {
+		mainPath := filepath.Join(modulesDir, "gateway", "main.tf")
+		b, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		content := string(b)
+
+		if !strings.Contains(content, `var.service_account_id != "" ? var.service_account_id : "gateway-${var.product_id}-sa${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
+			t.Errorf("gateway service account must support var.service_account_id override or default to gateway-${var.product_id}-sa with name_suffix")
+		}
+		if !strings.Contains(content, `"gateway-${var.product_id}${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
+			t.Errorf("gateway Cloud Run service name must be gateway-${var.product_id} with name_suffix")
+		}
+		if !strings.Contains(content, `"raw-${var.product_id}${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
+			t.Errorf("raw topic name must be raw-${var.product_id} with name_suffix")
+		}
+		if !strings.Contains(content, `"clean-${var.product_id}${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
+			t.Errorf("clean topic name must be clean-${var.product_id} with name_suffix")
+		}
+		if !strings.Contains(content, `"dlq-${var.product_id}${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
+			t.Errorf("dlq topic name must be dlq-${var.product_id} with name_suffix")
+		}
+	})
 }
