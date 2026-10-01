@@ -3,6 +3,7 @@ package provider
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -1836,18 +1837,35 @@ func TestModules_PlanTimeDeterministicNamingAndSuffix(t *testing.T) {
 	})
 
 	t.Run("BaseServiceAccountIDsWithin30CharLimit", func(t *testing.T) {
-		baseSAs := map[string]string{
-			"hub_runtime":         "hub-runtime-sa",
-			"metadata_shovel":     "metadata-shovel-sa",
-			"eventarc_trigger_sa": "eventarc-sa",
-			"events_invoker":      "events-invoker-sa",
-			"mcp_runtime":         "supercargo-mcp-sa",
-			"vault_sa":            "vault-sa",
+		files := []string{
+			filepath.Join(modulesDir, "hub", "main.tf"),
+			filepath.Join(modulesDir, "vault", "main.tf"),
+			filepath.Join(modulesDir, "gateway", "main.tf"),
+			filepath.Join(modulesDir, "gateway", "subscriptions.tf"),
 		}
-		for name, accountID := range baseSAs {
-			if len(accountID) > 30 {
-				t.Errorf("Base service account %s ID %q exceeds GCP 30-character limit (len=%d)", name, accountID, len(accountID))
+
+		saPattern := regexp.MustCompile(`account_id\s*=\s*(?:var\.service_account_id\s*!=\s*""\s*\?\s*var\.service_account_id\s*:\s*)?"([^"${]+)`)
+
+		count := 0
+		for _, f := range files {
+			b, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatalf("Failed to read %s: %v", f, err)
 			}
+			matches := saPattern.FindAllStringSubmatch(string(b), -1)
+			for _, m := range matches {
+				count++
+				basePrefix := m[1]
+				if len(basePrefix) > 30 {
+					t.Errorf("File %s: base service account prefix %q exceeds 30 chars (len=%d)", f, basePrefix, len(basePrefix))
+				}
+				if len(basePrefix) > 20 {
+					t.Errorf("File %s: base service account prefix %q is too long (%d chars) to safely accommodate a branch suffix", f, basePrefix, len(basePrefix))
+				}
+			}
+		}
+		if count < 7 {
+			t.Errorf("Expected at least 7 service accounts verified across modules, found %d", count)
 		}
 	})
 
