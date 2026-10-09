@@ -1956,3 +1956,32 @@ func TestModules_PlanTimeDeterministicNamingAndSuffix(t *testing.T) {
 		}
 	})
 }
+
+func TestModules_HubEventsPushAudience(t *testing.T) {
+	modulesDir := "../../modules"
+	hubDir := filepath.Join(modulesDir, "hub")
+	mainPath := filepath.Join(hubDir, "main.tf")
+	mainBytes, err := os.ReadFile(mainPath)
+	if err != nil {
+		t.Fatalf("Failed to read %s: %v", mainPath, err)
+	}
+	mainContent := string(mainBytes)
+
+	if !strings.Contains(mainContent, `resource "google_pubsub_subscription" "events_push"`) {
+		t.Fatalf("modules/hub/main.tf missing resource \"google_pubsub_subscription\" \"events_push\"")
+	}
+	subChunk := extractHCLBlock(mainContent, `resource "google_pubsub_subscription" "events_push"`)
+	if subChunk == "" {
+		t.Fatalf("Failed to extract events_push subscription block")
+	}
+
+	if !strings.Contains(subChunk, `"${google_cloud_run_v2_service.hub.uri}/v1/internal/events"`) {
+		t.Errorf("events_push subscription must push to ${google_cloud_run_v2_service.hub.uri}/v1/internal/events")
+	}
+	if !strings.Contains(subChunk, "google_service_account.events_invoker.email") {
+		t.Errorf("events_push subscription must use google_service_account.events_invoker.email for oidc_token")
+	}
+	if !strings.Contains(subChunk, "var.oidc_audience != \"\" ? var.oidc_audience : google_cloud_run_v2_service.hub.uri") {
+		t.Errorf("events_push subscription oidc audience must fallback to google_cloud_run_v2_service.hub.uri when var.oidc_audience is empty")
+	}
+}
