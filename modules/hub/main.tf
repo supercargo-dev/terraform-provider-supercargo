@@ -967,7 +967,7 @@ resource "google_pubsub_subscription" "events_push" {
     push_endpoint = "${google_cloud_run_v2_service.hub.uri}/v1/internal/events"
     oidc_token {
       service_account_email = google_service_account.events_invoker.email
-      audience              = google_cloud_run_v2_service.hub.uri
+      audience              = var.oidc_audience != "" ? var.oidc_audience : google_cloud_run_v2_service.hub.uri
     }
   }
 
