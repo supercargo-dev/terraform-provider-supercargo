@@ -249,5 +249,8 @@ variable "name_suffix" {
   default     = ""
 }
 
-
-
+variable "shovel_oidc_audience" {
+  description = "The expected audience for metadata shovel OIDC tokens. Falls back to oidc_audience or supercargo-metadata-shovel-<env>."
+  type        = string
+  default     = ""
+}
