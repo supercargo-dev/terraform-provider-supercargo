@@ -458,6 +458,10 @@ resource "google_cloud_run_v2_service" "shovel" {
         value = var.project_id
       }
       env {
+        name  = "SHOVEL_OIDC_AUDIENCE"
+        value = var.shovel_oidc_audience != "" ? var.shovel_oidc_audience : (var.oidc_audience != "" ? var.oidc_audience : "supercargo-metadata-shovel-${var.environment}")
+      }
+      env {
         name  = "AUTH_ENFORCE"
         value = var.auth_enforce ? "true" : "false"
       }
@@ -475,6 +479,7 @@ resource "google_cloud_run_v2_service" "shovel" {
   lifecycle {
     ignore_changes = [
       template[0].containers[0].image,
+      template[0].containers[0].env,
       client,
       client_version
     ]

@@ -1985,3 +1985,40 @@ func TestModules_HubEventsPushAudience(t *testing.T) {
 		t.Errorf("events_push subscription oidc audience must fallback to google_cloud_run_v2_service.hub.uri when var.oidc_audience is empty")
 	}
 }
+
+func TestModules_HubShovelOIDCAudienceAndLifecycle(t *testing.T) {
+	modulesDir := "../../modules"
+	hubDir := filepath.Join(modulesDir, "hub")
+	mainPath := filepath.Join(hubDir, "main.tf")
+	mainBytes, err := os.ReadFile(mainPath)
+	if err != nil {
+		t.Fatalf("Failed to read %s: %v", mainPath, err)
+	}
+	mainContent := string(mainBytes)
+
+	if !strings.Contains(mainContent, `resource "google_cloud_run_v2_service" "shovel"`) {
+		t.Fatalf("modules/hub/main.tf missing resource \"google_cloud_run_v2_service\" \"shovel\"")
+	}
+	shovelChunk := extractHCLBlock(mainContent, `resource "google_cloud_run_v2_service" "shovel"`)
+	if shovelChunk == "" {
+		t.Fatalf("Failed to extract shovel service block")
+	}
+
+	if !strings.Contains(shovelChunk, `name  = "SHOVEL_OIDC_AUDIENCE"`) {
+		t.Errorf("shovel service must define SHOVEL_OIDC_AUDIENCE env var")
+	}
+
+	if !strings.Contains(shovelChunk, `template[0].containers[0].env`) {
+		t.Errorf("shovel service lifecycle.ignore_changes must include template[0].containers[0].env")
+	}
+
+	varsPath := filepath.Join(hubDir, "variables.tf")
+	varsBytes, err := os.ReadFile(varsPath)
+	if err != nil {
+		t.Fatalf("Failed to read %s: %v", varsPath, err)
+	}
+	varsContent := string(varsBytes)
+	if !strings.Contains(varsContent, `variable "shovel_oidc_audience"`) {
+		t.Errorf("modules/hub/variables.tf missing variable \"shovel_oidc_audience\"")
+	}
+}
