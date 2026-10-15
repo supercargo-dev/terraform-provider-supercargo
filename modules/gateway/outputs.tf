@@ -29,13 +29,18 @@ output "bigquery_table_ids" {
 }
 
 output "service_account_email" {
-  description = "The email of the Gateway Service Account"
-  value       = google_service_account.gateway.email
+  description = "The email of the Gateway Service Account (plan-time deterministic)"
+  value       = local.service_account_email
+}
+
+output "service_account_id" {
+  description = "The account ID of the Gateway Service Account"
+  value       = local.service_account_id
 }
 
 output "push_invoker_service_account_email" {
-  description = "The email of the Pub/Sub Push Invoker Service Account"
-  value       = google_service_account.push_invoker.email
+  description = "The email of the Pub/Sub Push Invoker Service Account (plan-time deterministic)"
+  value       = local.push_invoker_service_account_email
 }
 
 output "raw_subscription_id" {

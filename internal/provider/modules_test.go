@@ -309,8 +309,8 @@ func TestModules_GatewayPushInvokerAndIAMEncapsulation(t *testing.T) {
 		if !strings.Contains(outputContent, `output "push_invoker_service_account_email"`) {
 			t.Errorf("modules/gateway/outputs.tf missing push_invoker_service_account_email output")
 		}
-		if !strings.Contains(outputContent, "google_service_account.push_invoker.email") {
-			t.Errorf("modules/gateway/outputs.tf push_invoker_service_account_email must reference google_service_account.push_invoker.email")
+		if !strings.Contains(outputContent, "local.push_invoker_service_account_email") && !strings.Contains(outputContent, "google_service_account.push_invoker.email") {
+			t.Errorf("modules/gateway/outputs.tf push_invoker_service_account_email must reference local.push_invoker_service_account_email or google_service_account.push_invoker.email")
 		}
 
 		if !strings.Contains(outputContent, `output "raw_subscription_id"`) {
@@ -1834,6 +1834,12 @@ func TestModules_PlanTimeDeterministicNamingAndSuffix(t *testing.T) {
 		if !strings.Contains(chunk, `default     = ""`) && !strings.Contains(chunk, `default = ""`) {
 			t.Errorf("gateway variable \"service_account_id\" must default to \"\"")
 		}
+		if !strings.Contains(chunk, "validation") {
+			t.Errorf("gateway variable \"service_account_id\" must include a validation block")
+		}
+		if !strings.Contains(chunk, "length(var.service_account_id) <= 30") {
+			t.Errorf("gateway variable \"service_account_id\" must validate length <= 30")
+		}
 	})
 
 	t.Run("BaseServiceAccountIDsWithin30CharLimit", func(t *testing.T) {
@@ -1844,7 +1850,7 @@ func TestModules_PlanTimeDeterministicNamingAndSuffix(t *testing.T) {
 			filepath.Join(modulesDir, "gateway", "subscriptions.tf"),
 		}
 
-		saPattern := regexp.MustCompile(`account_id\s*=\s*(?:var\.service_account_id\s*!=\s*""\s*\?\s*var\.service_account_id\s*:\s*)?"([^"${]+)`)
+		saPattern := regexp.MustCompile(`(?:account_id|service_account_id|push_invoker_service_account_id)\s*=\s*(?:var\.service_account_id\s*!=\s*""\s*\?\s*var\.service_account_id\s*:\s*)?"([^"${]+)`)
 
 		count := 0
 		for _, f := range files {
@@ -1939,8 +1945,8 @@ func TestModules_PlanTimeDeterministicNamingAndSuffix(t *testing.T) {
 		}
 		content := string(b)
 
-		if !strings.Contains(content, `var.service_account_id != "" ? var.service_account_id : "gateway-${var.product_id}-sa${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
-			t.Errorf("gateway service account must support var.service_account_id override or default to gateway-${var.product_id}-sa with name_suffix")
+		if !strings.Contains(content, `var.service_account_id != "" ? var.service_account_id : "gateway-${var.product_id}${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
+			t.Errorf("gateway service account must support var.service_account_id override or default to gateway-${var.product_id} with name_suffix")
 		}
 		if !strings.Contains(content, `"gateway-${var.product_id}${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
 			t.Errorf("gateway Cloud Run service name must be gateway-${var.product_id} with name_suffix")
@@ -1953,6 +1959,54 @@ func TestModules_PlanTimeDeterministicNamingAndSuffix(t *testing.T) {
 		}
 		if !strings.Contains(content, `"dlq-${var.product_id}${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
 			t.Errorf("dlq topic name must be dlq-${var.product_id} with name_suffix")
+		}
+
+		outputsPath := filepath.Join(modulesDir, "gateway", "outputs.tf")
+		ob, err := os.ReadFile(outputsPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", outputsPath, err)
+		}
+		outputsContent := string(ob)
+		if !strings.Contains(outputsContent, "value       = local.service_account_email") && !strings.Contains(outputsContent, "value = local.service_account_email") {
+			t.Errorf("gateway outputs.tf must use local.service_account_email for service_account_email output")
+		}
+		if !strings.Contains(outputsContent, "value       = local.push_invoker_service_account_email") && !strings.Contains(outputsContent, "value = local.push_invoker_service_account_email") {
+			t.Errorf("gateway outputs.tf must use local.push_invoker_service_account_email for push_invoker_service_account_email output")
+		}
+		if !strings.Contains(outputsContent, `output "service_account_id"`) {
+			t.Errorf("gateway outputs.tf missing output \"service_account_id\"")
+		}
+	})
+
+	t.Run("DataProductModuleForwardsNameSuffixAndServiceAccountId", func(t *testing.T) {
+		varsPath := filepath.Join(modulesDir, "data_product", "variables.tf")
+		vb, err := os.ReadFile(varsPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", varsPath, err)
+		}
+		varsContent := string(vb)
+		if !strings.Contains(varsContent, `variable "name_suffix"`) {
+			t.Errorf("data_product/variables.tf missing variable \"name_suffix\"")
+		}
+		if !strings.Contains(varsContent, `variable "service_account_id"`) {
+			t.Errorf("data_product/variables.tf missing variable \"service_account_id\"")
+		}
+
+		mainPath := filepath.Join(modulesDir, "data_product", "main.tf")
+		mb, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		mainContent := string(mb)
+		gatewayChunk := extractHCLBlock(mainContent, `module "gateway"`)
+		if gatewayChunk == "" {
+			t.Fatalf("Failed to extract module \"gateway\" block from data_product/main.tf")
+		}
+		if !strings.Contains(gatewayChunk, "name_suffix") || !strings.Contains(gatewayChunk, "var.name_suffix") {
+			t.Errorf("data_product module \"gateway\" must forward name_suffix = var.name_suffix")
+		}
+		if !strings.Contains(gatewayChunk, "service_account_id") || !strings.Contains(gatewayChunk, "var.service_account_id") {
+			t.Errorf("data_product module \"gateway\" must forward service_account_id = var.service_account_id")
 		}
 	})
 }

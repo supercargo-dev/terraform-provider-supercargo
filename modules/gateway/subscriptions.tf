@@ -1,6 +1,6 @@
 // Service Account for Pub/Sub to invoke Cloud Run
 resource "google_service_account" "push_invoker" {
-  account_id   = "push-invoker-${var.product_id}${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
+  account_id   = local.push_invoker_service_account_id
   display_name = "Push Invoker for ${var.product_id}"
   project      = var.project_id
 }
