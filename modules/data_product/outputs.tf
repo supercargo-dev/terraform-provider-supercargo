@@ -53,6 +53,11 @@ output "service_account_email" {
   value       = module.gateway.service_account_email
 }
 
+output "service_account_id" {
+  description = "The account ID of the Gateway Service Account"
+  value       = module.gateway.service_account_id
+}
+
 output "contracts" {
   description = "Map of auto-discovered or explicitly provided contracts"
   value       = supercargo_data_product.this.contracts
