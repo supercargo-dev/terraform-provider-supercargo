@@ -119,6 +119,8 @@ module "gateway" {
   alert_email_address                 = var.alert_email_address
   alert_pagerduty_service_key         = var.alert_pagerduty_service_key
   alert_notification_channels         = var.alert_notification_channels
+  name_suffix                         = var.name_suffix
+  service_account_id                  = var.service_account_id
 
   contracts = local.gateway_contracts
 

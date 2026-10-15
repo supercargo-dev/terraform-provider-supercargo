@@ -210,4 +210,20 @@ variable "alert_notification_channels" {
   default     = []
 }
 
+variable "name_suffix" {
+  description = "Optional deterministic suffix appended to resource names for environment/branch disambiguation. Defaults to empty."
+  type        = string
+  default     = ""
+}
+
+variable "service_account_id" {
+  description = "Optional custom service account ID for the Gateway. If unset, defaults to 'gateway-<product_id>' with optional name_suffix."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.service_account_id == "" || (length(var.service_account_id) >= 6 && length(var.service_account_id) <= 30 && can(regex("^[a-z]([-a-z0-9]*[a-z0-9])$", var.service_account_id)))
+    error_message = "The service_account_id must be between 6 and 30 characters and conform to GCP service account naming conventions."
+  }
+}
+
 

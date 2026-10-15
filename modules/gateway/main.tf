@@ -27,8 +27,15 @@ resource "time_sleep" "wait_for_gateway_apis" {
   create_duration = "30s"
 }
 
+locals {
+  service_account_id                 = var.service_account_id != "" ? var.service_account_id : "gateway-${var.product_id}${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
+  service_account_email              = "${local.service_account_id}@${var.project_id}.iam.gserviceaccount.com"
+  push_invoker_service_account_id    = "push-invoker-${var.product_id}${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
+  push_invoker_service_account_email = "${local.push_invoker_service_account_id}@${var.project_id}.iam.gserviceaccount.com"
+}
+
 resource "google_service_account" "gateway" {
-  account_id   = var.service_account_id != "" ? var.service_account_id : "gateway-${var.product_id}-sa${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
+  account_id   = local.service_account_id
   display_name = "Gateway Service Account for ${var.product_id}"
   project      = var.project_id
   depends_on   = [time_sleep.wait_for_gateway_apis]
