@@ -2367,4 +2367,3 @@ func TestModules_GlobalTelemetryShare(t *testing.T) {
 		assert.Contains(t, content, "Authorized View")
 	})
 }
-
