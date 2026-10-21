@@ -6,6 +6,9 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestModules_CloudRunLifecycleDecoupling(t *testing.T) {
@@ -2075,4 +2078,292 @@ func TestModules_HubShovelOIDCAudienceAndLifecycle(t *testing.T) {
 	if !strings.Contains(varsContent, `variable "shovel_oidc_audience"`) {
 		t.Errorf("modules/hub/variables.tf missing variable \"shovel_oidc_audience\"")
 	}
+}
+
+func findGlobalTelemetryShareModuleDir(t *testing.T) string {
+	t.Helper()
+	moduleDir := filepath.Clean(filepath.Join("..", "..", "modules", "global_telemetry_share"))
+	abs, err := filepath.Abs(moduleDir)
+	require.NoError(t, err)
+	return abs
+}
+
+func readGlobalTelemetryShareModuleFile(t *testing.T, filename string) string {
+	t.Helper()
+	moduleDir := findGlobalTelemetryShareModuleDir(t)
+	fullPath := filepath.Join(moduleDir, filename)
+	data, err := os.ReadFile(fullPath)
+	require.NoError(t, err, "failed to read module file %s at %s", filename, fullPath)
+	return string(data)
+}
+
+func TestModules_GlobalTelemetryShare(t *testing.T) {
+	moduleDir := findGlobalTelemetryShareModuleDir(t)
+	fi, err := os.Stat(moduleDir)
+	require.NoError(t, err, "module directory should exist at %s", moduleDir)
+	require.True(t, fi.IsDir(), "expected %s to be a directory", moduleDir)
+
+	t.Run("FilesExist", func(t *testing.T) {
+		expectedFiles := []string{
+			"main.tf",
+			"variables.tf",
+			"outputs.tf",
+			"versions.tf",
+			"README.md",
+		}
+
+		for _, file := range expectedFiles {
+			t.Run(file, func(t *testing.T) {
+				path := filepath.Join(moduleDir, file)
+				f, err := os.Stat(path)
+				require.NoError(t, err, "file %s should exist in module", file)
+				assert.False(t, f.IsDir(), "file %s should not be a directory", file)
+			})
+		}
+	})
+
+	t.Run("Variables", func(t *testing.T) {
+		content := readGlobalTelemetryShareModuleFile(t, "variables.tf")
+
+		tests := []struct {
+			name     string
+			expected []string
+		}{
+			{
+				name: "project_id variable",
+				expected: []string{
+					`variable "project_id"`,
+					`type        = string`,
+				},
+			},
+			{
+				name: "dataset_id variable with default",
+				expected: []string{
+					`variable "dataset_id"`,
+					`type        = string`,
+					`default     = "supercargo_global_telemetry"`,
+				},
+			},
+			{
+				name: "internal_dataset_id variable with default",
+				expected: []string{
+					`variable "internal_dataset_id"`,
+					`type        = string`,
+					`default     = "supercargo_intelligence_internal"`,
+				},
+			},
+			{
+				name: "github_dataset_id variable with default",
+				expected: []string{
+					`variable "github_dataset_id"`,
+					`type        = string`,
+					`default     = "supercargo_github"`,
+				},
+			},
+			{
+				name: "enable_global_telemetry_share variable with default",
+				expected: []string{
+					`variable "enable_global_telemetry_share"`,
+					`type        = bool`,
+					`default     = true`,
+				},
+			},
+			{
+				name: "supercargo_reader_principal variable with default",
+				expected: []string{
+					`variable "supercargo_reader_principal"`,
+					`type        = string`,
+					`default     = "serviceAccount:telemetry-reader@supercargo-global.iam.gserviceaccount.com"`,
+				},
+			},
+			{
+				name: "location variable with default",
+				expected: []string{
+					`variable "location"`,
+					`type        = string`,
+					`default     = "EU"`,
+				},
+			},
+			{
+				name: "enable_analytics_hub_listing variable with default",
+				expected: []string{
+					`variable "enable_analytics_hub_listing"`,
+					`type        = bool`,
+					`default     = false`,
+				},
+			},
+			{
+				name: "data_exchange_id variable",
+				expected: []string{
+					`variable "data_exchange_id"`,
+					`type        = string`,
+				},
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				for _, exp := range tc.expected {
+					assert.Contains(t, content, exp)
+				}
+			})
+		}
+	})
+
+	t.Run("Resources", func(t *testing.T) {
+		content := readGlobalTelemetryShareModuleFile(t, "main.tf")
+
+		tests := []struct {
+			name     string
+			snippets []string
+		}{
+			{
+				name: "google_bigquery_dataset global_telemetry",
+				snippets: []string{
+					`resource "google_bigquery_dataset" "global_telemetry"`,
+					`var.enable_global_telemetry_share ? 1 : 0`,
+					`project                    = var.project_id`,
+					`dataset_id                 = var.dataset_id`,
+					`location                   = var.location`,
+					`delete_contents_on_destroy = true`,
+					`governance = "supercargo"`,
+					`component  = "global_telemetry_share"`,
+				},
+			},
+			{
+				name: "google_bigquery_dataset_access supercargo_reader_access",
+				snippets: []string{
+					`resource "google_bigquery_dataset_access" "supercargo_reader_access"`,
+					`var.enable_global_telemetry_share ? 1 : 0`,
+					`role       = "roles/bigquery.dataViewer"`,
+					`iam_member = var.supercargo_reader_principal`,
+					`depends_on = [google_bigquery_dataset.global_telemetry]`,
+				},
+			},
+			{
+				name: "google_bigquery_dataset_access authorized_view on internal dataset",
+				snippets: []string{
+					`resource "google_bigquery_dataset_access" "authorized_view"`,
+					`var.enable_global_telemetry_share ? 1 : 0`,
+					`dataset_id = var.internal_dataset_id`,
+					`view {`,
+					`project_id = var.project_id`,
+					`dataset_id = var.dataset_id`,
+					`table_id   = "global_telemetry_digest"`,
+					`depends_on = [google_bigquery_dataset.global_telemetry]`,
+				},
+			},
+			{
+				name: "google_bigquery_dataset_access authorized_view_github on github dataset",
+				snippets: []string{
+					`resource "google_bigquery_dataset_access" "authorized_view_github"`,
+					`var.enable_global_telemetry_share ? 1 : 0`,
+					`dataset_id = var.github_dataset_id`,
+					`view {`,
+					`project_id = var.project_id`,
+					`dataset_id = var.dataset_id`,
+					`table_id   = "global_telemetry_digest"`,
+					`depends_on = [google_bigquery_dataset.global_telemetry]`,
+				},
+			},
+			{
+				name: "google_bigquery_analytics_hub_listing telemetry_listing with sanitized listing_id",
+				snippets: []string{
+					`resource "google_bigquery_analytics_hub_listing" "telemetry_listing"`,
+					`var.enable_global_telemetry_share && var.enable_analytics_hub_listing ? 1 : 0`,
+					`data_exchange_id = var.data_exchange_id`,
+					`listing_id       = "telemetry_digest_${replace(var.project_id, "-", "_")}"`,
+					`bigquery_dataset {`,
+					`dataset = "projects/${var.project_id}/datasets/${var.dataset_id}"`,
+					`depends_on = [google_bigquery_dataset.global_telemetry]`,
+				},
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				for _, snippet := range tc.snippets {
+					assert.Contains(t, content, snippet)
+				}
+			})
+		}
+	})
+
+	t.Run("Outputs", func(t *testing.T) {
+		content := readGlobalTelemetryShareModuleFile(t, "outputs.tf")
+
+		tests := []struct {
+			name     string
+			snippets []string
+		}{
+			{
+				name: "dataset_id output",
+				snippets: []string{
+					`output "dataset_id"`,
+					`try(google_bigquery_dataset.global_telemetry[0].dataset_id, null)`,
+				},
+			},
+			{
+				name: "dataset_access_id output",
+				snippets: []string{
+					`output "dataset_access_id"`,
+					`try(google_bigquery_dataset_access.supercargo_reader_access[0].id, null)`,
+				},
+			},
+			{
+				name: "authorized_view_access_id output",
+				snippets: []string{
+					`output "authorized_view_access_id"`,
+					`try(google_bigquery_dataset_access.authorized_view[0].id, null)`,
+				},
+			},
+			{
+				name: "authorized_view_github_access_id output",
+				snippets: []string{
+					`output "authorized_view_github_access_id"`,
+					`try(google_bigquery_dataset_access.authorized_view_github[0].id, null)`,
+				},
+			},
+			{
+				name: "analytics_hub_listing_id output",
+				snippets: []string{
+					`output "analytics_hub_listing_id"`,
+					`try(google_bigquery_analytics_hub_listing.telemetry_listing[0].id, null)`,
+				},
+			},
+			{
+				name: "sharing_enabled output",
+				snippets: []string{
+					`output "sharing_enabled"`,
+					`var.enable_global_telemetry_share`,
+				},
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				for _, snippet := range tc.snippets {
+					assert.Contains(t, content, snippet)
+				}
+			})
+		}
+	})
+
+	t.Run("Versions", func(t *testing.T) {
+		content := readGlobalTelemetryShareModuleFile(t, "versions.tf")
+
+		assert.True(t, strings.Contains(content, `required_version = ">= 1.5.0"`) || strings.Contains(content, `required_version = ">= 1.5"`))
+		assert.Contains(t, content, `hashicorp/google`)
+		assert.Contains(t, content, `>= 5.0.0, < 8.0.0`)
+	})
+
+	t.Run("Readme", func(t *testing.T) {
+		content := readGlobalTelemetryShareModuleFile(t, "README.md")
+
+		assert.Contains(t, content, "supercargo_global_telemetry")
+		assert.Contains(t, content, "supercargo_intelligence_internal")
+		assert.Contains(t, content, "supercargo_github")
+		assert.Contains(t, content, "global_telemetry_digest")
+		assert.Contains(t, content, "Authorized View")
+	})
 }

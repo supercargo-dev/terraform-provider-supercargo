@@ -15,3 +15,4 @@
 - `vault/`: Provisions the Vault service (Security Plane).
 - `gh-wif/`: Provisions Workload Identity Federation for GitHub Actions.
 - `dataplex_taxonomy/`: Provisions enterprise sensitivity taxonomies and policy tags in Google Cloud Data Catalog / Dataplex.
+- `global_telemetry_share/`: Provisions customer-side BigQuery sharing dataset, IAM reader grants, and Authorized View access for federated platform telemetry.

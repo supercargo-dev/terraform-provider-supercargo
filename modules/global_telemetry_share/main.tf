@@ -1,0 +1,67 @@
+resource "google_bigquery_dataset" "global_telemetry" {
+  count                      = var.enable_global_telemetry_share ? 1 : 0
+  project                    = var.project_id
+  dataset_id                 = var.dataset_id
+  location                   = var.location
+  description                = "Supercargo global federated platform telemetry shared dataset"
+  delete_contents_on_destroy = true
+
+  labels = {
+    governance = "supercargo"
+    component  = "global_telemetry_share"
+  }
+}
+
+resource "google_bigquery_dataset_access" "supercargo_reader_access" {
+  count      = var.enable_global_telemetry_share ? 1 : 0
+  project    = var.project_id
+  dataset_id = var.dataset_id
+  role       = "roles/bigquery.dataViewer"
+  iam_member = var.supercargo_reader_principal
+
+  depends_on = [google_bigquery_dataset.global_telemetry]
+}
+
+resource "google_bigquery_dataset_access" "authorized_view" {
+  count      = var.enable_global_telemetry_share ? 1 : 0
+  project    = var.project_id
+  dataset_id = var.internal_dataset_id
+
+  view {
+    project_id = var.project_id
+    dataset_id = var.dataset_id
+    table_id   = "global_telemetry_digest"
+  }
+
+  depends_on = [google_bigquery_dataset.global_telemetry]
+}
+
+resource "google_bigquery_dataset_access" "authorized_view_github" {
+  count      = var.enable_global_telemetry_share ? 1 : 0
+  project    = var.project_id
+  dataset_id = var.github_dataset_id
+
+  view {
+    project_id = var.project_id
+    dataset_id = var.dataset_id
+    table_id   = "global_telemetry_digest"
+  }
+
+  depends_on = [google_bigquery_dataset.global_telemetry]
+}
+
+resource "google_bigquery_analytics_hub_listing" "telemetry_listing" {
+  count            = var.enable_global_telemetry_share && var.enable_analytics_hub_listing ? 1 : 0
+  project          = var.project_id
+  location         = var.location
+  data_exchange_id = var.data_exchange_id
+  listing_id       = "telemetry_digest_${replace(var.project_id, "-", "_")}"
+  display_name     = "Supercargo Platform Telemetry Digest"
+  description      = "Pseudonymized operational telemetry shared under global-telemetry-digest contract"
+
+  bigquery_dataset {
+    dataset = "projects/${var.project_id}/datasets/${var.dataset_id}"
+  }
+
+  depends_on = [google_bigquery_dataset.global_telemetry]
+}
