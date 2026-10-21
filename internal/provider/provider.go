@@ -30,6 +30,7 @@ type SupercargoProviderModel struct {
 	HubAddress types.String `tfsdk:"hub_address"`
 	Token      types.String `tfsdk:"token"`
 	Audience   types.String `tfsdk:"audience"`
+	UseTLS     types.Bool   `tfsdk:"use_tls"`
 }
 
 // ProviderData is the data passed to data sources and resources.
@@ -60,6 +61,10 @@ func (p *SupercargoProvider) Schema(ctx context.Context, req provider.SchemaRequ
 				MarkdownDescription: "Target OIDC audience for Hub authentication (defaults to https://<hub-host>).",
 				Optional:            true,
 			},
+			"use_tls": schema.BoolAttribute{
+				MarkdownDescription: "Whether to connect to the Hub using TLS. If omitted, defaults to false for localhost/loopback addresses and true for all other hosts.",
+				Optional:            true,
+			},
 		},
 	}
 }
@@ -73,8 +78,8 @@ func (p *SupercargoProvider) Configure(ctx context.Context, req provider.Configu
 		return
 	}
 
-	if data.HubAddress.IsUnknown() || data.Token.IsUnknown() || data.Audience.IsUnknown() {
-		// HubAddress, Token, or Audience is not known yet (e.g. creating the Hub in this run).
+	if data.HubAddress.IsUnknown() || data.Token.IsUnknown() || data.Audience.IsUnknown() || data.UseTLS.IsUnknown() {
+		// HubAddress, Token, Audience, or UseTLS is not known yet (e.g. creating the Hub in this run).
 		// We can't configure the client, but we must pass ProviderData down
 		// so ModifyPlan can detect the client is nil and skip validation.
 		providerData := &ProviderData{
@@ -93,7 +98,13 @@ func (p *SupercargoProvider) Configure(ctx context.Context, req provider.Configu
 		hubAddress = "localhost:50051"
 	}
 
-	client, err := p.factory.GetClient(ctx, hubAddress, data.Token.ValueString(), data.Audience.ValueString())
+	var useTLS *bool
+	if !data.UseTLS.IsNull() && !data.UseTLS.IsUnknown() {
+		val := data.UseTLS.ValueBool()
+		useTLS = &val
+	}
+
+	client, err := p.factory.GetClientWithTLS(ctx, hubAddress, data.Token.ValueString(), data.Audience.ValueString(), useTLS)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Failed to connect to Supercargo Hub",

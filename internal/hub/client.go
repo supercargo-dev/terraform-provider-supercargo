@@ -72,12 +72,44 @@ func ResolveAudience(host, customAudience string) string {
 	return "https://" + h
 }
 
-// GetClient returns a Hub client for the given address, token, and audience.
+// IsLoopbackHost returns true if the host is localhost or a loopback IP address.
+func IsLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return true
+	}
+	return false
+}
+
+type tlsContextKey struct{}
+
+// WithTLS returns a child context with an explicit TLS configuration override.
+func WithTLS(ctx context.Context, useTLS bool) context.Context {
+	return context.WithValue(ctx, tlsContextKey{}, useTLS)
+}
+
+// GetClient returns a Hub client for the given address, token, and audience using default TLS settings.
 func (f *Factory) GetClient(ctx context.Context, address string, token string, audience string, opts ...grpc.DialOption) (*Client, error) {
+	return f.GetClientWithTLS(ctx, address, token, audience, nil, opts...)
+}
+
+// GetClientWithTLS returns a Hub client with an optional explicit TLS override.
+func (f *Factory) GetClientWithTLS(ctx context.Context, address string, token string, audience string, useTLS *bool, opts ...grpc.DialOption) (*Client, error) {
 	cleanAddress, host := SanitizeAddress(address)
 	resolvedAudience := ResolveAudience(host, audience)
 
-	cacheKey := fmt.Sprintf("%s|%s|%s", cleanAddress, token, resolvedAudience)
+	// Determine if we use TLS: default is false for localhost/loopback, true for remote hosts.
+	isLoopback := IsLoopbackHost(host)
+	useSecure := !isLoopback
+	if useTLS != nil {
+		useSecure = *useTLS
+	} else if override, ok := ctx.Value(tlsContextKey{}).(bool); ok {
+		useSecure = override
+	}
+
+	cacheKey := fmt.Sprintf("%s|%s|%s|%t", cleanAddress, token, resolvedAudience, useSecure)
 
 	f.mu.Lock()
 	if f.closed {
@@ -90,15 +122,7 @@ func (f *Factory) GetClient(ctx context.Context, address string, token string, a
 	}
 	f.mu.Unlock()
 
-	// Determine if we need OIDC (GCP environment) or insecure (localhost/loopback)
-	isLoopback := false
-	if host == "localhost" {
-		isLoopback = true
-	} else if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-		isLoopback = true
-	}
-
-	if isLoopback {
+	if !useSecure {
 		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 
 		authToken := token
@@ -115,7 +139,7 @@ func (f *Factory) GetClient(ctx context.Context, address string, token string, a
 		})
 		opts = append(opts, grpc.WithPerRPCCredentials(NewInsecureOIDCCredentials(ts)))
 	} else {
-		// Use OIDC for cloud environments
+		// Use OIDC for cloud / secure environments
 		var ts oauth2.TokenSource
 		if token != "" {
 			// If a token is explicitly provided (e.g., from an ID token data source), use it.
