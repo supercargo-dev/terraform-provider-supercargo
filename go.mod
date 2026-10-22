@@ -7,7 +7,7 @@ require (
 	github.com/hashicorp/terraform-plugin-go v0.29.0
 	github.com/hashicorp/terraform-plugin-testing v1.14.0
 	github.com/stretchr/testify v1.11.1
-	github.com/supercargo-dev/core v0.0.0-20261022103034-7d9bd4f06836
+	github.com/supercargo-dev/core v0.0.0-20261022172810-e25219776348
 	golang.org/x/oauth2 v0.36.0
 	google.golang.org/api v0.272.0
 	google.golang.org/grpc v1.83.2
