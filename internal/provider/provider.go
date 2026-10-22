@@ -125,17 +125,14 @@ func (p *SupercargoProvider) Configure(ctx context.Context, req provider.Configu
 
 func (p *SupercargoProvider) Resources(ctx context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
-		NewSupercargoIngestionGatewayResource,
 		NewSupercargoTeamResource,
-		NewSupercargoContractVersionResource,
-		NewSupercargoDataProductResource,
-		NewSupercargoGatewayConfigResource,
 	}
 }
 
 func (p *SupercargoProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewSupercargoContractDataSource,
+		NewSupercargoDataProductDataSource,
 	}
 }
 

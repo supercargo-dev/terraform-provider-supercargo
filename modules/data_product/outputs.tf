@@ -1,6 +1,6 @@
 output "product_urn" {
   description = "The URN of the registered Data Product"
-  value       = supercargo_data_product.this.urn
+  value       = data.supercargo_data_product.this.urn
 }
 
 output "gateway_service_name" {
@@ -60,7 +60,7 @@ output "service_account_id" {
 
 output "contracts" {
   description = "Map of auto-discovered or explicitly provided contracts"
-  value       = supercargo_data_product.this.contracts
+  value       = data.supercargo_data_product.this.contracts
 }
 
 output "managed_input_topics" {

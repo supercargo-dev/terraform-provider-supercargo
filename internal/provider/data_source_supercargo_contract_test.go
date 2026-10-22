@@ -13,44 +13,18 @@ func TestAccSupercargoContractDataSource_basic(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				// Step 1: Create initial version
 				Config: `
 provider "supercargo" {
   hub_address = "localhost:50051"
 }
 
-resource "supercargo_contract_version" "test" {
-  urn          = "` + contractURN + `"
-  version      = "v1.0.0"
-  content_hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-  commit_sha   = "0123456789abcdef0123456789abcdef01234567"
-  data_asset   = "go://github.com/supercargo-dev/core/test"
-  schema_json  = jsonencode([
-    {
-      name = "user_id"
-      type = "STRING"
-      mode = "REQUIRED"
-    },
-    {
-      name = "profile"
-      type = "STRUCT"
-      fields = [
-        {
-          name = "email"
-          type = "STRING"
-        }
-      ]
-    }
-  ])
-}
-
 data "supercargo_contract" "specific" {
-  id      = supercargo_contract_version.test.urn
+  id      = "` + contractURN + `"
   version = "v1.0.0"
 }
 
 data "supercargo_contract" "latest" {
-  id = supercargo_contract_version.test.urn
+  id = "` + contractURN + `"
 }
 `,
 				Check: resource.ComposeAggregateTestCheckFunc(
