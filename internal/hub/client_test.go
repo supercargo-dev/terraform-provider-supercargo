@@ -2,6 +2,9 @@ package hub
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"net"
 	"os"
 	"sync"
@@ -13,6 +16,14 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 )
+
+func hashToken(token string) string {
+	if token == "" {
+		return ""
+	}
+	h := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(h[:])
+}
 
 func TestFactory_GetClient_Concurrent(t *testing.T) {
 	lis := bufconn.Listen(1024 * 1024)
@@ -276,7 +287,8 @@ func TestFactory_GetClient_TLSDefault(t *testing.T) {
 	require.NotNil(t, c1)
 
 	factory.mu.Lock()
-	_, foundInsecure := factory.clients["localhost:50051|token-loopback|aud|false"]
+	expectedKey1 := fmt.Sprintf("localhost:50051|%s|aud|false", hashToken("token-loopback"))
+	_, foundInsecure := factory.clients[expectedKey1]
 	factory.mu.Unlock()
 	assert.True(t, foundInsecure, "localhost default should resolve to use_tls=false and be cached as ...|false")
 
@@ -286,7 +298,8 @@ func TestFactory_GetClient_TLSDefault(t *testing.T) {
 	require.NotNil(t, c2)
 
 	factory.mu.Lock()
-	_, foundIPv4Insecure := factory.clients["127.0.0.1:50051|token-ipv4|aud|false"]
+	expectedKey2 := fmt.Sprintf("127.0.0.1:50051|%s|aud|false", hashToken("token-ipv4"))
+	_, foundIPv4Insecure := factory.clients[expectedKey2]
 	factory.mu.Unlock()
 	assert.True(t, foundIPv4Insecure, "127.0.0.1 default should resolve to use_tls=false and be cached as ...|false")
 }
@@ -323,9 +336,10 @@ func TestFactory_GetClient_TLSExplicitOverride(t *testing.T) {
 	require.NotNil(t, c1)
 
 	factory.mu.Lock()
-	_, foundRemoteInsecure := factory.clients["hub.internal:50051|token-remote|aud|false"]
+	expectedKey1 := fmt.Sprintf("hub.internal:50051|%s|aud|false", hashToken("token-remote"))
+	_, foundRemoteInsecure := factory.clients[expectedKey1]
 	factory.mu.Unlock()
-	assert.True(t, foundRemoteInsecure, "explicit false on remote host must be cached as ...|false")
+	assert.True(t, foundRemoteInsecure, "explicit false on remote host must be cached with hashed token and false")
 
 	// Explicit override with WithTLS context on loopback host
 	c2, err := factory.GetClient(WithTLS(ctx, true), "localhost:50051", "token-override", "aud", opts...)
@@ -333,9 +347,10 @@ func TestFactory_GetClient_TLSExplicitOverride(t *testing.T) {
 	require.NotNil(t, c2)
 
 	factory.mu.Lock()
-	_, foundLocalSecure := factory.clients["localhost:50051|token-override|aud|true"]
+	expectedKey2 := fmt.Sprintf("localhost:50051|%s|aud|true", hashToken("token-override"))
+	_, foundLocalSecure := factory.clients[expectedKey2]
 	factory.mu.Unlock()
-	assert.True(t, foundLocalSecure, "explicit true override on loopback must be cached as ...|true")
+	assert.True(t, foundLocalSecure, "explicit true override on loopback must be cached with hashed token and true")
 
 	// Explicit override with GetClientWithTLS(&trueVal) on loopback
 	c3, err := factory.GetClientWithTLS(ctx, "localhost:50051", "token-override-arg", "aud", &trueVal, opts...)
@@ -343,9 +358,16 @@ func TestFactory_GetClient_TLSExplicitOverride(t *testing.T) {
 	require.NotNil(t, c3)
 
 	factory.mu.Lock()
-	_, foundLocalSecureArg := factory.clients["localhost:50051|token-override-arg|aud|true"]
+	expectedKey3 := fmt.Sprintf("localhost:50051|%s|aud|true", hashToken("token-override-arg"))
+	_, foundLocalSecureArg := factory.clients[expectedKey3]
+	// Verify raw tokens are never present in cache keys
+	for k := range factory.clients {
+		assert.NotContains(t, k, "token-remote", "raw secret token must never appear in client cache key")
+		assert.NotContains(t, k, "token-override", "raw secret token must never appear in client cache key")
+		assert.NotContains(t, k, "token-override-arg", "raw secret token must never appear in client cache key")
+	}
 	factory.mu.Unlock()
-	assert.True(t, foundLocalSecureArg, "GetClientWithTLS(&trueVal) on loopback must be cached as ...|true")
+	assert.True(t, foundLocalSecureArg, "GetClientWithTLS(&trueVal) on loopback must be cached with hashed token and true")
 }
 
 func TestFactory_GetClient_CacheKeyIsolation(t *testing.T) {

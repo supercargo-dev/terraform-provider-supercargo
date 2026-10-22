@@ -487,7 +487,39 @@ func TestSupercargoDataProductDataSource_Read_Fallback(t *testing.T) {
 
 		d.Read(ctx, req, &resp)
 		require.True(t, resp.Diagnostics.HasError())
-		assert.Contains(t, resp.Diagnostics.Errors()[0].Summary(), "Error fetching product from Hub")
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Summary(), "Error Reading Data Product")
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "Remediation Hint: Ensure 'sc apply' has been executed")
+	})
+
+	t.Run("Hub PermissionDenied does NOT fall back to local manifest and fails closed", func(t *testing.T) {
+		manifestPath := writeTestDataProductManifest(t, sampleDataProductManifestYAML)
+
+		mockSrv, providerData, _ := startMockHubServer(t)
+		mockSrv.mu.Lock()
+		mockSrv.GetProductHook = func(ctx context.Context, req *hubv1.GetProductRequest) (*hubv1.GetProductResponse, error) {
+			return nil, status.Error(codes.PermissionDenied, "unauthorized access to product")
+		}
+		mockSrv.mu.Unlock()
+
+		d := &supercargoDataProductDataSource{}
+		d.Configure(ctx, datasource.ConfigureRequest{ProviderData: providerData}, &datasource.ConfigureResponse{})
+
+		var schemaResp datasource.SchemaResponse
+		d.Schema(ctx, datasource.SchemaRequest{}, &schemaResp)
+
+		// Provide both ID and manifest_file
+		cfgModel := newTestConfigModel(manifestPath, "urn:supercargo:hub:product:order-events-product", "", "")
+
+		req := datasource.ReadRequest{
+			Config: newTestDataSourceConfig(ctx, t, schemaResp.Schema, cfgModel),
+		}
+		var resp datasource.ReadResponse
+		resp.State = newTestDataSourceState(ctx, t, schemaResp.Schema, cfgModel)
+
+		d.Read(ctx, req, &resp)
+		require.True(t, resp.Diagnostics.HasError(), "AuthZ failure must fail closed without falling back to local manifest")
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Summary(), "Error Reading Data Product")
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "Verify that your identity token is valid and has permissions")
 	})
 
 	t.Run("Hub nil without manifest_file returns diagnostic error", func(t *testing.T) {

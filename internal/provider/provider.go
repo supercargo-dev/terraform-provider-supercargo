@@ -106,9 +106,10 @@ func (p *SupercargoProvider) Configure(ctx context.Context, req provider.Configu
 
 	client, err := p.factory.GetClientWithTLS(ctx, hubAddress, data.Token.ValueString(), data.Audience.ValueString(), useTLS)
 	if err != nil {
+		detail := fmt.Sprintf("failed to dial hub at %s: %s\n\nHint: Remote Hub connections default to TLS (use_tls = true). If connecting to a plaintext internal or test Hub, explicitly set use_tls = false in provider \"supercargo\".", hubAddress, err)
 		resp.Diagnostics.AddError(
-			"Failed to connect to Supercargo Hub",
-			fmt.Sprintf("Unable to connect to Hub at %s: %s", hubAddress, err),
+			"Error Creating Hub Client",
+			detail,
 		)
 		return
 	}

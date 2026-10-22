@@ -307,8 +307,9 @@ func TestSupercargoProvider_Configure(t *testing.T) {
 
 		sp.Configure(ctx, req, &resp)
 		require.True(t, resp.Diagnostics.HasError())
-		assert.Contains(t, resp.Diagnostics.Errors()[0].Summary(), "Failed to connect to Supercargo Hub")
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Summary(), "Error Creating Hub Client")
 		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "hub factory is closed")
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "Remote Hub connections default to TLS")
 	})
 
 	t.Run("config get error handled gracefully", func(t *testing.T) {

@@ -2,6 +2,8 @@ package hub
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -24,7 +26,8 @@ var ErrFactoryClosed = errors.New("hub factory is closed")
 // Client handles communication with the Supercargo Hub.
 type Client struct {
 	hubv1.HubServiceClient
-	conn *grpc.ClientConn
+	conn   *grpc.ClientConn
+	target string
 }
 
 // Factory manages a pool of Hub clients.
@@ -109,7 +112,13 @@ func (f *Factory) GetClientWithTLS(ctx context.Context, address string, token st
 		useSecure = override
 	}
 
-	cacheKey := fmt.Sprintf("%s|%s|%s|%t", cleanAddress, token, resolvedAudience, useSecure)
+	tokenHash := ""
+	if token != "" {
+		h := sha256.Sum256([]byte(token))
+		tokenHash = hex.EncodeToString(h[:])
+	}
+
+	cacheKey := fmt.Sprintf("%s|%s|%s|%t", cleanAddress, tokenHash, resolvedAudience, useSecure)
 
 	f.mu.Lock()
 	if f.closed {
@@ -122,8 +131,11 @@ func (f *Factory) GetClientWithTLS(ctx context.Context, address string, token st
 	}
 	f.mu.Unlock()
 
+	dialOpts := make([]grpc.DialOption, 0, len(opts)+5)
+	dialOpts = append(dialOpts, opts...)
+
 	if !useSecure {
-		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 
 		authToken := token
 		if authToken == "" {
@@ -137,7 +149,7 @@ func (f *Factory) GetClientWithTLS(ctx context.Context, address string, token st
 			AccessToken: authToken,
 			Expiry:      time.Now().Add(1 * time.Hour),
 		})
-		opts = append(opts, grpc.WithPerRPCCredentials(NewInsecureOIDCCredentials(ts)))
+		dialOpts = append(dialOpts, grpc.WithPerRPCCredentials(NewInsecureOIDCCredentials(ts)))
 	} else {
 		// Use OIDC for cloud / secure environments
 		var ts oauth2.TokenSource
@@ -156,7 +168,7 @@ func (f *Factory) GetClientWithTLS(ctx context.Context, address string, token st
 		}
 
 		creds := NewOIDCCredentials(ts)
-		opts = append(opts,
+		dialOpts = append(dialOpts,
 			grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(nil, "")),
 			grpc.WithPerRPCCredentials(creds),
 		)
@@ -174,9 +186,9 @@ func (f *Factory) GetClientWithTLS(ctx context.Context, address string, token st
 		  }
 		}]
 	}`
-	opts = append(opts, grpc.WithDefaultServiceConfig(retryPolicy))
+	dialOpts = append(dialOpts, grpc.WithDefaultServiceConfig(retryPolicy))
 
-	conn, err := grpc.NewClient(cleanAddress, opts...)
+	conn, err := grpc.NewClient(cleanAddress, dialOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial hub at %s: %w", cleanAddress, err)
 	}
@@ -184,6 +196,7 @@ func (f *Factory) GetClientWithTLS(ctx context.Context, address string, token st
 	client := &Client{
 		HubServiceClient: hubv1.NewHubServiceClient(conn),
 		conn:             conn,
+		target:           cleanAddress,
 	}
 
 	f.mu.Lock()
@@ -214,9 +227,9 @@ func (f *Factory) Close() error {
 	f.closed = true
 
 	var errs []error
-	for addr, client := range f.clients {
+	for _, client := range f.clients {
 		if err := client.conn.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to close connection to %s: %w", addr, err))
+			errs = append(errs, fmt.Errorf("failed to close connection to %s: %w", client.target, err))
 		}
 	}
 	f.clients = make(map[string]*Client)

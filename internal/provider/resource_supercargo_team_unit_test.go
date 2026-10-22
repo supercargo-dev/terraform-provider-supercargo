@@ -574,6 +574,7 @@ func TestSupercargoTeamResource_Delete(t *testing.T) {
 		require.True(t, resp.Diagnostics.HasError())
 		assert.Contains(t, resp.Diagnostics.Errors()[0].Summary(), "Error Deleting Team")
 		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "database disk write failure")
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "Remediation Hint: Verify that your identity token belongs to the team or has platform-trust admin privileges.")
 	})
 }
 

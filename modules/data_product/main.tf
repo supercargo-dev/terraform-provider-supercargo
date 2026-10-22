@@ -20,7 +20,9 @@ locals {
     }
   }
   gateway_contracts = length(var.contracts) > 0 ? local.var_gateway_contracts : {
-    for k, c in data.supercargo_data_product.this.contracts : k => {
+    for k, c in data.supercargo_data_product.this.contracts : (
+      length(split(":", k)) > 1 ? element(split(":", k), length(split(":", k)) - 1) : k
+      ) => {
       id     = c.id
       schema = c.schema
     }

@@ -14,6 +14,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	hubv1 "github.com/supercargo-dev/core/gen/go/hub/v1"
 	"github.com/supercargo-dev/terraform-provider-supercargo/internal/manifest"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"gopkg.in/yaml.v3"
 )
@@ -296,10 +298,18 @@ func (d *supercargoDataProductDataSource) Read(ctx context.Context, req datasour
 			activeManifest = res.Manifest
 			activeContracts = res.Contracts
 		} else if err != nil {
+			st, ok := status.FromError(err)
+			if ok && (st.Code() == codes.PermissionDenied || st.Code() == codes.Unauthenticated) {
+				resp.Diagnostics.AddError(
+					"Error Reading Data Product",
+					fmt.Sprintf("Could not retrieve product %s: %s\n\nRemediation Hint: Verify that your identity token is valid and has permissions to access this data product.", productUrn, err),
+				)
+				return
+			}
 			if !hasManifest {
 				resp.Diagnostics.AddError(
-					"Error fetching product from Hub",
-					fmt.Sprintf("Could not retrieve product %s: %s", productUrn, err),
+					"Error Reading Data Product",
+					fmt.Sprintf("Could not retrieve product %s: %s\n\nRemediation Hint: Ensure 'sc apply' has been executed to publish the product to Supercargo Hub, or specify 'manifest_file' in the data source to allow local schema resolution.", productUrn, err),
 				)
 				return
 			}

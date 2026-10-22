@@ -284,7 +284,7 @@ func (r *supercargoTeamResource) Delete(ctx context.Context, req resource.Delete
 		}
 		resp.Diagnostics.AddError(
 			"Error Deleting Team",
-			fmt.Sprintf("Could not delete team '%s' from Supercargo Hub: %s", state.Name.ValueString(), status.Convert(err).Message()),
+			fmt.Sprintf("Could not delete team '%s' from Supercargo Hub: %s\n\nRemediation Hint: Verify that your identity token belongs to the team or has platform-trust admin privileges.", state.Name.ValueString(), status.Convert(err).Message()),
 		)
 		return
 	}
