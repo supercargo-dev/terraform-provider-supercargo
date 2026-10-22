@@ -32,6 +32,11 @@ resource "supercargo_team" "test" {
 					resource.TestCheckResourceAttr("supercargo_team.test", "metadata.cost_center", "1234"),
 				),
 			},
+			{
+				ResourceName:      "supercargo_team.test",
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
 		},
 	})
 }

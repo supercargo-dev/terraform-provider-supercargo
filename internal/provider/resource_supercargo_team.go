@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -18,6 +19,7 @@ import (
 // Ensure the implementation satisfies the expected interfaces.
 var _ resource.Resource = &supercargoTeamResource{}
 var _ resource.ResourceWithConfigure = &supercargoTeamResource{}
+var _ resource.ResourceWithImportState = &supercargoTeamResource{}
 
 // NewSupercargoTeamResource is a helper function to simplify the provider implementation.
 func NewSupercargoTeamResource() resource.Resource {
@@ -259,6 +261,12 @@ func (r *supercargoTeamResource) Update(ctx context.Context, req resource.Update
 
 // Delete deletes the resource and removes the Terraform state.
 func (r *supercargoTeamResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var state supercargoTeamResourceModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	if r.client == nil || r.client.HubClient == nil {
 		resp.Diagnostics.AddError(
 			"Provider Not Configured",
@@ -266,7 +274,23 @@ func (r *supercargoTeamResource) Delete(ctx context.Context, req resource.Delete
 		)
 		return
 	}
-	// Hub does not currently support team deletion via API for safety reasons,
-	// but we could implement a 'deactivate' or similar if needed.
-	// For now, we just remove from Terraform state.
+
+	_, err := r.client.HubClient.DeleteTeam(ctx, &hubv1.DeleteTeamRequest{
+		Name: state.Name.ValueString(),
+	})
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return
+		}
+		resp.Diagnostics.AddError(
+			"Error Deleting Team",
+			fmt.Sprintf("Could not delete team '%s' from Supercargo Hub: %s\n\nRemediation Hint: Verify that your identity token belongs to the team or has platform-trust admin privileges.", state.Name.ValueString(), status.Convert(err).Message()),
+		)
+		return
+	}
+}
+
+// ImportState imports an existing team into Terraform state using its name.
+func (r *supercargoTeamResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	resource.ImportStatePassthroughID(ctx, path.Root("name"), req, resp)
 }

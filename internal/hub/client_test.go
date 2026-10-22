@@ -2,6 +2,9 @@ package hub
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"net"
 	"os"
 	"sync"
@@ -13,6 +16,14 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 )
+
+func hashToken(token string) string {
+	if token == "" {
+		return ""
+	}
+	h := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(h[:])
+}
 
 func TestFactory_GetClient_Concurrent(t *testing.T) {
 	lis := bufconn.Listen(1024 * 1024)
@@ -225,6 +236,140 @@ func TestResolveAudience(t *testing.T) {
 	}
 }
 
+func TestIsLoopbackHost(t *testing.T) {
+	tests := []struct {
+		host     string
+		expected bool
+	}{
+		{"localhost", true},
+		{"127.0.0.1", true},
+		{"::1", true},
+		{"127.0.0.2", true},
+		{"hub.example.com", false},
+		{"10.0.0.1", false},
+		{"192.168.1.1", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.host, func(t *testing.T) {
+			assert.Equal(t, tt.expected, IsLoopbackHost(tt.host))
+		})
+	}
+}
+
+func TestFactory_GetClient_TLSDefault(t *testing.T) {
+	lis := bufconn.Listen(1024 * 1024)
+	defer lis.Close()
+
+	s := grpc.NewServer()
+	go func() {
+		_ = s.Serve(lis)
+	}()
+	defer s.Stop()
+
+	factory := NewFactory()
+	defer factory.Close()
+
+	dialer := func(context.Context, string) (net.Conn, error) {
+		return lis.Dial()
+	}
+
+	opts := []grpc.DialOption{
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(dialer),
+	}
+
+	ctx := context.Background()
+
+	// Loopback address defaults to use_tls = false
+	c1, err := factory.GetClient(ctx, "localhost:50051", "token-loopback", "aud", opts...)
+	require.NoError(t, err)
+	require.NotNil(t, c1)
+
+	factory.mu.Lock()
+	expectedKey1 := fmt.Sprintf("localhost:50051|%s|aud|false", hashToken("token-loopback"))
+	_, foundInsecure := factory.clients[expectedKey1]
+	factory.mu.Unlock()
+	assert.True(t, foundInsecure, "localhost default should resolve to use_tls=false and be cached as ...|false")
+
+	// IPv4 loopback defaults to use_tls = false
+	c2, err := factory.GetClient(ctx, "127.0.0.1:50051", "token-ipv4", "aud", opts...)
+	require.NoError(t, err)
+	require.NotNil(t, c2)
+
+	factory.mu.Lock()
+	expectedKey2 := fmt.Sprintf("127.0.0.1:50051|%s|aud|false", hashToken("token-ipv4"))
+	_, foundIPv4Insecure := factory.clients[expectedKey2]
+	factory.mu.Unlock()
+	assert.True(t, foundIPv4Insecure, "127.0.0.1 default should resolve to use_tls=false and be cached as ...|false")
+}
+
+func TestFactory_GetClient_TLSExplicitOverride(t *testing.T) {
+	lis := bufconn.Listen(1024 * 1024)
+	defer lis.Close()
+
+	s := grpc.NewServer()
+	go func() {
+		_ = s.Serve(lis)
+	}()
+	defer s.Stop()
+
+	factory := NewFactory()
+	defer factory.Close()
+
+	dialer := func(context.Context, string) (net.Conn, error) {
+		return lis.Dial()
+	}
+
+	opts := []grpc.DialOption{
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(dialer),
+	}
+
+	ctx := context.Background()
+	trueVal := true
+	falseVal := false
+
+	// Explicit override with GetClientWithTLS(&falseVal) on remote host
+	c1, err := factory.GetClientWithTLS(ctx, "hub.internal:50051", "token-remote", "aud", &falseVal, opts...)
+	require.NoError(t, err)
+	require.NotNil(t, c1)
+
+	factory.mu.Lock()
+	expectedKey1 := fmt.Sprintf("hub.internal:50051|%s|aud|false", hashToken("token-remote"))
+	_, foundRemoteInsecure := factory.clients[expectedKey1]
+	factory.mu.Unlock()
+	assert.True(t, foundRemoteInsecure, "explicit false on remote host must be cached with hashed token and false")
+
+	// Explicit override with WithTLS context on loopback host
+	c2, err := factory.GetClient(WithTLS(ctx, true), "localhost:50051", "token-override", "aud", opts...)
+	require.NoError(t, err)
+	require.NotNil(t, c2)
+
+	factory.mu.Lock()
+	expectedKey2 := fmt.Sprintf("localhost:50051|%s|aud|true", hashToken("token-override"))
+	_, foundLocalSecure := factory.clients[expectedKey2]
+	factory.mu.Unlock()
+	assert.True(t, foundLocalSecure, "explicit true override on loopback must be cached with hashed token and true")
+
+	// Explicit override with GetClientWithTLS(&trueVal) on loopback
+	c3, err := factory.GetClientWithTLS(ctx, "localhost:50051", "token-override-arg", "aud", &trueVal, opts...)
+	require.NoError(t, err)
+	require.NotNil(t, c3)
+
+	factory.mu.Lock()
+	expectedKey3 := fmt.Sprintf("localhost:50051|%s|aud|true", hashToken("token-override-arg"))
+	_, foundLocalSecureArg := factory.clients[expectedKey3]
+	// Verify raw tokens are never present in cache keys
+	for k := range factory.clients {
+		assert.NotContains(t, k, "token-remote", "raw secret token must never appear in client cache key")
+		assert.NotContains(t, k, "token-override", "raw secret token must never appear in client cache key")
+		assert.NotContains(t, k, "token-override-arg", "raw secret token must never appear in client cache key")
+	}
+	factory.mu.Unlock()
+	assert.True(t, foundLocalSecureArg, "GetClientWithTLS(&trueVal) on loopback must be cached with hashed token and true")
+}
+
 func TestFactory_GetClient_CacheKeyIsolation(t *testing.T) {
 	lis := bufconn.Listen(1024 * 1024)
 	defer lis.Close()
@@ -270,8 +415,24 @@ func TestFactory_GetClient_CacheKeyIsolation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Same(t, clientAudienceA, clientSanitized, "sanitized address should match existing cached client")
 
+	// 4. TLS mode cache key isolation: same address, token, audience but use_tls=false vs use_tls=true
+	falseVal := false
+	trueVal := true
+	clientTLSFalse, err := factory.GetClientWithTLS(ctx, "localhost:50051", "token-tls", "audience-tls", &falseVal, opts...)
+	require.NoError(t, err)
+
+	clientTLSTrue, err := factory.GetClientWithTLS(ctx, "localhost:50051", "token-tls", "audience-tls", &trueVal, opts...)
+	require.NoError(t, err)
+
+	assert.NotSame(t, clientTLSFalse, clientTLSTrue, "different TLS modes must return distinct client instances")
+
+	// Re-calling with use_tls=false returns the cached clientTLSFalse
+	clientTLSFalseAgain, err := factory.GetClientWithTLS(ctx, "localhost:50051", "token-tls", "audience-tls", &falseVal, opts...)
+	require.NoError(t, err)
+	assert.Same(t, clientTLSFalse, clientTLSFalseAgain, "same TLS mode must return cached client")
+
 	factory.mu.Lock()
 	count := len(factory.clients)
 	factory.mu.Unlock()
-	assert.Equal(t, 2, count, "factory map should have exactly 2 clients (audience-a and audience-b)")
+	assert.Equal(t, 4, count, "factory map should have exactly 4 clients (audience-a, audience-b, tls-false, tls-true)")
 }

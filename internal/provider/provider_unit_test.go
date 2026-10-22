@@ -51,6 +51,9 @@ func TestSupercargoProvider_Schema(t *testing.T) {
 
 	assert.NotNil(t, resp.Schema.Attributes["audience"])
 	assert.True(t, resp.Schema.Attributes["audience"].IsOptional())
+
+	assert.NotNil(t, resp.Schema.Attributes["use_tls"])
+	assert.True(t, resp.Schema.Attributes["use_tls"].IsOptional())
 }
 
 func TestSupercargoProvider_Configure(t *testing.T) {
@@ -124,6 +127,33 @@ func TestSupercargoProvider_Configure(t *testing.T) {
 			HubAddress: types.StringValue("localhost:50051"),
 			Token:      types.StringValue("some-token"),
 			Audience:   types.StringUnknown(),
+		}
+
+		req := provider.ConfigureRequest{
+			Config: newTestProviderConfig(ctx, t, schemaResp.Schema, configModel),
+		}
+		var resp provider.ConfigureResponse
+
+		p.Configure(ctx, req, &resp)
+		require.False(t, resp.Diagnostics.HasError(), "unexpected diagnostics: %v", resp.Diagnostics)
+
+		require.NotNil(t, resp.ResourceData)
+		data, ok := resp.ResourceData.(*ProviderData)
+		require.True(t, ok)
+		assert.Equal(t, "unknown", data.HubAddress)
+		assert.Nil(t, data.HubClient)
+	})
+
+	t.Run("unknown use_tls sets unknown provider data and nil client", func(t *testing.T) {
+		p := New("dev")()
+		var schemaResp provider.SchemaResponse
+		p.Schema(ctx, provider.SchemaRequest{}, &schemaResp)
+
+		configModel := SupercargoProviderModel{
+			HubAddress: types.StringValue("localhost:50051"),
+			Token:      types.StringValue("some-token"),
+			Audience:   types.StringNull(),
+			UseTLS:     types.BoolUnknown(),
 		}
 
 		req := provider.ConfigureRequest{
@@ -223,6 +253,35 @@ func TestSupercargoProvider_Configure(t *testing.T) {
 		assert.NotNil(t, data.HubClient)
 	})
 
+	t.Run("successful configuration with explicit use_tls", func(t *testing.T) {
+		_, _, mockAddr := startMockHubServer(t)
+
+		p := New("dev")()
+		var schemaResp provider.SchemaResponse
+		p.Schema(ctx, provider.SchemaRequest{}, &schemaResp)
+
+		configModel := SupercargoProviderModel{
+			HubAddress: types.StringValue(mockAddr),
+			Token:      types.StringValue("test-token"),
+			Audience:   types.StringNull(),
+			UseTLS:     types.BoolValue(false),
+		}
+
+		req := provider.ConfigureRequest{
+			Config: newTestProviderConfig(ctx, t, schemaResp.Schema, configModel),
+		}
+		var resp provider.ConfigureResponse
+
+		p.Configure(ctx, req, &resp)
+		require.False(t, resp.Diagnostics.HasError(), "unexpected diagnostics: %v", resp.Diagnostics)
+
+		require.NotNil(t, resp.ResourceData)
+		data, ok := resp.ResourceData.(*ProviderData)
+		require.True(t, ok)
+		assert.Equal(t, mockAddr, data.HubAddress)
+		assert.NotNil(t, data.HubClient)
+	})
+
 	t.Run("dial connection failure returns diagnostic error", func(t *testing.T) {
 		sp := &SupercargoProvider{
 			version: "dev",
@@ -248,8 +307,9 @@ func TestSupercargoProvider_Configure(t *testing.T) {
 
 		sp.Configure(ctx, req, &resp)
 		require.True(t, resp.Diagnostics.HasError())
-		assert.Contains(t, resp.Diagnostics.Errors()[0].Summary(), "Failed to connect to Supercargo Hub")
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Summary(), "Error Creating Hub Client")
 		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "hub factory is closed")
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "Remote Hub connections default to TLS")
 	})
 
 	t.Run("config get error handled gracefully", func(t *testing.T) {

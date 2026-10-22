@@ -33,6 +33,17 @@ type mockHubServer struct {
 	CheckDownstreamImpactHook func(context.Context, *hubv1.CheckDownstreamImpactRequest) (*hubv1.CheckDownstreamImpactResponse, error)
 	RegisterProductHook       func(context.Context, *hubv1.RegisterProductRequest) (*hubv1.RegisterProductResponse, error)
 	GetProductHook            func(context.Context, *hubv1.GetProductRequest) (*hubv1.GetProductResponse, error)
+	DeleteTeamHook            func(context.Context, *hubv1.DeleteTeamRequest) (*hubv1.DeleteTeamResponse, error)
+}
+
+func (m *mockHubServer) DeleteTeam(ctx context.Context, req *hubv1.DeleteTeamRequest) (*hubv1.DeleteTeamResponse, error) {
+	m.mu.RLock()
+	hook := m.DeleteTeamHook
+	m.mu.RUnlock()
+	if hook != nil {
+		return hook(ctx, req)
+	}
+	return m.UnimplementedHubServiceServer.DeleteTeam(ctx, req)
 }
 
 func (m *mockHubServer) RegisterTeam(ctx context.Context, req *hubv1.RegisterTeamRequest) (*hubv1.RegisterTeamResponse, error) {
@@ -142,6 +153,11 @@ func startMockHubServer(t *testing.T) (*mockHubServer, *ProviderData, string) {
 		CheckDownstreamImpactHook: func(ctx context.Context, req *hubv1.CheckDownstreamImpactRequest) (*hubv1.CheckDownstreamImpactResponse, error) {
 			return &hubv1.CheckDownstreamImpactResponse{
 				Severity: hubv1.ImpactSeverity_IMPACT_SEVERITY_NONE,
+			}, nil
+		},
+		DeleteTeamHook: func(ctx context.Context, req *hubv1.DeleteTeamRequest) (*hubv1.DeleteTeamResponse, error) {
+			return &hubv1.DeleteTeamResponse{
+				Deleted: true,
 			}, nil
 		},
 	}

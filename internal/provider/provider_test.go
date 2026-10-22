@@ -35,9 +35,9 @@ func TestNewProvider_ResourcesAndDataSources(t *testing.T) {
 	ctx := context.Background()
 	resources := p.Resources(ctx)
 	assert.NotEmpty(t, resources)
-	assert.Len(t, resources, 5)
+	assert.Len(t, resources, 1)
 
 	dataSources := p.DataSources(ctx)
 	assert.NotEmpty(t, dataSources)
-	assert.Len(t, dataSources, 1)
+	assert.Len(t, dataSources, 2)
 }

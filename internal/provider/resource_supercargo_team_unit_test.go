@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/stretchr/testify/assert"
@@ -488,15 +489,24 @@ func TestSupercargoTeamResource_Delete(t *testing.T) {
 		assert.Contains(t, resp.Diagnostics.Errors()[0].Summary(), "Provider Not Configured")
 	})
 
-	t.Run("configured provider", func(t *testing.T) {
-		_, providerData, _ := startMockHubServer(t)
+	t.Run("successful deletion invokes Hub DeleteTeam", func(t *testing.T) {
+		mockSrv, providerData, _ := startMockHubServer(t)
 		r := &supercargoTeamResource{client: providerData}
 		var teamSchemaResp resource.SchemaResponse
 		r.Schema(ctx, resource.SchemaRequest{}, &teamSchemaResp)
 
+		called := false
+		mockSrv.mu.Lock()
+		mockSrv.DeleteTeamHook = func(ctx context.Context, req *hubv1.DeleteTeamRequest) (*hubv1.DeleteTeamResponse, error) {
+			called = true
+			assert.Equal(t, "team-to-delete", req.Name)
+			return &hubv1.DeleteTeamResponse{Deleted: true}, nil
+		}
+		mockSrv.mu.Unlock()
+
 		stateModel := supercargoTeamResourceModel{
-			Name:      types.StringValue("team-x"),
-			DataAsset: types.StringValue("go://github.com/supercargo-dev/core/x"),
+			Name:      types.StringValue("team-to-delete"),
+			DataAsset: types.StringValue("go://github.com/supercargo-dev/core/del"),
 			Members:   types.ListNull(types.StringType),
 			Metadata:  types.MapNull(types.StringType),
 		}
@@ -506,6 +516,92 @@ func TestSupercargoTeamResource_Delete(t *testing.T) {
 		}
 		var resp resource.DeleteResponse
 		r.Delete(ctx, req, &resp)
-		assert.False(t, resp.Diagnostics.HasError())
+		require.False(t, resp.Diagnostics.HasError(), "unexpected delete errors: %v", resp.Diagnostics)
+		assert.True(t, called, "DeleteTeam RPC must be invoked on the hub")
 	})
+
+	t.Run("not found is treated as idempotent success", func(t *testing.T) {
+		mockSrv, providerData, _ := startMockHubServer(t)
+		r := &supercargoTeamResource{client: providerData}
+		var teamSchemaResp resource.SchemaResponse
+		r.Schema(ctx, resource.SchemaRequest{}, &teamSchemaResp)
+
+		mockSrv.mu.Lock()
+		mockSrv.DeleteTeamHook = func(ctx context.Context, req *hubv1.DeleteTeamRequest) (*hubv1.DeleteTeamResponse, error) {
+			return nil, status.Error(codes.NotFound, "team not found")
+		}
+		mockSrv.mu.Unlock()
+
+		stateModel := supercargoTeamResourceModel{
+			Name:      types.StringValue("team-already-gone"),
+			DataAsset: types.StringValue("go://github.com/supercargo-dev/core/del"),
+			Members:   types.ListNull(types.StringType),
+			Metadata:  types.MapNull(types.StringType),
+		}
+
+		req := resource.DeleteRequest{
+			State: newTestState(ctx, t, teamSchemaResp.Schema, stateModel),
+		}
+		var resp resource.DeleteResponse
+		r.Delete(ctx, req, &resp)
+		require.False(t, resp.Diagnostics.HasError(), "NotFound error must be treated as idempotent deletion success: %v", resp.Diagnostics)
+	})
+
+	t.Run("hub error surfaces clear diagnostic", func(t *testing.T) {
+		mockSrv, providerData, _ := startMockHubServer(t)
+		r := &supercargoTeamResource{client: providerData}
+		var teamSchemaResp resource.SchemaResponse
+		r.Schema(ctx, resource.SchemaRequest{}, &teamSchemaResp)
+
+		mockSrv.mu.Lock()
+		mockSrv.DeleteTeamHook = func(ctx context.Context, req *hubv1.DeleteTeamRequest) (*hubv1.DeleteTeamResponse, error) {
+			return nil, status.Error(codes.Internal, "database disk write failure")
+		}
+		mockSrv.mu.Unlock()
+
+		stateModel := supercargoTeamResourceModel{
+			Name:      types.StringValue("team-fail"),
+			DataAsset: types.StringValue("go://github.com/supercargo-dev/core/del"),
+			Members:   types.ListNull(types.StringType),
+			Metadata:  types.MapNull(types.StringType),
+		}
+
+		req := resource.DeleteRequest{
+			State: newTestState(ctx, t, teamSchemaResp.Schema, stateModel),
+		}
+		var resp resource.DeleteResponse
+		r.Delete(ctx, req, &resp)
+		require.True(t, resp.Diagnostics.HasError())
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Summary(), "Error Deleting Team")
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "database disk write failure")
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "Remediation Hint: Verify that your identity token belongs to the team or has platform-trust admin privileges.")
+	})
+}
+
+func TestSupercargoTeamResource_ImportState(t *testing.T) {
+	ctx := context.Background()
+	r := &supercargoTeamResource{}
+
+	var teamSchemaResp resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &teamSchemaResp)
+
+	req := resource.ImportStateRequest{
+		ID: "team-imported",
+	}
+	var resp resource.ImportStateResponse
+	resp.State = newTestState(ctx, t, teamSchemaResp.Schema, &supercargoTeamResourceModel{
+		Name:      types.StringNull(),
+		URN:       types.StringNull(),
+		DataAsset: types.StringNull(),
+		Members:   types.ListNull(types.StringType),
+		Metadata:  types.MapNull(types.StringType),
+	})
+
+	r.ImportState(ctx, req, &resp)
+	require.False(t, resp.Diagnostics.HasError(), "unexpected import errors: %v", resp.Diagnostics)
+
+	var nameVal types.String
+	diags := resp.State.GetAttribute(ctx, path.Root("name"), &nameVal)
+	require.False(t, diags.HasError())
+	assert.Equal(t, "team-imported", nameVal.ValueString())
 }
