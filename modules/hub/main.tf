@@ -1080,6 +1080,11 @@ resource "google_cloud_run_v2_service" "mcp" {
       }
 
       env {
+        name  = "HUB_OIDC_AUDIENCE"
+        value = var.oidc_audience != "" ? var.oidc_audience : google_cloud_run_v2_service.hub.uri
+      }
+
+      env {
         name  = "AUTH_ENFORCE"
         value = var.auth_enforce ? "true" : "false"
       }

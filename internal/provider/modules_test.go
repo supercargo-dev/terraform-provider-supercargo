@@ -1657,6 +1657,17 @@ func TestModules_HubMCPCompanionService(t *testing.T) {
 		if !strings.Contains(mainContent, `session_affinity = true`) {
 			t.Errorf("modules/hub/main.tf missing session_affinity for mcp service")
 		}
+
+		mcpChunk := extractHCLBlock(mainContent, `resource "google_cloud_run_v2_service" "mcp"`)
+		if mcpChunk == "" {
+			t.Fatalf("Failed to extract mcp service block")
+		}
+		if !strings.Contains(mcpChunk, `name  = "HUB_OIDC_AUDIENCE"`) {
+			t.Errorf("modules/hub/main.tf missing HUB_OIDC_AUDIENCE env var for mcp service")
+		}
+		if !strings.Contains(mcpChunk, `var.oidc_audience != "" ? var.oidc_audience : google_cloud_run_v2_service.hub.uri`) {
+			t.Errorf("modules/hub/main.tf missing fallback to hub URI for HUB_OIDC_AUDIENCE")
+		}
 	})
 }
 
