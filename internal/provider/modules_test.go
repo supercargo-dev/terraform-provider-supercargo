@@ -2341,3 +2341,345 @@ func TestModules_GlobalTelemetryShare(t *testing.T) {
 		assert.Contains(t, content, "Authorized View")
 	})
 }
+
+func findAnalyticsGitHubSyncModuleDir(t *testing.T) string {
+	t.Helper()
+	moduleDir := filepath.Clean(filepath.Join("..", "..", "modules", "analytics_github_sync"))
+	abs, err := filepath.Abs(moduleDir)
+	require.NoError(t, err)
+	return abs
+}
+
+func readAnalyticsGitHubSyncModuleFile(t *testing.T, filename string) string {
+	t.Helper()
+	moduleDir := findAnalyticsGitHubSyncModuleDir(t)
+	fullPath := filepath.Join(moduleDir, filename)
+	data, err := os.ReadFile(fullPath)
+	require.NoError(t, err, "failed to read module file %s at %s", filename, fullPath)
+	return string(data)
+}
+
+func TestModules_AnalyticsGitHubSync(t *testing.T) {
+	moduleDir := findAnalyticsGitHubSyncModuleDir(t)
+	fi, err := os.Stat(moduleDir)
+	require.NoError(t, err, "module directory should exist at %s", moduleDir)
+	require.True(t, fi.IsDir(), "expected %s to be a directory", moduleDir)
+
+	t.Run("FilesExist", func(t *testing.T) {
+		expectedFiles := []string{
+			"main.tf",
+			"variables.tf",
+			"outputs.tf",
+			"versions.tf",
+			"README.md",
+		}
+
+		for _, file := range expectedFiles {
+			t.Run(file, func(t *testing.T) {
+				path := filepath.Join(moduleDir, file)
+				f, err := os.Stat(path)
+				require.NoError(t, err, "file %s should exist in module", file)
+				assert.False(t, f.IsDir(), "file %s should not be a directory", file)
+			})
+		}
+	})
+
+	t.Run("Variables", func(t *testing.T) {
+		content := readAnalyticsGitHubSyncModuleFile(t, "variables.tf")
+
+		tests := []struct {
+			name     string
+			expected []string
+		}{
+			{
+				name: "project_id variable",
+				expected: []string{
+					`variable "project_id"`,
+					`type        = string`,
+				},
+			},
+			{
+				name: "region variable with default",
+				expected: []string{
+					`variable "region"`,
+					`type        = string`,
+					`default     = "europe-west1"`,
+				},
+			},
+			{
+				name: "job_name variable with default",
+				expected: []string{
+					`variable "job_name"`,
+					`type        = string`,
+					`default     = "analytics-github-sync"`,
+				},
+			},
+			{
+				name: "container_image variable",
+				expected: []string{
+					`variable "container_image"`,
+					`type        = string`,
+				},
+			},
+			{
+				name: "org variable",
+				expected: []string{
+					`variable "org"`,
+					`type        = string`,
+				},
+			},
+			{
+				name: "topic variable with default",
+				expected: []string{
+					`variable "topic"`,
+					`type        = string`,
+					`default     = "supercargo-analytics"`,
+				},
+			},
+			{
+				name: "dataset variable with default",
+				expected: []string{
+					`variable "dataset"`,
+					`type        = string`,
+					`default     = "supercargo_github"`,
+				},
+			},
+			{
+				name: "vault_url variable",
+				expected: []string{
+					`variable "vault_url"`,
+					`type        = string`,
+				},
+			},
+			{
+				name: "vault_audience variable",
+				expected: []string{
+					`variable "vault_audience"`,
+					`type        = string`,
+				},
+			},
+			{
+				name: "github_token_secret_id variable",
+				expected: []string{
+					`variable "github_token_secret_id"`,
+					`type        = string`,
+				},
+			},
+			{
+				name: "deletion_protection variable",
+				expected: []string{
+					`variable "deletion_protection"`,
+					`type        = bool`,
+					`default     = false`,
+				},
+			},
+			{
+				name: "schedule variable",
+				expected: []string{
+					`variable "schedule"`,
+					`type        = string`,
+				},
+			},
+			{
+				name: "time_zone variable",
+				expected: []string{
+					`variable "time_zone"`,
+					`type        = string`,
+				},
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				for _, snippet := range tc.expected {
+					assert.Contains(t, content, snippet)
+				}
+			})
+		}
+	})
+
+	t.Run("DeterministicLocals", func(t *testing.T) {
+		content := readAnalyticsGitHubSyncModuleFile(t, "main.tf")
+
+		assert.Contains(t, content, `locals {`)
+		assert.Contains(t, content, `sa_email`)
+		assert.Contains(t, content, `"${var.service_account_id != null && var.service_account_id != "" ? var.service_account_id : "analytics-github-sync-sa"}@${var.project_id}.iam.gserviceaccount.com"`)
+		assert.Contains(t, content, `scheduler_sa_email`)
+		assert.Contains(t, content, `"${var.scheduler_service_account_id != null && var.scheduler_service_account_id != "" ? var.scheduler_service_account_id : "analytics-github-sync-sched-sa"}@${var.project_id}.iam.gserviceaccount.com"`)
+	})
+
+	t.Run("CloudRunJob", func(t *testing.T) {
+		content := readAnalyticsGitHubSyncModuleFile(t, "main.tf")
+
+		tests := []struct {
+			name     string
+			snippets []string
+		}{
+			{
+				name: "job resource definition",
+				snippets: []string{
+					`resource "google_cloud_run_v2_job" "sync_job"`,
+					`var.job_name`,
+					`var.region`,
+					`var.project_id`,
+					`var.deletion_protection`,
+				},
+			},
+			{
+				name: "lifecycle ignore_changes",
+				snippets: []string{
+					`lifecycle {`,
+					`ignore_changes = [`,
+					`template[0].template[0].containers[0].image,`,
+					`client,`,
+					`client_version,`,
+				},
+			},
+			{
+				name: "container environment variables",
+				snippets: []string{
+					`name  = "SUPERCARGO_VAULT_URL"`,
+					`value = var.vault_url`,
+					`name  = "SUPERCARGO_VAULT_AUDIENCE"`,
+					`value = var.vault_audience`,
+					`name  = "GOOGLE_CLOUD_PROJECT"`,
+					`value = var.project_id`,
+					`name  = "DESTINATION__BIGQUERY__LOCATION"`,
+					`name = "GITHUB_TOKEN"`,
+					`secret_key_ref {`,
+					`secret  = var.github_token_secret_id`,
+					`version = "latest"`,
+				},
+			},
+			{
+				name: "service account assignment",
+				snippets: []string{
+					`service_account = local.sa_email`,
+				},
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				for _, snippet := range tc.snippets {
+					assert.Contains(t, content, snippet)
+				}
+			})
+		}
+	})
+
+	t.Run("CloudSchedulerAndIAM", func(t *testing.T) {
+		content := readAnalyticsGitHubSyncModuleFile(t, "main.tf")
+
+		tests := []struct {
+			name     string
+			snippets []string
+		}{
+			{
+				name: "scheduler invoker IAM binding",
+				snippets: []string{
+					`resource "google_cloud_run_v2_job_iam_member" "scheduler_invoker"`,
+					`"roles/run.invoker"`,
+					`"serviceAccount:${local.scheduler_sa_email}"`,
+				},
+			},
+			{
+				name: "cloud scheduler job definition",
+				snippets: []string{
+					`resource "google_cloud_scheduler_job" "sync_schedule"`,
+					`https://${var.region}-run.googleapis.com/v2/projects/${var.project_id}/locations/${var.region}/jobs/${google_cloud_run_v2_job.sync_job.name}:run`,
+					`oauth_token {`,
+					`local.scheduler_sa_email`,
+					`"https://www.googleapis.com/auth/cloud-platform"`,
+				},
+			},
+			{
+				name: "bigquery IAM bindings",
+				snippets: []string{
+					`roles/bigquery.dataEditor`,
+					`roles/bigquery.jobUser`,
+					`serviceAccount:${local.sa_email}`,
+				},
+			},
+			{
+				name: "secret manager IAM binding",
+				snippets: []string{
+					`resource "google_secret_manager_secret_iam_member"`,
+					`"roles/secretmanager.secretAccessor"`,
+					`"serviceAccount:${local.sa_email}"`,
+				},
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				for _, snippet := range tc.snippets {
+					assert.Contains(t, content, snippet)
+				}
+			})
+		}
+	})
+
+	t.Run("Outputs", func(t *testing.T) {
+		content := readAnalyticsGitHubSyncModuleFile(t, "outputs.tf")
+
+		tests := []struct {
+			name     string
+			snippets []string
+		}{
+			{
+				name: "job_name output",
+				snippets: []string{
+					`output "job_name"`,
+					`google_cloud_run_v2_job.sync_job.name`,
+				},
+			},
+			{
+				name: "job_id output",
+				snippets: []string{
+					`output "job_id"`,
+					`google_cloud_run_v2_job.sync_job.id`,
+				},
+			},
+			{
+				name: "service_account_email output",
+				snippets: []string{
+					`output "service_account_email"`,
+					`local.sa_email`,
+				},
+			},
+			{
+				name: "scheduler_job_name output",
+				snippets: []string{
+					`output "scheduler_job_name"`,
+					`google_cloud_scheduler_job.sync_schedule.name`,
+				},
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				for _, snippet := range tc.snippets {
+					assert.Contains(t, content, snippet)
+				}
+			})
+		}
+	})
+
+	t.Run("Versions", func(t *testing.T) {
+		content := readAnalyticsGitHubSyncModuleFile(t, "versions.tf")
+
+		assert.True(t, strings.Contains(content, `required_version = ">= 1.5.0"`) || strings.Contains(content, `required_version = ">= 1.5"`))
+		assert.Contains(t, content, `hashicorp/google`)
+		assert.Contains(t, content, `>= 5.0.0, < 8.0.0`)
+	})
+
+	t.Run("Readme", func(t *testing.T) {
+		content := readAnalyticsGitHubSyncModuleFile(t, "README.md")
+
+		assert.Contains(t, content, "analytics_github_sync")
+		assert.Contains(t, content, "Cloud Run")
+		assert.Contains(t, content, "Cloud Scheduler")
+		assert.Contains(t, content, "BigQuery")
+	})
+}
