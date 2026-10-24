@@ -79,7 +79,7 @@ variable "time_zone" {
 }
 
 variable "scheduler_job_name" {
-  description = "Name of the Cloud Scheduler job. Defaults to ${var.job_name}-schedule if empty."
+  description = "Name of the Cloud Scheduler job. Defaults to <job_name>-schedule if empty."
   type        = string
   default     = null
 }

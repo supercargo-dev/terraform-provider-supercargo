@@ -2620,7 +2620,6 @@ func TestModules_AnalyticsGitHubSync(t *testing.T) {
 		}
 	})
 
-
 	t.Run("Outputs", func(t *testing.T) {
 		content := readAnalyticsGitHubSyncModuleFile(t, "outputs.tf")
 
@@ -2684,4 +2683,3 @@ func TestModules_AnalyticsGitHubSync(t *testing.T) {
 		assert.Contains(t, content, "BigQuery")
 	})
 }
-
