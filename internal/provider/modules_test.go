@@ -2173,6 +2173,49 @@ func TestModules_GlobalTelemetryShare(t *testing.T) {
 					`type        = string`,
 				},
 			},
+			{
+				name: "enable_global_sdlc_share variable with default",
+				expected: []string{
+					`variable "enable_global_sdlc_share"`,
+					`type        = bool`,
+					`default     = true`,
+				},
+			},
+			{
+				name: "enable_peer_benchmark_subscription variable with default",
+				expected: []string{
+					`variable "enable_peer_benchmark_subscription"`,
+					`type        = bool`,
+					`default     = false`,
+				},
+			},
+			{
+				name: "peer_benchmark_data_exchange_id variable with default",
+				expected: []string{
+					`variable "peer_benchmark_data_exchange_id"`,
+					`type        = string`,
+					`default     = ""`,
+				},
+			},
+			{
+				name: "peer_benchmark_listing_id variable with validation",
+				expected: []string{
+					`variable "peer_benchmark_listing_id"`,
+					`type        = string`,
+					`default     = ""`,
+					`!var.enable_peer_benchmark_subscription ||`,
+					`var.peer_benchmark_listing_id != ""`,
+					`When enable_peer_benchmark_subscription is true, peer_benchmark_listing_id must be provided and non-empty.`,
+				},
+			},
+			{
+				name: "peer_benchmark_dataset_id variable with default",
+				expected: []string{
+					`variable "peer_benchmark_dataset_id"`,
+					`type        = string`,
+					`default     = "supercargo_peer_benchmarks"`,
+				},
+			},
 		}
 
 		for _, tc := range tests {
@@ -2241,6 +2284,17 @@ func TestModules_GlobalTelemetryShare(t *testing.T) {
 				},
 			},
 			{
+				name: "google_bigquery_dataset_access authorized_view_sdlc on internal dataset",
+				snippets: []string{
+					`resource "google_bigquery_dataset_access" "authorized_view_sdlc"`,
+					`count      = var.enable_global_telemetry_share && var.enable_global_sdlc_share ? 1 : 0`,
+					`project    = var.project_id`,
+					`dataset_id = var.internal_dataset_id`,
+					`table_id   = "global_sdlc_efficiency_digest"`,
+					`depends_on = [google_bigquery_dataset.global_telemetry]`,
+				},
+			},
+			{
 				name: "google_bigquery_analytics_hub_listing telemetry_listing with sanitized listing_id",
 				snippets: []string{
 					`resource "google_bigquery_analytics_hub_listing" "telemetry_listing"`,
@@ -2250,6 +2304,33 @@ func TestModules_GlobalTelemetryShare(t *testing.T) {
 					`bigquery_dataset {`,
 					`dataset = "projects/${var.project_id}/datasets/${var.dataset_id}"`,
 					`depends_on = [google_bigquery_dataset.global_telemetry]`,
+				},
+			},
+			{
+				name: "google_bigquery_analytics_hub_listing sdlc_efficiency_listing with sanitized listing_id",
+				snippets: []string{
+					`resource "google_bigquery_analytics_hub_listing" "sdlc_efficiency_listing"`,
+					`count            = var.enable_global_telemetry_share && var.enable_global_sdlc_share && var.enable_analytics_hub_listing ? 1 : 0`,
+					`project          = var.project_id`,
+					`location         = var.location`,
+					`data_exchange_id = var.data_exchange_id`,
+					`listing_id       = "sdlc_efficiency_digest_${replace(var.project_id, "-", "_")}"`,
+					`display_name     = "Supercargo SDLC Efficiency Digest"`,
+					`description      = "Pseudonymized operational SDLC efficiency metrics shared under global-sdlc-efficiency-digest contract"`,
+					`dataset = "projects/${var.project_id}/datasets/${var.dataset_id}"`,
+					`depends_on = [google_bigquery_dataset.global_telemetry]`,
+				},
+			},
+			{
+				name: "google_bigquery_analytics_hub_subscription peer_benchmarks",
+				snippets: []string{
+					`resource "google_bigquery_analytics_hub_subscription" "peer_benchmarks"`,
+					`count            = var.enable_peer_benchmark_subscription && var.peer_benchmark_listing_id != "" ? 1 : 0`,
+					`project          = var.project_id`,
+					`location         = var.location`,
+					`data_exchange_id = var.peer_benchmark_data_exchange_id != "" ? var.peer_benchmark_data_exchange_id : var.data_exchange_id`,
+					`listing_id       = var.peer_benchmark_listing_id`,
+					`dataset_id = var.peer_benchmark_dataset_id`,
 				},
 			},
 		}
@@ -2299,6 +2380,13 @@ func TestModules_GlobalTelemetryShare(t *testing.T) {
 				},
 			},
 			{
+				name: "authorized_view_sdlc_access_id output",
+				snippets: []string{
+					`output "authorized_view_sdlc_access_id"`,
+					`try(google_bigquery_dataset_access.authorized_view_sdlc[0].id, null)`,
+				},
+			},
+			{
 				name: "analytics_hub_listing_id output",
 				snippets: []string{
 					`output "analytics_hub_listing_id"`,
@@ -2306,10 +2394,38 @@ func TestModules_GlobalTelemetryShare(t *testing.T) {
 				},
 			},
 			{
+				name: "sdlc_analytics_hub_listing_id output",
+				snippets: []string{
+					`output "sdlc_analytics_hub_listing_id"`,
+					`try(google_bigquery_analytics_hub_listing.sdlc_efficiency_listing[0].id, null)`,
+				},
+			},
+			{
+				name: "peer_benchmark_subscription_id output",
+				snippets: []string{
+					`output "peer_benchmark_subscription_id"`,
+					`try(google_bigquery_analytics_hub_subscription.peer_benchmarks[0].id, null)`,
+				},
+			},
+			{
 				name: "sharing_enabled output",
 				snippets: []string{
 					`output "sharing_enabled"`,
 					`var.enable_global_telemetry_share`,
+				},
+			},
+			{
+				name: "sdlc_sharing_enabled output",
+				snippets: []string{
+					`output "sdlc_sharing_enabled"`,
+					`var.enable_global_sdlc_share`,
+				},
+			},
+			{
+				name: "peer_benchmarks_enabled output",
+				snippets: []string{
+					`output "peer_benchmarks_enabled"`,
+					`var.enable_peer_benchmark_subscription`,
 				},
 			},
 		}
@@ -2339,6 +2455,10 @@ func TestModules_GlobalTelemetryShare(t *testing.T) {
 		assert.Contains(t, content, "supercargo_github")
 		assert.Contains(t, content, "global_telemetry_digest")
 		assert.Contains(t, content, "Authorized View")
+		assert.Contains(t, content, "enable_global_sdlc_share")
+		assert.Contains(t, content, "enable_peer_benchmark_subscription")
+		assert.Contains(t, content, "global_sdlc_efficiency_digest")
+		assert.Contains(t, content, "peer_benchmark_listing_id")
 	})
 }
 
