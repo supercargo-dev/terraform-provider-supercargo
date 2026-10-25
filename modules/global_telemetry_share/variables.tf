@@ -50,3 +50,44 @@ variable "data_exchange_id" {
   type        = string
   default     = ""
 }
+
+variable "enable_global_sdlc_share" {
+  description = "Feature flag to enable or disable global SDLC efficiency sharing resources"
+  type        = bool
+  default     = true
+}
+
+variable "enable_peer_benchmark_subscription" {
+  description = "Whether to subscribe to the fleet-wide anonymous peer benchmarks via Analytics Hub"
+  type        = bool
+  default     = false
+}
+
+variable "peer_benchmark_data_exchange_id" {
+  description = "The Analytics Hub Data Exchange ID for peer benchmarks (defaults to data_exchange_id if empty)"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.peer_benchmark_data_exchange_id == "" || can(regex("^[a-zA-Z0-9_-]+$", var.peer_benchmark_data_exchange_id))
+    error_message = "The peer_benchmark_data_exchange_id must contain only letters, numbers, underscores, or hyphens."
+  }
+}
+
+variable "peer_benchmark_listing_id" {
+  description = "The Analytics Hub Listing ID for peer benchmarks"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.peer_benchmark_listing_id == "" || can(regex("^[a-zA-Z0-9_-]+$", var.peer_benchmark_listing_id))
+    error_message = "The peer_benchmark_listing_id must contain only letters, numbers, underscores, or hyphens."
+  }
+}
+
+variable "peer_benchmark_dataset_id" {
+  description = "The destination dataset ID for the reciprocal peer benchmark subscription"
+  type        = string
+  default     = "supercargo_peer_benchmarks"
+}
+

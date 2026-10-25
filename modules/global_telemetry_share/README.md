@@ -75,6 +75,11 @@ module "global_telemetry_share" {
 | `location` | GCP region/location for BigQuery resources | `string` | `"EU"` | no |
 | `enable_analytics_hub_listing` | Whether to publish the shared dataset to BigQuery Analytics Hub | `bool` | `false` | no |
 | `data_exchange_id` | ID of the Analytics Hub Data Exchange (required if `enable_analytics_hub_listing` is true) | `string` | `""` | no |
+| `enable_global_sdlc_share` | Feature flag to enable or disable global SDLC efficiency sharing resources | `bool` | `true` | no |
+| `enable_peer_benchmark_subscription` | Whether to subscribe to the fleet-wide anonymous peer benchmarks via Analytics Hub | `bool` | `false` | no |
+| `peer_benchmark_data_exchange_id` | Analytics Hub Data Exchange ID for peer benchmarks (defaults to data_exchange_id if empty) | `string` | `""` | no |
+| `peer_benchmark_listing_id` | Analytics Hub Listing ID for peer benchmarks (required if `enable_peer_benchmark_subscription` is true) | `string` | `""` | no |
+| `peer_benchmark_dataset_id` | Destination dataset ID for reciprocal peer benchmark subscription | `string` | `"supercargo_peer_benchmarks"` | no |
 
 ## Outputs
 
@@ -84,5 +89,12 @@ module "global_telemetry_share" {
 | `dataset_access_id` | Resource ID of the reader dataset access grant |
 | `authorized_view_access_id` | Resource ID of the Authorized View grant on the internal dataset |
 | `authorized_view_github_access_id` | Resource ID of the Authorized View grant on the GitHub dataset |
+| `authorized_view_sdlc_access_id` | Resource ID of the Authorized View grant for SDLC efficiency metrics on the internal dataset (`global_sdlc_efficiency_digest`) |
+| `authorized_view_github_sdlc_access_id` | Resource ID of the Authorized View grant for SDLC efficiency metrics on the GitHub dataset (`global_sdlc_efficiency_digest`) |
 | `analytics_hub_listing_id` | Resource ID of the Analytics Hub listing |
+| `sdlc_analytics_hub_listing_id` | Resource ID of the Analytics Hub listing for SDLC efficiency metrics |
+| `peer_benchmark_subscription_id` | Resource ID of the reciprocal peer benchmark Analytics Hub subscription |
 | `sharing_enabled` | Whether global telemetry sharing is active |
+| `sdlc_sharing_enabled` | Whether global SDLC efficiency sharing is active |
+| `peer_benchmarks_enabled` | Whether peer benchmark subscription is active |
+
