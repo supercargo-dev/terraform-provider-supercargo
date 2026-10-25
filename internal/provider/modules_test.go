@@ -2195,9 +2195,7 @@ func TestModules_GlobalTelemetryShare(t *testing.T) {
 					`variable "peer_benchmark_data_exchange_id"`,
 					`type        = string`,
 					`default     = ""`,
-					`!var.enable_peer_benchmark_subscription ||`,
-					`var.peer_benchmark_data_exchange_id != "" ||`,
-					`var.data_exchange_id != ""`,
+					`can(regex("^[a-zA-Z0-9_-]+$", var.peer_benchmark_data_exchange_id))`,
 				},
 			},
 			{
@@ -2206,9 +2204,7 @@ func TestModules_GlobalTelemetryShare(t *testing.T) {
 					`variable "peer_benchmark_listing_id"`,
 					`type        = string`,
 					`default     = ""`,
-					`!var.enable_peer_benchmark_subscription ||`,
-					`var.peer_benchmark_listing_id != ""`,
-					`When enable_peer_benchmark_subscription is true, peer_benchmark_listing_id must be provided and non-empty.`,
+					`can(regex("^[a-zA-Z0-9_-]+$", var.peer_benchmark_listing_id))`,
 				},
 			},
 			{
@@ -2336,9 +2332,9 @@ func TestModules_GlobalTelemetryShare(t *testing.T) {
 				},
 			},
 			{
-				name: "google_bigquery_analytics_hub_subscription peer_benchmarks",
+				name: "google_bigquery_analytics_hub_listing_subscription peer_benchmarks",
 				snippets: []string{
-					`resource "google_bigquery_analytics_hub_subscription" "peer_benchmarks"`,
+					`resource "google_bigquery_analytics_hub_listing_subscription" "peer_benchmarks"`,
 					`count            = var.enable_peer_benchmark_subscription && var.peer_benchmark_listing_id != "" ? 1 : 0`,
 					`project          = var.project_id`,
 					`location         = var.location`,
@@ -2425,7 +2421,7 @@ func TestModules_GlobalTelemetryShare(t *testing.T) {
 				name: "peer_benchmark_subscription_id output",
 				snippets: []string{
 					`output "peer_benchmark_subscription_id"`,
-					`try(google_bigquery_analytics_hub_subscription.peer_benchmarks[0].id, null)`,
+					`try(google_bigquery_analytics_hub_listing_subscription.peer_benchmarks[0].id, null)`,
 				},
 			},
 			{

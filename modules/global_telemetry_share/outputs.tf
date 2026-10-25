@@ -40,7 +40,7 @@ output "sdlc_analytics_hub_listing_id" {
 
 output "peer_benchmark_subscription_id" {
   description = "Resource ID of the reciprocal peer benchmark Analytics Hub subscription"
-  value       = try(google_bigquery_analytics_hub_subscription.peer_benchmarks[0].id, null)
+  value       = try(google_bigquery_analytics_hub_listing_subscription.peer_benchmarks[0].id, null)
 }
 
 output "sharing_enabled" {

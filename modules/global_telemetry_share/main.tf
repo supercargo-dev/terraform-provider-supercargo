@@ -110,7 +110,7 @@ resource "google_bigquery_analytics_hub_listing" "sdlc_efficiency_listing" {
   depends_on = [google_bigquery_dataset.global_telemetry]
 }
 
-resource "google_bigquery_analytics_hub_subscription" "peer_benchmarks" {
+resource "google_bigquery_analytics_hub_listing_subscription" "peer_benchmarks" {
   count            = var.enable_peer_benchmark_subscription && var.peer_benchmark_listing_id != "" ? 1 : 0
   project          = var.project_id
   location         = var.location
@@ -118,9 +118,18 @@ resource "google_bigquery_analytics_hub_subscription" "peer_benchmarks" {
   listing_id       = var.peer_benchmark_listing_id
 
   destination_dataset {
+    location = var.location
+
     dataset_reference {
       project_id = var.project_id
       dataset_id = var.peer_benchmark_dataset_id
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.peer_benchmark_data_exchange_id != "" || var.data_exchange_id != ""
+      error_message = "When enable_peer_benchmark_subscription is true, either peer_benchmark_data_exchange_id or data_exchange_id must be non-empty."
     }
   }
 }

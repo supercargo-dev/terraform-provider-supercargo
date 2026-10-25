@@ -69,12 +69,8 @@ variable "peer_benchmark_data_exchange_id" {
   default     = ""
 
   validation {
-    condition = (
-      !var.enable_peer_benchmark_subscription ||
-      var.peer_benchmark_data_exchange_id != "" ||
-      var.data_exchange_id != ""
-    )
-    error_message = "When enable_peer_benchmark_subscription is true, either peer_benchmark_data_exchange_id or data_exchange_id must be non-empty."
+    condition     = var.peer_benchmark_data_exchange_id == "" || can(regex("^[a-zA-Z0-9_-]+$", var.peer_benchmark_data_exchange_id))
+    error_message = "The peer_benchmark_data_exchange_id must contain only letters, numbers, underscores, or hyphens."
   }
 }
 
@@ -84,11 +80,8 @@ variable "peer_benchmark_listing_id" {
   default     = ""
 
   validation {
-    condition = (
-      !var.enable_peer_benchmark_subscription ||
-      (var.enable_peer_benchmark_subscription && var.peer_benchmark_listing_id != "")
-    )
-    error_message = "When enable_peer_benchmark_subscription is true, peer_benchmark_listing_id must be provided and non-empty."
+    condition     = var.peer_benchmark_listing_id == "" || can(regex("^[a-zA-Z0-9_-]+$", var.peer_benchmark_listing_id))
+    error_message = "The peer_benchmark_listing_id must contain only letters, numbers, underscores, or hyphens."
   }
 }
 
