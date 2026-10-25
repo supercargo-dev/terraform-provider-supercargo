@@ -90,6 +90,7 @@ module "global_telemetry_share" {
 | `authorized_view_access_id` | Resource ID of the Authorized View grant on the internal dataset |
 | `authorized_view_github_access_id` | Resource ID of the Authorized View grant on the GitHub dataset |
 | `authorized_view_sdlc_access_id` | Resource ID of the Authorized View grant for SDLC efficiency metrics on the internal dataset (`global_sdlc_efficiency_digest`) |
+| `authorized_view_github_sdlc_access_id` | Resource ID of the Authorized View grant for SDLC efficiency metrics on the GitHub dataset (`global_sdlc_efficiency_digest`) |
 | `analytics_hub_listing_id` | Resource ID of the Analytics Hub listing |
 | `sdlc_analytics_hub_listing_id` | Resource ID of the Analytics Hub listing for SDLC efficiency metrics |
 | `peer_benchmark_subscription_id` | Resource ID of the reciprocal peer benchmark Analytics Hub subscription |

@@ -64,6 +64,20 @@ resource "google_bigquery_dataset_access" "authorized_view_sdlc" {
   depends_on = [google_bigquery_dataset.global_telemetry]
 }
 
+resource "google_bigquery_dataset_access" "authorized_view_github_sdlc" {
+  count      = var.enable_global_telemetry_share && var.enable_global_sdlc_share ? 1 : 0
+  project    = var.project_id
+  dataset_id = var.github_dataset_id
+
+  view {
+    project_id = var.project_id
+    dataset_id = var.dataset_id
+    table_id   = "global_sdlc_efficiency_digest"
+  }
+
+  depends_on = [google_bigquery_dataset.global_telemetry]
+}
+
 resource "google_bigquery_analytics_hub_listing" "telemetry_listing" {
   count            = var.enable_global_telemetry_share && var.enable_analytics_hub_listing ? 1 : 0
   project          = var.project_id

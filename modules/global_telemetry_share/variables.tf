@@ -67,6 +67,15 @@ variable "peer_benchmark_data_exchange_id" {
   description = "The Analytics Hub Data Exchange ID for peer benchmarks (defaults to data_exchange_id if empty)"
   type        = string
   default     = ""
+
+  validation {
+    condition = (
+      !var.enable_peer_benchmark_subscription ||
+      var.peer_benchmark_data_exchange_id != "" ||
+      var.data_exchange_id != ""
+    )
+    error_message = "When enable_peer_benchmark_subscription is true, either peer_benchmark_data_exchange_id or data_exchange_id must be non-empty."
+  }
 }
 
 variable "peer_benchmark_listing_id" {

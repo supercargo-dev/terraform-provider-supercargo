@@ -23,6 +23,11 @@ output "authorized_view_sdlc_access_id" {
   value       = try(google_bigquery_dataset_access.authorized_view_sdlc[0].id, null)
 }
 
+output "authorized_view_github_sdlc_access_id" {
+  description = "Resource ID of the Authorized View grant for SDLC efficiency metrics on the GitHub dataset"
+  value       = try(google_bigquery_dataset_access.authorized_view_github_sdlc[0].id, null)
+}
+
 output "analytics_hub_listing_id" {
   description = "Resource ID of the Analytics Hub listing"
   value       = try(google_bigquery_analytics_hub_listing.telemetry_listing[0].id, null)

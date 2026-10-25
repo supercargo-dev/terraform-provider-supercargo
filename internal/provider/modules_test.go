@@ -2190,11 +2190,14 @@ func TestModules_GlobalTelemetryShare(t *testing.T) {
 				},
 			},
 			{
-				name: "peer_benchmark_data_exchange_id variable with default",
+				name: "peer_benchmark_data_exchange_id variable with default and validation",
 				expected: []string{
 					`variable "peer_benchmark_data_exchange_id"`,
 					`type        = string`,
 					`default     = ""`,
+					`!var.enable_peer_benchmark_subscription ||`,
+					`var.peer_benchmark_data_exchange_id != "" ||`,
+					`var.data_exchange_id != ""`,
 				},
 			},
 			{
@@ -2295,6 +2298,17 @@ func TestModules_GlobalTelemetryShare(t *testing.T) {
 				},
 			},
 			{
+				name: "google_bigquery_dataset_access authorized_view_github_sdlc on github dataset",
+				snippets: []string{
+					`resource "google_bigquery_dataset_access" "authorized_view_github_sdlc"`,
+					`count      = var.enable_global_telemetry_share && var.enable_global_sdlc_share ? 1 : 0`,
+					`project    = var.project_id`,
+					`dataset_id = var.github_dataset_id`,
+					`table_id   = "global_sdlc_efficiency_digest"`,
+					`depends_on = [google_bigquery_dataset.global_telemetry]`,
+				},
+			},
+			{
 				name: "google_bigquery_analytics_hub_listing telemetry_listing with sanitized listing_id",
 				snippets: []string{
 					`resource "google_bigquery_analytics_hub_listing" "telemetry_listing"`,
@@ -2384,6 +2398,13 @@ func TestModules_GlobalTelemetryShare(t *testing.T) {
 				snippets: []string{
 					`output "authorized_view_sdlc_access_id"`,
 					`try(google_bigquery_dataset_access.authorized_view_sdlc[0].id, null)`,
+				},
+			},
+			{
+				name: "authorized_view_github_sdlc_access_id output",
+				snippets: []string{
+					`output "authorized_view_github_sdlc_access_id"`,
+					`try(google_bigquery_dataset_access.authorized_view_github_sdlc[0].id, null)`,
 				},
 			},
 			{
