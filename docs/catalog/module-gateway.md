@@ -1,79 +1,107 @@
 ---
-type: Supercargo Terraform Module
-title: gateway Module
-description: Terraform module for deploying the Data Plane Gateway on Cloud Run, which enforces ingestion rules.
-tags: [terraform, module, okf, iam, security]
+type: "Supercargo Terraform Module"
+title: "gateway Module"
+description: "Terraform module for deploying and configuring gateway."
+visibility: "customer"
+tags: [terraform, module, okf]
 ---
 
 # gateway Module
 
-Terraform module for deploying the Data Plane Gateway on Cloud Run, which enforces ingestion rules, schema validation, cryptographic pseudonymization, and DLQ quarantine routing.
+Terraform module for deploying and configuring `gateway`.
+
+## Architecture & Data Flow
+
+```mermaid
+flowchart LR
+    Producer["Producer / Client"] -->|HTTPS / OIDC| Gateway["Gateway (Cloud Run)"]
+    Gateway -->|Validate & Pseudonymize| Clean["Clean Events (Pub/Sub)"]
+    Gateway -->|Validation Failure| DLQ["Dead Letter Queue (Pub/Sub)"]
+    Clean -->|Streaming Sink| BigQuery[("BigQuery Tables")]
+    Gateway -.->|Fetch Contract & SLA| Hub["Hub Service"]
+    Gateway -.->|Tokenize PII| Vault["Vault Service"]
+```
 
 ## Golden Path Usage
+
 ```terraform
 module "gateway" {
-  source         = "github.com/supercargo-dev/terraform-provider-supercargo//modules/gateway"
-  project_id     = var.project_id
-  region         = var.region
-  product_id     = "customer-orders"
-  image          = "europe-west1-docker.pkg.dev/supercargo-dev/images/gateway:latest"
-  hub_address    = "https://hub-ezwd7z77ha-ew.a.run.app"
-  kms_address    = "https://vault-ezwd7z77ha-ew.a.run.app"
-  master_key_uri = "projects/supercargo-dev/locations/europe-west1/keyRings/supercargo-vault-keyring/cryptoKeys/supercargo-vault-master-key"
-
-  # Declarative authorization of application service accounts
-  authorized_invoker_service_accounts = [
-    "order-service@supercargo-prod.iam.gserviceaccount.com",
-    "fulfillment-worker@supercargo-prod.iam.gserviceaccount.com"
-  ]
-
-  # Additional IAM members authorized for Cloud Run invocation
-  authorized_invokers = [
-    "group:sre-team@example.com"
-  ]
+  source = "github.com/supercargo-dev/terraform-provider-supercargo//modules/gateway"
+  hub_address              = var.hub_address
+  image                    = var.image
+  kms_address              = var.kms_address
+  master_key_uri           = var.master_key_uri
+  product_id               = var.product_id
+  project_id               = var.project_id
+  region                   = var.region
 }
 ```
 
-## Key Capabilities
-- **High-Throughput Ingestion Enforcement**: Provisions Cloud Run v2 service running the Supercargo Gateway, connected to Pub/Sub push pipelines and BigQuery streaming sinks.
-- **Declarative IAM Invocation Controls**: Exposes `authorized_invoker_service_accounts` (auto-formatted service account emails) and `authorized_invokers` (IAM member expressions) for granular `roles/run.invoker` authorization.
-- **Dedicated Push Invoker Identity**: Provisions an isolated Pub/Sub push service account (`push_invoker_service_account_email`) with `roles/run.invoker` binding to securely forward raw Pub/Sub messages to the Gateway.
-- **Resilient Pub/Sub Topologies**: Provisions Raw, Clean, and DLQ Pub/Sub topics with exponential backoff retry policies and Dead Letter Queue subscriptions (`raw_subscription_id`, `dlq_subscription_id`).
-- **Dynamic BigQuery Storage**: Creates strongly typed BigQuery tables for registered contract schemas with deletion protection.
-
 ## Configuration Variables
-| Variable | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `project_id` | `string` | *required* | The GCP project ID where resources are deployed. |
-| `region` | `string` | *required* | The GCP region for Cloud Run and Pub/Sub resources. |
-| `product_id` | `string` | *required* | The ID of the Data Product (used for naming resources). |
-| `image` | `string` | *required* | The container image for the Gateway service. |
-| `hub_address` | `string` | *required* | The address/URL of the Hub service. |
-| `kms_address` | `string` | *required* | The address/URL of the KMS (Vault) service. |
-| `master_key_uri` | `string` | *required* | The URI of the Master Key in GCP KMS for envelope encryption. |
-| `authorized_invoker_service_accounts` | `list(string)` | `[]` | List of service account emails authorized to invoke the Gateway service (auto-prefixed with `serviceAccount:`). |
-| `authorized_invokers` | `list(string)` | `[]` | List of raw IAM members (`user:...`, `group:...`, `serviceAccount:...`) authorized to invoke the Gateway. |
-| `ingress_type` | `string` | `"INGRESS_TRAFFIC_ALL"` | Allowed ingress traffic type (`INGRESS_TRAFFIC_ALL`, `INGRESS_TRAFFIC_INTERNAL_ONLY`, etc.). |
-| `auth_enforce` | `bool` | `true` | Whether to enforce OIDC token authentication at runtime (Shadow Mode if false). |
-| `bigquery_dataset_id` | `string` | `""` | Optional BigQuery dataset ID for validated data sink tables. |
-| `bigquery_deletion_protection` | `bool` | `true` | Whether to enable deletion protection on BigQuery tables. |
-| `pubsub_max_delivery_attempts` | `number` | `5` | Maximum number of delivery attempts before pushing to DLQ. |
-| `pubsub_minimum_backoff` | `string` | `"30s"` | Minimum backoff duration for Pub/Sub retries. |
-| `pubsub_maximum_backoff` | `string` | `"600s"` | Maximum backoff duration for Pub/Sub retries. |
+
+| Variable | Type | Default | Sensitive | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `alert_email_address` | `string` | `""` | no | Email address for alerts |
+| `alert_notification_channels` | `list(string)` | `[]` | no | List of existing Cloud Monitoring notification channel IDs to attach to alerts |
+| `alert_pagerduty_service_key` | `string` | (sensitive) | yes | PagerDuty integration/service key for alert routing |
+| `alert_slack_channel` | `string` | `""` | no | Slack channel for alerts (e.g. #team-alerts) |
+| `auth_enforce` | `bool` | `true` | no | Whether to enforce OIDC authentication (Shadow Mode if false) |
+| `authorized_invoker_service_accounts` | `list(string)` | `[]` | no | List of service account emails authorized to invoke the gateway service |
+| `authorized_invokers` | `list(string)` | `[]` | no | List of IAM members authorized to invoke the gateway |
+| `bigquery_dataset_id` | `string` | `""` | no | The BigQuery dataset ID where the table should be created |
+| `bigquery_deletion_protection` | `bool` | `true` | no | Whether to enable deletion protection on BigQuery tables |
+| `bigquery_subscription_filter` | `string` | `""` | no | Pub/Sub filter expression for the BigQuery subscription |
+| `bigquery_target_table` | `string` | `""` | no | The BigQuery table to stream clean data into (optional) |
+| `bigquery_use_table_schema` | `bool` | `true` | no | Whether to use the BigQuery table schema for the subscription |
+| `container_cpu` | `string` | `"1"` | no | The CPU limit for the container. |
+| `container_memory` | `string` | `"512Mi"` | no | The memory limit for the container. |
+| `contracts` | `map(object({ id = string schema = string }))` | `{}` | no | A map of contract configurations for strongly typed BigQuery tables |
+| `custom_audiences` | `list(string)` | `[]` | no | List of custom audiences to accept for OIDC |
+| `dlq_alert_threshold` | `number` | `0` | no | Threshold count of undelivered messages in DLQ to trigger alert |
+| `dlq_runbook_url` | `string` | `"https://docs.supercargo.dev/operations/runbooks/dlq-remediation"` | no | Runbook URL for DLQ incident remediation |
+| `dlq_unacked_message_age_seconds` | `number` | `300` | no | Threshold age (in seconds) of oldest unacknowledged message in DLQ to trigger alert |
+| `enable_dlq_alerts` | `bool` | `true` | no | Whether to enable Cloud Monitoring alert policies for DLQ |
+| `force_deploy_trigger` | `string` | `"static"` | no | A value that, when changed, triggers a new Cloud Run revision (e.g. git SHA or image digest). Use 'latest' or a fixed value for idempotency. |
+| `gateway_audience` | `string` | `""` | no | The expected audience for OIDC tokens (e.g. the service URL) |
+| `hub_address` | `string` | *required* | no | The address of the Hub service |
+| `hub_iap_client_id` | `string` | `""` | no | The IAP Client ID for the Hub service |
+| `hub_oidc_audience` | `string` | `""` | no | The OIDC audience for the Hub service (Internal OIDC) |
+| `image` | `string` | *required* | no | The container image for The Guardian service |
+| `ingress_type` | `string` | `"INGRESS_TRAFFIC_ALL"` | no | The type of ingress traffic allowed (INGRESS_TRAFFIC_ALL or INGRESS_TRAFFIC_INTERNAL_ONLY or INGRESS_TRAFFIC_INTERNAL_AND_GCLB) |
+| `kms_address` | `string` | *required* | no | The address of the KMS (Vault) service |
+| `log_level` | `string` | `"info"` | no | Log level for the service |
+| `master_key_uri` | `string` | *required* | no | The URI of the Master Key in GCP KMS |
+| `name_suffix` | `string` | `""` | no | Optional deterministic suffix appended to resource names for environment/branch disambiguation. Defaults to empty. |
+| `product_id` | `string` | *required* | no | The ID of the Data Product (used for naming resources) |
+| `project_id` | `string` | *required* | no | The GCP project ID |
+| `pubsub_expiration_policy_ttl` | `string` | `"1209600s"` | no | The TTL for idle subscriptions to auto-delete. |
+| `pubsub_max_delivery_attempts` | `number` | `5` | no | The maximum number of delivery attempts for a message. |
+| `pubsub_maximum_backoff` | `string` | `"600s"` | no | The maximum backoff duration for retries. |
+| `pubsub_message_retention_duration` | `string` | `"600s"` | no | The duration to retain messages in subscriptions. |
+| `pubsub_minimum_backoff` | `string` | `"30s"` | no | The minimum backoff duration for retries. |
+| `pubsub_push_path` | `string` | `"/pubsub/push/"` | no | The URL path for Pub/Sub push requests |
+| `region` | `string` | *required* | no | The GCP region |
+| `service_account_id` | `string` | `""` | no | Optional custom service account ID for the Gateway. If unset, defaults to 'gateway-<product_id>' with optional name_suffix. |
+| `vault_iap_client_id` | `string` | `""` | no | The IAP Client ID for the Vault service |
+| `vault_oidc_audience` | `string` | `""` | no | The OIDC audience for the Vault service (Internal OIDC) |
 
 ## Module Outputs
-| Output | Type | Description |
+
+| Output | Sensitive | Description |
 | :--- | :--- | :--- |
-| `service_name` | `string` | The name of the Gateway Cloud Run service. |
-| `service_url` | `string` | The HTTPS URL of the Gateway service. |
-| `raw_topic_id` | `string` | The ID of the Raw Pub/Sub topic. |
-| `clean_topic_id` | `string` | The ID of the Clean Pub/Sub topic. |
-| `dlq_topic_id` | `string` | The ID of the Dead Letter Queue Pub/Sub topic. |
-| `push_invoker_service_account_email` | `string` | The email of the Pub/Sub Push Invoker Service Account. |
-| `raw_subscription_id` | `string` | The ID of the Raw push subscription triggering Cloud Run. |
-| `dlq_subscription_id` | `string` | The ID of the Dead Letter Queue subscription. |
-| `service_account_email` | `string` | The email of the Gateway Service Account. |
-| `bigquery_table_ids` | `map(string)` | Map of contract IDs to their destination BigQuery table IDs. |
+| `bigquery_table_ids` | no | A map of contract names to BigQuery table IDs |
+| `clean_topic_id` | no | The ID of the Clean topic |
+| `dlq_alert_policy_age_id` | no | The ID of the DLQ message age alert policy |
+| `dlq_alert_policy_undelivered_id` | no | The ID of the DLQ undelivered messages alert policy |
+| `dlq_subscription_id` | no | The ID of the Dead Letter Queue subscription |
+| `dlq_topic_id` | no | The ID of the Dead Letter Queue topic |
+| `push_invoker_service_account_email` | no | The email of the Pub/Sub Push Invoker Service Account (plan-time deterministic) |
+| `raw_subscription_id` | no | The ID of the Raw push subscription |
+| `raw_topic_id` | no | The ID of the Raw topic |
+| `service_account_email` | no | The email of the Gateway Service Account (plan-time deterministic) |
+| `service_account_id` | no | The account ID of the Gateway Service Account |
+| `service_name` | no | The name of the Gateway service |
+| `service_url` | no | The URL of the Gateway service |
 
 ## Implementation
-- Source Code: [modules/gateway](../../modules/gateway)
+- Source Code: `modules/gateway`
