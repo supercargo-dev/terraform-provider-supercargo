@@ -1,78 +1,111 @@
 ---
-type: Supercargo Terraform Module
-title: data_product Module
-description: Terraform module for deploying Data Products and their Data Contracts into the Supercargo Hub.
-tags: [terraform, module, okf, iam, security]
+type: "Supercargo Terraform Module"
+title: "data_product Module"
+description: "Terraform module for deploying and configuring data_product."
+visibility: "customer"
+tags: [terraform, module, okf]
 ---
 
 # data_product Module
 
-Terraform module for deploying Data Products and their Data Contracts into the Supercargo Hub, configuring the associated ingestion Gateway, Pub/Sub event topics, BigQuery streaming sinks, and IAM invocation controls.
+Terraform module for deploying and configuring `data_product`.
+
+## Architecture & Data Flow
+
+```mermaid
+flowchart TD
+    subgraph Ingestion["Data Product Ingestion"]
+        Producer["Producer Service"] -->|Publish Events| RawTopic["Raw Topic (Pub/Sub)"]
+        RawTopic -->|Push Subscription| Gateway["Gateway (Cloud Run)"]
+        Gateway -->|Quarantine| DLQ["Dead Letter Queue (Pub/Sub)"]
+        Gateway -->|Clean Events| CleanTopic["Clean Topic (Pub/Sub)"]
+        CleanTopic -->|Storage Sink| BigQuery[("BigQuery Tables")]
+    end
+    subgraph Governance["Platform Governance"]
+        Gateway -.->|Contract & Policy Check| Hub["Hub Service"]
+        Gateway -.->|PII Pseudonymization| Vault["Vault Service"]
+    end
+```
 
 ## Golden Path Usage
+
 ```terraform
-module "customer_telemetry" {
-  source         = "github.com/supercargo-dev/terraform-provider-supercargo//modules/data_product"
-  project_id     = var.project_id
-  region         = var.region
-  manifest_file  = "${path.module}/product.yaml"
-  image          = "europe-west1-docker.pkg.dev/supercargo-dev/images/gateway:latest"
-  hub_address    = "https://hub-ezwd7z77ha-ew.a.run.app"
-  kms_address    = "https://vault-ezwd7z77ha-ew.a.run.app"
-  master_key_uri = "projects/supercargo-dev/locations/europe-west1/keyRings/supercargo-vault-keyring/cryptoKeys/supercargo-vault-master-key"
-
-  # Declarative authorization of application service accounts
-  authorized_invoker_service_accounts = [
-    "checkout-service@supercargo-prod.iam.gserviceaccount.com",
-    "payment-service@supercargo-prod.iam.gserviceaccount.com"
-  ]
-
-  # Additional IAM members (users, groups, service accounts with prefix)
-  authorized_invokers = [
-    "group:data-platform-admins@example.com"
-  ]
+module "data_product" {
+  source = "github.com/supercargo-dev/terraform-provider-supercargo//modules/data_product"
+  hub_address              = var.hub_address
+  image                    = var.image
+  kms_address              = var.kms_address
+  manifest_file            = var.manifest_file
+  master_key_uri           = var.master_key_uri
+  project_id               = var.project_id
+  region                   = var.region
 }
 ```
 
-## Key Capabilities
-- **Native Manifest Contract Resolution**: Auto-resolves contract files, schema JSONs, and content hashes from `product.yaml`.
-- **Dynamic Table Wiring**: Dynamically supplies BigQuery table configurations to the underlying `gateway` module with normalized table identifiers.
-- **Declarative IAM Invocation Controls**: Exposes `authorized_invoker_service_accounts` (convenient raw service account emails automatically formatted as `serviceAccount:...`) and `authorized_invokers` (arbitrary IAM member expressions) to grant `roles/run.invoker` on the deployed Cloud Run Gateway service.
-- **Encapsulated Pub/Sub Push Invocation**: Automatically creates and binds a dedicated push invoker service account for Pub/Sub push subscription delivery to Cloud Run.
-- **Backwards Compatibility**: Supports explicit contract maps via `var.contracts` for CI/CD artifact-passing pipelines.
-
 ## Configuration Variables
-| Variable | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `manifest_file` | `string` | *required* | Path to the Data Product manifest YAML/JSON file. |
-| `project_id` | `string` | *required* | The GCP project ID where resources are deployed. |
-| `region` | `string` | *required* | The GCP region for Cloud Run and Pub/Sub resources. |
-| `image` | `string` | *required* | The container image for the Gateway service. |
-| `hub_address` | `string` | *required* | The address/URL of the Hub service. |
-| `kms_address` | `string` | *required* | The address/URL of the KMS (Vault) service. |
-| `master_key_uri` | `string` | *required* | The URI of the Master Key in GCP KMS for envelope encryption. |
-| `authorized_invoker_service_accounts` | `list(string)` | `[]` | List of service account emails authorized to invoke the Gateway service (auto-prefixed with `serviceAccount:`). |
-| `authorized_invokers` | `list(string)` | `[]` | List of raw IAM members (`user:...`, `group:...`, `serviceAccount:...`) authorized to invoke the Gateway. |
-| `contracts` | `map(object(...))` | `{}` | Optional explicit map of contract configurations to register. |
-| `bigquery_dataset_id` | `string` | `""` | Optional BigQuery dataset ID for validated data sink tables. |
-| `auth_enforce` | `bool` | `true` | Whether to enforce OIDC token authentication at runtime (Shadow Mode if false). |
-| `bigquery_deletion_protection` | `bool` | `true` | Whether to enable deletion protection on generated BigQuery tables. |
+
+| Variable | Type | Default | Sensitive | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `alert_email_address` | `string` | `""` | no | Email address for alerts |
+| `alert_notification_channels` | `list(string)` | `[]` | no | List of existing Cloud Monitoring notification channel IDs to attach to alerts |
+| `alert_pagerduty_service_key` | `string` | (sensitive) | yes | PagerDuty integration/service key for alert routing |
+| `alert_slack_channel` | `string` | `""` | no | Slack channel for alerts (e.g. #team-alerts) |
+| `auth_enforce` | `bool` | `true` | no | Whether to enforce OIDC authentication (Shadow Mode if false) |
+| `authorized_invoker_service_accounts` | `list(string)` | `[]` | no | List of service account emails authorized to invoke the gateway service |
+| `authorized_invokers` | `list(string)` | `[]` | no | List of IAM members authorized to invoke the gateway |
+| `bigquery_dataset_id` | `string` | `""` | no | The BigQuery dataset ID where the table should be created |
+| `bigquery_deletion_protection` | `bool` | `true` | no | Whether to enable deletion protection on BigQuery tables |
+| `container_cpu` | `string` | `"1"` | no | The CPU limit for the container. |
+| `container_memory` | `string` | `"512Mi"` | no | The memory limit for the container. |
+| `contracts` | `map(object({ version = string schema_json = string commit_sha = string content_hash = string }))` | `{}` | no | Map of contracts to register and provision |
+| `custom_audiences` | `list(string)` | `[]` | no | - |
+| `dlq_alert_threshold` | `number` | `0` | no | Threshold count of undelivered messages in DLQ to trigger alert |
+| `dlq_runbook_url` | `string` | `"https://docs.supercargo.dev/operations/runbooks/dlq-remediation"` | no | Runbook URL for DLQ incident remediation |
+| `dlq_unacked_message_age_seconds` | `number` | `300` | no | Threshold age (in seconds) of oldest unacknowledged message in DLQ to trigger alert |
+| `enable_dlq_alerts` | `bool` | `true` | no | Whether to enable Cloud Monitoring alert policies for DLQ |
+| `force_deploy_trigger` | `string` | `"static"` | no | A value that, when changed, triggers a new Cloud Run revision (e.g. git SHA or image digest). Use 'latest' or a fixed value for idempotency. |
+| `gateway_audience` | `string` | `""` | no | - |
+| `hub_address` | `string` | *required* | no | The address of the Hub service |
+| `hub_iap_client_id` | `string` | `""` | no | The IAP Client ID for the Hub service |
+| `hub_oidc_audience` | `string` | `""` | no | The OIDC audience for the Hub service (Internal OIDC) |
+| `image` | `string` | *required* | no | The container image for The Guardian service |
+| `kms_address` | `string` | *required* | no | The address of the KMS (Vault) service |
+| `log_level` | `string` | `"info"` | no | Log level for the service |
+| `manifest_file` | `string` | *required* | no | Path to the Data Product manifest YAML/JSON file |
+| `master_key_uri` | `string` | *required* | no | The URI of the Master Key in GCP KMS |
+| `name_suffix` | `string` | `""` | no | Optional deterministic suffix appended to resource names for environment/branch disambiguation. Defaults to empty. |
+| `project_id` | `string` | *required* | no | The GCP project ID |
+| `pubsub_expiration_policy_ttl` | `string` | `"1209600s"` | no | The TTL for idle subscriptions to auto-delete. |
+| `pubsub_max_delivery_attempts` | `number` | `5` | no | The maximum number of delivery attempts for a message. |
+| `pubsub_maximum_backoff` | `string` | `"600s"` | no | The maximum backoff duration for retries. |
+| `pubsub_message_retention_duration` | `string` | `"600s"` | no | The duration to retain messages in subscriptions. |
+| `pubsub_minimum_backoff` | `string` | `"30s"` | no | The minimum backoff duration for retries. |
+| `region` | `string` | *required* | no | The GCP region |
+| `service_account_id` | `string` | `""` | no | Optional custom service account ID for the Gateway. If unset, defaults to 'gateway-<product_id>' with optional name_suffix. |
+| `vault_iap_client_id` | `string` | `""` | no | The IAP Client ID for the Vault service |
+| `vault_oidc_audience` | `string` | `""` | no | The OIDC audience for the Vault service (Internal OIDC) |
 
 ## Module Outputs
-| Output | Type | Description |
+
+| Output | Sensitive | Description |
 | :--- | :--- | :--- |
-| `product_urn` | `string` | The URN of the registered Data Product in Supercargo Hub. |
-| `gateway_service_name` | `string` | The name of the deployed Gateway Cloud Run service. |
-| `gateway_url` | `string` | The HTTPS URL of the deployed Cloud Run Gateway. |
-| `raw_topic_id` | `string` | The ID of the Pub/Sub topic for raw unvalidated events. |
-| `clean_topic_id` | `string` | The ID of the Pub/Sub topic for validated clean events. |
-| `dlq_topic_id` | `string` | The ID of the Dead Letter Queue (DLQ) Pub/Sub topic for quarantine routing. |
-| `push_invoker_service_account_email` | `string` | The email of the dedicated Pub/Sub Push Invoker Service Account. |
-| `raw_subscription_id` | `string` | The ID of the raw event Pub/Sub push subscription triggering the Gateway. |
-| `dlq_subscription_id` | `string` | The ID of the Dead Letter Queue Pub/Sub subscription. |
-| `service_account_email` | `string` | The email of the runtime Gateway Service Account. |
-| `bigquery_table_ids` | `map(string)` | Map of contract IDs to their destination BigQuery table IDs. |
-| `contracts` | `map(object)` | Map of auto-discovered or explicitly provided contracts. |
+| `bigquery_table_ids` | no | A map of contract names to BigQuery table IDs |
+| `clean_topic_id` | no | The ID of the Clean topic |
+| `contracts` | no | Map of auto-discovered or explicitly provided contracts |
+| `dlq_alert_policy_age_id` | no | The ID of the Cloud Monitoring alert policy for DLQ oldest unacked message age |
+| `dlq_alert_policy_undelivered_id` | no | The ID of the Cloud Monitoring alert policy for DLQ undelivered messages |
+| `dlq_subscription_id` | no | The ID of the Dead Letter Queue Subscription |
+| `dlq_topic_id` | no | The ID of the Dead Letter Queue topic |
+| `gateway_service_name` | no | The name of the Gateway Cloud Run service |
+| `gateway_url` | no | The URL of the deployed Cloud Run Gateway |
+| `input_subscription_ids` | no | Map of input port names to their Pub/Sub push subscription IDs |
+| `managed_input_topics` | no | Map of managed input port names to their created Pub/Sub topic IDs |
+| `product_urn` | no | The URN of the registered Data Product |
+| `push_invoker_service_account_email` | no | The email of the Pub/Sub Push Invoker Service Account |
+| `raw_subscription_id` | no | The ID of the Raw Pub/Sub Push Subscription |
+| `raw_topic_id` | no | The ID of the Raw topic |
+| `service_account_email` | no | The service account email of the Gateway |
+| `service_account_id` | no | The account ID of the Gateway Service Account |
 
 ## Implementation
-- Source Code: [modules/data_product](../../modules/data_product)
+- Source Code: `modules/data_product`

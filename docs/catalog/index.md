@@ -1,7 +1,8 @@
 ---
-type: Supercargo Concept
-title: Terraform Provider for Supercargo
-description: Official Terraform provider for managing Supercargo Data Products, Contracts, and Core infrastructure.
+type: "Supercargo Concept"
+title: "Terraform Provider for Supercargo"
+description: "Official Terraform provider for managing Supercargo Data Products, Contracts, and Core infrastructure."
+visibility: "customer"
 tags: [terraform, provider, okf]
 ---
 
@@ -13,33 +14,30 @@ Welcome to the Knowledge Catalog for the Supercargo Terraform Provider. This pro
 
 The `terraform-provider-supercargo` bridges the declarative world of Terraform with the Supercargo Control Plane (Hub). It enables users to register data products, manage data contracts, configure gateways, and establish teams using standard HCL.
 
-## Key Resources
+## Migration & Architecture Notes
 
-* **`supercargo_data_product`**: Registers a new Data Product within the Supercargo Hub.
-* **`supercargo_contract_version`**: Publishes a new version of a Data Contract, attaching SLA and Health metadata.
-* **`supercargo_team`**: Defines a Team within the Supercargo platform for ownership and RBAC.
-* **`supercargo_gateway_config`**: Configures data routing rules and policy enforcement for a specific Gateway instance.
-* **`supercargo_ingestion_gateway`**: Deploys and configures an Ingestion Gateway for a Data Product.
-
-## Usage
-
-This provider is intended to be used within the deployment pipelines of individual Data Products (Spokes) as well as by the core Platform team managing the Hub.
-
-When you run `sc apply`, the CLI under the hood orchestrates Terraform execution using this provider to push the declarative state defined in your `product.yaml` to the remote Supercargo Hub.
+Data Product and Gateway infrastructure are declaratively compiled via `modules/data_product` and `modules/gateway`. Mutable pseudo-resources (`supercargo_data_product`, `supercargo_contract_version`, `supercargo_gateway_config`, `supercargo_ingestion_gateway`) are retired in favor of declarative infrastructure compilation directly from `product.yaml`.
 
 ## Resources
-* [supercargo_data_product](resource-data-product.md)
-* [supercargo_contract_version](resource-contract-version.md)
 * [supercargo_team](resource-team.md)
-* [supercargo_gateway_config](resource-gateway-config.md)
-* [supercargo_ingestion_gateway](resource-ingestion-gateway.md)
+
+## Data Sources
+* [supercargo_contract](data-source-contract.md)
+* [supercargo_data_product](data-source-data-product.md)
+
+## Provider
+* [supercargo](provider.md)
 
 ## Modules
+* [analytics_github_sync Module](module-analytics_github_sync.md)
 * [data_product Module](module-data_product.md)
+* [dataplex_taxonomy Module](module-dataplex_taxonomy.md)
 * [gateway Module](module-gateway.md)
 * [gh-wif Module](module-gh-wif.md)
+* [global_telemetry_share Module](module-global_telemetry_share.md)
 * [hub Module](module-hub.md)
 * [loader Module](module-loader.md)
 * [metadata_shovel Module](module-metadata_shovel.md)
 * [security_vault Module](module-security_vault.md)
 * [vault Module](module-vault.md)
+
