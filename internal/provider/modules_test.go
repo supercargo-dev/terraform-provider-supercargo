@@ -2820,3 +2820,265 @@ func TestModules_AnalyticsGitHubSync(t *testing.T) {
 		assert.Contains(t, content, "BigQuery")
 	})
 }
+
+func findDocsPortalModuleDir(t *testing.T) string {
+	t.Helper()
+	moduleDir := filepath.Clean(filepath.Join("..", "..", "modules", "docs_portal"))
+	abs, err := filepath.Abs(moduleDir)
+	require.NoError(t, err)
+	return abs
+}
+
+func readDocsPortalModuleFile(t *testing.T, filename string) string {
+	t.Helper()
+	moduleDir := findDocsPortalModuleDir(t)
+	fullPath := filepath.Join(moduleDir, filename)
+	data, err := os.ReadFile(fullPath)
+	require.NoError(t, err, "failed to read module file %s at %s", filename, fullPath)
+	return string(data)
+}
+
+func TestModules_DocsPortal(t *testing.T) {
+	moduleDir := findDocsPortalModuleDir(t)
+	fi, err := os.Stat(moduleDir)
+	require.NoError(t, err, "module directory should exist at %s", moduleDir)
+	require.True(t, fi.IsDir(), "expected %s to be a directory", moduleDir)
+
+	t.Run("FilesExist", func(t *testing.T) {
+		expectedFiles := []string{
+			"main.tf",
+			"variables.tf",
+			"outputs.tf",
+			"versions.tf",
+			"README.md",
+		}
+
+		for _, file := range expectedFiles {
+			t.Run(file, func(t *testing.T) {
+				path := filepath.Join(moduleDir, file)
+				f, err := os.Stat(path)
+				require.NoError(t, err, "file %s should exist in module", file)
+				assert.False(t, f.IsDir(), "file %s should not be a directory", file)
+			})
+		}
+	})
+
+	t.Run("Variables", func(t *testing.T) {
+		content := readDocsPortalModuleFile(t, "variables.tf")
+
+		tests := []struct {
+			name     string
+			expected []string
+		}{
+			{
+				name: "project_id variable",
+				expected: []string{
+					`variable "project_id"`,
+					`type        = string`,
+				},
+			},
+			{
+				name: "region variable with default",
+				expected: []string{
+					`variable "region"`,
+					`type        = string`,
+					`default     = "europe-west1"`,
+				},
+			},
+			{
+				name: "service_name variable with default",
+				expected: []string{
+					`variable "service_name"`,
+					`type        = string`,
+					`default     = "docs-portal"`,
+				},
+			},
+			{
+				name: "image variable",
+				expected: []string{
+					`variable "image"`,
+					`type        = string`,
+				},
+			},
+			{
+				name: "domain_name variable",
+				expected: []string{
+					`variable "domain_name"`,
+					`type        = string`,
+				},
+			},
+			{
+				name: "licensed_domains variable",
+				expected: []string{
+					`variable "licensed_domains"`,
+					`type        = list(string)`,
+				},
+			},
+			{
+				name: "iap_enabled variable",
+				expected: []string{
+					`variable "iap_enabled"`,
+					`type        = bool`,
+					`default     = true`,
+				},
+			},
+			{
+				name: "iap_client_id variable",
+				expected: []string{
+					`variable "iap_client_id"`,
+					`type        = string`,
+				},
+			},
+			{
+				name: "iap_client_secret variable sensitive",
+				expected: []string{
+					`variable "iap_client_secret"`,
+					`type        = string`,
+					`sensitive   = true`,
+				},
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				for _, snippet := range tc.expected {
+					assert.Contains(t, content, snippet)
+				}
+			})
+		}
+	})
+
+	t.Run("CloudRunV2Service", func(t *testing.T) {
+		content := readDocsPortalModuleFile(t, "main.tf")
+
+		// 1. Cloud Run v2 service defines startup and liveness probes targeting /healthz on port 8080.
+		assert.Contains(t, content, `resource "google_cloud_run_v2_service" "docs_portal"`)
+		assert.Contains(t, content, `startup_probe {`)
+		assert.Contains(t, content, `liveness_probe {`)
+		assert.Contains(t, content, `path = "/healthz"`)
+		assert.Contains(t, content, `port = 8080`)
+
+		// 2. Cloud Run v2 service defines ingress = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+		assert.Contains(t, content, `ingress = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"`)
+
+		// Resources: 256Mi memory, 1 CPU
+		assert.Contains(t, content, `memory = "256Mi"`)
+		assert.Contains(t, content, `cpu    = "1"`)
+	})
+
+	t.Run("CloudRunInvokerAllUsers", func(t *testing.T) {
+		content := readDocsPortalModuleFile(t, "main.tf")
+
+		// 3. google_cloud_run_v2_service_iam_member binds roles/run.invoker to allUsers
+		assert.Contains(t, content, `resource "google_cloud_run_v2_service_iam_member" "all_users_invoker"`)
+		assert.Contains(t, content, `role   = "roles/run.invoker"`)
+		assert.Contains(t, content, `member = "allUsers"`)
+	})
+
+	t.Run("ServerlessNEG", func(t *testing.T) {
+		content := readDocsPortalModuleFile(t, "main.tf")
+
+		// 4. Serverless NEG is defined for the Cloud Run service
+		assert.Contains(t, content, `resource "google_compute_region_network_endpoint_group" "serverless_neg"`)
+		assert.Contains(t, content, `network_endpoint_type = "SERVERLESS"`)
+		assert.Contains(t, content, `cloud_run {`)
+		assert.Contains(t, content, `service = google_cloud_run_v2_service.docs_portal.name`)
+	})
+
+	t.Run("IAPBackendServiceAndIAM", func(t *testing.T) {
+		content := readDocsPortalModuleFile(t, "main.tf")
+
+		// 5. IAP backend service and google_iap_web_backend_service_iam_member iterate over local.normalized_licensed_domains using roles/iap.httpsResourceAccessor
+		assert.Contains(t, content, `resource "google_compute_backend_service" "backend"`)
+		assert.Contains(t, content, `protocol = "HTTP"`)
+		assert.Contains(t, content, `dynamic "iap" {`)
+		assert.Contains(t, content, `for_each = var.iap_enabled && var.iap_client_id != "" ? [1] : []`)
+		assert.Contains(t, content, `oauth2_client_id     = var.iap_client_id`)
+		assert.Contains(t, content, `oauth2_client_secret = var.iap_client_secret`)
+
+		assert.Contains(t, content, `locals {`)
+		assert.Contains(t, content, `normalized_licensed_domains = toset([`)
+		assert.Contains(t, content, `for d in var.licensed_domains : startswith(d, "domain:") ? d : "domain:${d}"`)
+
+		assert.Contains(t, content, `resource "google_iap_web_backend_service_iam_member" "licensed_domains"`)
+		assert.Contains(t, content, `for_each = local.normalized_licensed_domains`)
+		assert.Contains(t, content, `role                  = "roles/iap.httpsResourceAccessor"`)
+		assert.Contains(t, content, `member                = each.value`)
+	})
+
+	t.Run("LoadBalancerAndRedirect", func(t *testing.T) {
+		content := readDocsPortalModuleFile(t, "main.tf")
+
+		// Global forwarding rule (HTTPS :443), target HTTPS proxy, managed SSL cert, URL map, static global IP, HTTP-to-HTTPS redirect
+		assert.Contains(t, content, `resource "google_compute_global_address" "docs_portal"`)
+		assert.Contains(t, content, `resource "google_compute_managed_ssl_certificate" "docs_portal"`)
+		assert.Contains(t, content, `resource "google_compute_url_map" "docs_portal"`)
+		assert.Contains(t, content, `resource "google_compute_target_https_proxy" "docs_portal"`)
+		assert.Contains(t, content, `resource "google_compute_global_forwarding_rule" "docs_portal_https"`)
+		assert.Contains(t, content, `port_range = "443"`)
+
+		// HTTP-to-HTTPS redirect
+		assert.Contains(t, content, `resource "google_compute_url_map" "https_redirect"`)
+		assert.Contains(t, content, `https_redirect = true`)
+		assert.Contains(t, content, `strip_query    = false`)
+		assert.Contains(t, content, `resource "google_compute_target_http_proxy" "https_redirect"`)
+		assert.Contains(t, content, `resource "google_compute_global_forwarding_rule" "docs_portal_http"`)
+		assert.Contains(t, content, `port_range = "80"`)
+	})
+
+	t.Run("Outputs", func(t *testing.T) {
+		content := readDocsPortalModuleFile(t, "outputs.tf")
+
+		tests := []struct {
+			name     string
+			snippets []string
+		}{
+			{
+				name: "load_balancer_ip output",
+				snippets: []string{
+					`output "load_balancer_ip"`,
+					`google_compute_global_address.docs_portal.address`,
+				},
+			},
+			{
+				name: "service_url output",
+				snippets: []string{
+					`output "service_url"`,
+					`"https://${var.domain_name}"`,
+				},
+			},
+			{
+				name: "backend_service_id output",
+				snippets: []string{
+					`output "backend_service_id"`,
+					`google_compute_backend_service.backend.id`,
+				},
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				for _, snippet := range tc.snippets {
+					assert.Contains(t, content, snippet)
+				}
+			})
+		}
+	})
+
+	t.Run("Versions", func(t *testing.T) {
+		content := readDocsPortalModuleFile(t, "versions.tf")
+
+		assert.True(t, strings.Contains(content, `required_version = ">= 1.5.0"`) || strings.Contains(content, `required_version = ">= 1.5"`))
+		assert.Contains(t, content, `hashicorp/google`)
+		assert.Contains(t, content, `>= 5.0.0, < 8.0.0`)
+	})
+
+	t.Run("Readme", func(t *testing.T) {
+		content := readDocsPortalModuleFile(t, "README.md")
+
+		assert.Contains(t, content, "docs_portal")
+		assert.Contains(t, content, "Cloud Run")
+		assert.Contains(t, content, "Identity-Aware Proxy")
+	})
+}
+
