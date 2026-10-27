@@ -2997,7 +2997,7 @@ func TestModules_DocsPortal(t *testing.T) {
 		assert.Regexp(t, regexp.MustCompile(`oauth2_client_secret\s*=\s*var\.iap_client_secret`), content)
 
 		assert.Contains(t, content, `locals {`)
-		assert.Contains(t, content, `normalized_licensed_domains = toset([`)
+		assert.Contains(t, content, `normalized_licensed_domains = var.iap_enabled && var.iap_client_id != "" ? toset([`)
 		assert.Contains(t, content, `for d in var.licensed_domains : startswith(d, "domain:") ? d : "domain:${d}"`)
 
 		assert.Contains(t, content, `resource "google_iap_web_backend_service_iam_member" "licensed_domains"`)

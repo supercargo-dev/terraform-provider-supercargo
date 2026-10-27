@@ -1,7 +1,7 @@
 locals {
-  normalized_licensed_domains = toset([
+  normalized_licensed_domains = var.iap_enabled && var.iap_client_id != "" ? toset([
     for d in var.licensed_domains : startswith(d, "domain:") ? d : "domain:${d}"
-  ])
+  ]) : toset([])
 }
 
 resource "google_cloud_run_v2_service" "docs_portal" {
