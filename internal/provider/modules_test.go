@@ -2959,7 +2959,7 @@ func TestModules_DocsPortal(t *testing.T) {
 		assert.Contains(t, content, `port = 8080`)
 
 		// 2. Cloud Run v2 service defines ingress = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
-		assert.Contains(t, content, `ingress = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"`)
+		assert.Regexp(t, regexp.MustCompile(`ingress\s*=\s*"INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"`), content)
 
 		// Resources: 256Mi memory, 1 CPU
 		assert.Contains(t, content, `memory = "256Mi"`)
@@ -2971,8 +2971,8 @@ func TestModules_DocsPortal(t *testing.T) {
 
 		// 3. google_cloud_run_v2_service_iam_member binds roles/run.invoker to allUsers
 		assert.Contains(t, content, `resource "google_cloud_run_v2_service_iam_member" "all_users_invoker"`)
-		assert.Contains(t, content, `role   = "roles/run.invoker"`)
-		assert.Contains(t, content, `member = "allUsers"`)
+		assert.Regexp(t, regexp.MustCompile(`role\s*=\s*"roles/run\.invoker"`), content)
+		assert.Regexp(t, regexp.MustCompile(`member\s*=\s*"allUsers"`), content)
 	})
 
 	t.Run("ServerlessNEG", func(t *testing.T) {
@@ -2990,11 +2990,11 @@ func TestModules_DocsPortal(t *testing.T) {
 
 		// 5. IAP backend service and google_iap_web_backend_service_iam_member iterate over local.normalized_licensed_domains using roles/iap.httpsResourceAccessor
 		assert.Contains(t, content, `resource "google_compute_backend_service" "backend"`)
-		assert.Contains(t, content, `protocol = "HTTP"`)
+		assert.Regexp(t, regexp.MustCompile(`protocol\s*=\s*"HTTP"`), content)
 		assert.Contains(t, content, `dynamic "iap" {`)
 		assert.Contains(t, content, `for_each = var.iap_enabled && var.iap_client_id != "" ? [1] : []`)
-		assert.Contains(t, content, `oauth2_client_id     = var.iap_client_id`)
-		assert.Contains(t, content, `oauth2_client_secret = var.iap_client_secret`)
+		assert.Regexp(t, regexp.MustCompile(`oauth2_client_id\s*=\s*var\.iap_client_id`), content)
+		assert.Regexp(t, regexp.MustCompile(`oauth2_client_secret\s*=\s*var\.iap_client_secret`), content)
 
 		assert.Contains(t, content, `locals {`)
 		assert.Contains(t, content, `normalized_licensed_domains = toset([`)
@@ -3002,8 +3002,8 @@ func TestModules_DocsPortal(t *testing.T) {
 
 		assert.Contains(t, content, `resource "google_iap_web_backend_service_iam_member" "licensed_domains"`)
 		assert.Contains(t, content, `for_each = local.normalized_licensed_domains`)
-		assert.Contains(t, content, `role                  = "roles/iap.httpsResourceAccessor"`)
-		assert.Contains(t, content, `member                = each.value`)
+		assert.Regexp(t, regexp.MustCompile(`role\s*=\s*"roles/iap\.httpsResourceAccessor"`), content)
+		assert.Regexp(t, regexp.MustCompile(`member\s*=\s*each\.value`), content)
 	})
 
 	t.Run("LoadBalancerAndRedirect", func(t *testing.T) {
@@ -3015,7 +3015,7 @@ func TestModules_DocsPortal(t *testing.T) {
 		assert.Contains(t, content, `resource "google_compute_url_map" "docs_portal"`)
 		assert.Contains(t, content, `resource "google_compute_target_https_proxy" "docs_portal"`)
 		assert.Contains(t, content, `resource "google_compute_global_forwarding_rule" "docs_portal_https"`)
-		assert.Contains(t, content, `port_range = "443"`)
+		assert.Regexp(t, regexp.MustCompile(`port_range\s*=\s*"443"`), content)
 
 		// HTTP-to-HTTPS redirect
 		assert.Contains(t, content, `resource "google_compute_url_map" "https_redirect"`)
@@ -3023,7 +3023,7 @@ func TestModules_DocsPortal(t *testing.T) {
 		assert.Contains(t, content, `strip_query    = false`)
 		assert.Contains(t, content, `resource "google_compute_target_http_proxy" "https_redirect"`)
 		assert.Contains(t, content, `resource "google_compute_global_forwarding_rule" "docs_portal_http"`)
-		assert.Contains(t, content, `port_range = "80"`)
+		assert.Regexp(t, regexp.MustCompile(`port_range\s*=\s*"80"`), content)
 	})
 
 	t.Run("Outputs", func(t *testing.T) {
