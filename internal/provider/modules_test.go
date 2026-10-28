@@ -2995,6 +2995,7 @@ func TestModules_DocsPortal(t *testing.T) {
 		assert.Contains(t, content, `for_each = var.iap_enabled && var.iap_client_id != "" ? [1] : []`)
 		assert.Regexp(t, regexp.MustCompile(`oauth2_client_id\s*=\s*var\.iap_client_id`), content)
 		assert.Regexp(t, regexp.MustCompile(`oauth2_client_secret\s*=\s*var\.iap_client_secret`), content)
+		assert.Regexp(t, regexp.MustCompile(`enabled\s*=\s*true`), content)
 
 		assert.Contains(t, content, `locals {`)
 		assert.Contains(t, content, `normalized_licensed_domains = var.iap_enabled && var.iap_client_id != "" ? toset([`)
@@ -3081,4 +3082,3 @@ func TestModules_DocsPortal(t *testing.T) {
 		assert.Contains(t, content, "Identity-Aware Proxy")
 	})
 }
-
