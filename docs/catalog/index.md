@@ -32,6 +32,7 @@ Data Product and Gateway infrastructure are declaratively compiled via `modules/
 * [analytics_github_sync Module](module-analytics_github_sync.md)
 * [data_product Module](module-data_product.md)
 * [dataplex_taxonomy Module](module-dataplex_taxonomy.md)
+* [docs_portal Module](module-docs_portal.md)
 * [gateway Module](module-gateway.md)
 * [gh-wif Module](module-gh-wif.md)
 * [global_telemetry_share Module](module-global_telemetry_share.md)
