@@ -4,13 +4,13 @@ variable "project_id" {
 }
 
 variable "region" {
-  description = "The GCP region for regional resources (Cloud Run, Serverless NEG)"
+  description = "The GCP region for regional resources (Cloud Run, Domain Mapping)"
   type        = string
   default     = "europe-west1"
 }
 
 variable "service_name" {
-  description = "The name of the Cloud Run service and base naming prefix for load balancer resources"
+  description = "The name of the Cloud Run service"
   type        = string
   default     = "docs-portal"
 }
@@ -21,8 +21,9 @@ variable "image" {
 }
 
 variable "domain_name" {
-  description = "The fully qualified custom domain name for the docs portal (e.g., docs.example.com)"
+  description = "The fully qualified custom domain name for the docs portal (e.g., docs.example.com). Leave empty to use Cloud Run default URI."
   type        = string
+  default     = ""
 }
 
 variable "licensed_domains" {
@@ -32,19 +33,19 @@ variable "licensed_domains" {
 }
 
 variable "iap_enabled" {
-  description = "Whether to enable Identity-Aware Proxy (IAP) on the GCLB backend service"
+  description = "Whether to enable Identity-Aware Proxy (IAP) directly on the Cloud Run service"
   type        = bool
   default     = true
 }
 
 variable "iap_client_id" {
-  description = "OAuth 2.0 Client ID for Identity-Aware Proxy (IAP)"
+  description = "Optional OAuth 2.0 Client ID for Identity-Aware Proxy (IAP)"
   type        = string
   default     = ""
 }
 
 variable "iap_client_secret" {
-  description = "OAuth 2.0 Client Secret for Identity-Aware Proxy (IAP)"
+  description = "Optional OAuth 2.0 Client Secret for Identity-Aware Proxy (IAP)"
   type        = string
   sensitive   = true
   default     = ""

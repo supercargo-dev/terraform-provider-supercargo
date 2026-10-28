@@ -2958,73 +2958,42 @@ func TestModules_DocsPortal(t *testing.T) {
 		assert.Contains(t, content, `path = "/healthz"`)
 		assert.Contains(t, content, `port = 8080`)
 
-		// 2. Cloud Run v2 service defines ingress = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
-		assert.Regexp(t, regexp.MustCompile(`ingress\s*=\s*"INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"`), content)
+		// 2. Cloud Run v2 service defines direct ingress and Direct IAP
+		assert.Regexp(t, regexp.MustCompile(`ingress\s*=\s*"INGRESS_TRAFFIC_ALL"`), content)
+		assert.Regexp(t, regexp.MustCompile(`launch_stage\s*=\s*"BETA"`), content)
+		assert.Regexp(t, regexp.MustCompile(`iap_enabled\s*=\s*var\.iap_enabled`), content)
 
 		// Resources: 256Mi memory, 1 CPU
 		assert.Contains(t, content, `memory = "256Mi"`)
 		assert.Contains(t, content, `cpu    = "1"`)
 	})
 
-	t.Run("CloudRunInvokerAllUsers", func(t *testing.T) {
+	t.Run("CloudRunIAPInvoker", func(t *testing.T) {
 		content := readDocsPortalModuleFile(t, "main.tf")
 
-		// 3. google_cloud_run_v2_service_iam_member binds roles/run.invoker to allUsers
-		assert.Contains(t, content, `resource "google_cloud_run_v2_service_iam_member" "all_users_invoker"`)
+		// 3. google_cloud_run_v2_service_iam_member binds roles/run.invoker to IAP service agent
+		assert.Contains(t, content, `resource "google_cloud_run_v2_service_iam_member" "iap_service_agent_invoker"`)
+		assert.Contains(t, content, `gcp-sa-iap.iam.gserviceaccount.com`)
+		assert.Contains(t, content, `resource "google_cloud_run_v2_service_iam_member" "public_invoker"`)
 		assert.Regexp(t, regexp.MustCompile(`role\s*=\s*"roles/run\.invoker"`), content)
-		assert.Regexp(t, regexp.MustCompile(`member\s*=\s*"allUsers"`), content)
 	})
 
-	t.Run("ServerlessNEG", func(t *testing.T) {
+	t.Run("DirectIAPServiceIAM", func(t *testing.T) {
 		content := readDocsPortalModuleFile(t, "main.tf")
 
-		// 4. Serverless NEG is defined for the Cloud Run service
-		assert.Contains(t, content, `resource "google_compute_region_network_endpoint_group" "serverless_neg"`)
-		assert.Contains(t, content, `network_endpoint_type = "SERVERLESS"`)
-		assert.Contains(t, content, `cloud_run {`)
-		assert.Contains(t, content, `service = google_cloud_run_v2_service.docs_portal.name`)
-	})
-
-	t.Run("IAPBackendServiceAndIAM", func(t *testing.T) {
-		content := readDocsPortalModuleFile(t, "main.tf")
-
-		// 5. IAP backend service and google_iap_web_backend_service_iam_member iterate over local.normalized_licensed_domains using roles/iap.httpsResourceAccessor
-		assert.Contains(t, content, `resource "google_compute_backend_service" "backend"`)
-		assert.Regexp(t, regexp.MustCompile(`protocol\s*=\s*"HTTP"`), content)
-		assert.Contains(t, content, `dynamic "iap" {`)
-		assert.Contains(t, content, `for_each = var.iap_enabled && var.iap_client_id != "" ? [1] : []`)
-		assert.Regexp(t, regexp.MustCompile(`oauth2_client_id\s*=\s*var\.iap_client_id`), content)
-		assert.Regexp(t, regexp.MustCompile(`oauth2_client_secret\s*=\s*var\.iap_client_secret`), content)
-		assert.Regexp(t, regexp.MustCompile(`enabled\s*=\s*true`), content)
-
-		assert.Contains(t, content, `locals {`)
-		assert.Contains(t, content, `normalized_licensed_domains = var.iap_enabled && var.iap_client_id != "" ? toset([`)
-		assert.Contains(t, content, `for d in var.licensed_domains : startswith(d, "domain:") ? d : "domain:${d}"`)
-
-		assert.Contains(t, content, `resource "google_iap_web_backend_service_iam_member" "licensed_domains"`)
-		assert.Contains(t, content, `for_each = local.normalized_licensed_domains`)
+		// 4. google_iap_web_cloud_run_service_iam_member binds roles/iap.httpsResourceAccessor directly to the service
+		assert.Contains(t, content, `resource "google_iap_web_cloud_run_service_iam_member" "licensed_domains"`)
+		assert.Regexp(t, regexp.MustCompile(`cloud_run_service_name\s*=\s*google_cloud_run_v2_service\.docs_portal\.name`), content)
 		assert.Regexp(t, regexp.MustCompile(`role\s*=\s*"roles/iap\.httpsResourceAccessor"`), content)
 		assert.Regexp(t, regexp.MustCompile(`member\s*=\s*each\.value`), content)
 	})
 
-	t.Run("LoadBalancerAndRedirect", func(t *testing.T) {
+	t.Run("CustomDomainMapping", func(t *testing.T) {
 		content := readDocsPortalModuleFile(t, "main.tf")
 
-		// Global forwarding rule (HTTPS :443), target HTTPS proxy, managed SSL cert, URL map, static global IP, HTTP-to-HTTPS redirect
-		assert.Contains(t, content, `resource "google_compute_global_address" "docs_portal"`)
-		assert.Contains(t, content, `resource "google_compute_managed_ssl_certificate" "docs_portal"`)
-		assert.Contains(t, content, `resource "google_compute_url_map" "docs_portal"`)
-		assert.Contains(t, content, `resource "google_compute_target_https_proxy" "docs_portal"`)
-		assert.Contains(t, content, `resource "google_compute_global_forwarding_rule" "docs_portal_https"`)
-		assert.Regexp(t, regexp.MustCompile(`port_range\s*=\s*"443"`), content)
-
-		// HTTP-to-HTTPS redirect
-		assert.Contains(t, content, `resource "google_compute_url_map" "https_redirect"`)
-		assert.Contains(t, content, `https_redirect = true`)
-		assert.Contains(t, content, `strip_query    = false`)
-		assert.Contains(t, content, `resource "google_compute_target_http_proxy" "https_redirect"`)
-		assert.Contains(t, content, `resource "google_compute_global_forwarding_rule" "docs_portal_http"`)
-		assert.Regexp(t, regexp.MustCompile(`port_range\s*=\s*"80"`), content)
+		// 5. Direct domain mapping without load balancer
+		assert.Contains(t, content, `resource "google_cloud_run_domain_mapping" "docs_portal"`)
+		assert.Contains(t, content, `route_name = google_cloud_run_v2_service.docs_portal.name`)
 	})
 
 	t.Run("Outputs", func(t *testing.T) {
@@ -3035,13 +3004,6 @@ func TestModules_DocsPortal(t *testing.T) {
 			snippets []string
 		}{
 			{
-				name: "load_balancer_ip output",
-				snippets: []string{
-					`output "load_balancer_ip"`,
-					`google_compute_global_address.docs_portal.address`,
-				},
-			},
-			{
 				name: "service_url output",
 				snippets: []string{
 					`output "service_url"`,
@@ -3049,10 +3011,17 @@ func TestModules_DocsPortal(t *testing.T) {
 				},
 			},
 			{
-				name: "backend_service_id output",
+				name: "cloud_run_uri output",
 				snippets: []string{
-					`output "backend_service_id"`,
-					`google_compute_backend_service.backend.id`,
+					`output "cloud_run_uri"`,
+					`google_cloud_run_v2_service.docs_portal.uri`,
+				},
+			},
+			{
+				name: "domain_mapping_dns_records output",
+				snippets: []string{
+					`output "domain_mapping_dns_records"`,
+					`resource_records`,
 				},
 			},
 		}

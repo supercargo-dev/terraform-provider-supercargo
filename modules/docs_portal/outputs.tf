@@ -1,14 +1,14 @@
-output "load_balancer_ip" {
-  description = "The static global external IP address assigned to the Cloud Load Balancer"
-  value       = google_compute_global_address.docs_portal.address
-}
-
 output "service_url" {
   description = "The authoritative HTTPS URL for the docs portal"
-  value       = "https://${var.domain_name}"
+  value       = var.domain_name != "" ? "https://${var.domain_name}" : google_cloud_run_v2_service.docs_portal.uri
 }
 
-output "backend_service_id" {
-  description = "The ID of the GCLB backend service"
-  value       = google_compute_backend_service.backend.id
+output "cloud_run_uri" {
+  description = "The default *.run.app URI generated for the Cloud Run service"
+  value       = google_cloud_run_v2_service.docs_portal.uri
+}
+
+output "domain_mapping_dns_records" {
+  description = "DNS resource records (A, AAAA, CNAME) required by DNS registrar for custom domain mapping"
+  value       = var.domain_name != "" && length(google_cloud_run_domain_mapping.docs_portal) > 0 ? google_cloud_run_domain_mapping.docs_portal[0].status[0].resource_records : []
 }
