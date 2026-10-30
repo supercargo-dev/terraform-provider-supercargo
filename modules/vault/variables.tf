@@ -152,3 +152,10 @@ variable "authorized_tokenizer_sa" {
   default     = ""
 }
 
+variable "max_instances" {
+  description = "The maximum number of instances for the Vault service"
+  type        = number
+  default     = 3
+}
+
+

@@ -73,6 +73,7 @@ module "gateway" {
 | `kms_address` | `string` | *required* | no | The address of the KMS (Vault) service |
 | `log_level` | `string` | `"info"` | no | Log level for the service |
 | `master_key_uri` | `string` | *required* | no | The URI of the Master Key in GCP KMS |
+| `max_instances` | `number` | `3` | no | The maximum number of instances for the Gateway service |
 | `name_suffix` | `string` | `""` | no | Optional deterministic suffix appended to resource names for environment/branch disambiguation. Defaults to empty. |
 | `product_id` | `string` | *required* | no | The ID of the Data Product (used for naming resources) |
 | `project_id` | `string` | *required* | no | The GCP project ID |

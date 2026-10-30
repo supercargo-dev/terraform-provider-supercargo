@@ -73,6 +73,7 @@ module "data_product" {
 | `log_level` | `string` | `"info"` | no | Log level for the service |
 | `manifest_file` | `string` | *required* | no | Path to the Data Product manifest YAML/JSON file |
 | `master_key_uri` | `string` | *required* | no | The URI of the Master Key in GCP KMS |
+| `max_instances` | `number` | `3` | no | The maximum number of instances for the Gateway service |
 | `name_suffix` | `string` | `""` | no | Optional deterministic suffix appended to resource names for environment/branch disambiguation. Defaults to empty. |
 | `project_id` | `string` | *required* | no | The GCP project ID |
 | `pubsub_expiration_policy_ttl` | `string` | `"1209600s"` | no | The TTL for idle subscriptions to auto-delete. |

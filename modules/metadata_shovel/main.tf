@@ -15,6 +15,12 @@ resource "google_cloud_run_v2_service" "shovel" {
 
   template {
     service_account = google_service_account.shovel.email
+
+    scaling {
+      min_instance_count = 0
+      max_instance_count = var.max_instances
+    }
+
     containers {
       image = var.image
       env {
@@ -35,6 +41,7 @@ resource "google_cloud_run_v2_service" "shovel" {
       }
 
       resources {
+        cpu_idle = true
         limits = {
           memory = "512Mi"
           cpu    = "1"

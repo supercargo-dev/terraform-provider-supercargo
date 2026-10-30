@@ -185,8 +185,21 @@ resource "google_cloud_run_v2_service" "vault" {
   template {
     service_account = google_service_account.vault_sa.email
 
+    scaling {
+      min_instance_count = 0
+      max_instance_count = var.max_instances
+    }
+
     containers {
       image = var.image
+
+      resources {
+        cpu_idle = true
+        limits = {
+          cpu    = "1000m"
+          memory = "512Mi"
+        }
+      }
 
       env {
         name  = "GCP_PROJECT_ID"

@@ -47,6 +47,12 @@ module "hub" {
 | `bigquery_deletion_protection` | `bool` | `true` | no | Whether to enable deletion protection on BigQuery datasets and tables |
 | `bigquery_location` | `string` | `""` | no | The BigQuery dataset location (defaults to region if empty) |
 | `catalog_dataset_id` | `string` | `"supercargo_catalog"` | no | BigQuery dataset ID for asset catalog and health history |
+| `console_allowed_invokers` | `list(string)` | `[]` | no | List of IAM members authorized to invoke the Console companion service |
+| `console_enabled` | `bool` | `false` | no | Whether to deploy the Supercargo Console companion Cloud Run service |
+| `console_iap_audience` | `string` | `""` | no | Expected IAP JWT audience for the Console companion service |
+| `console_iap_enabled` | `bool` | `false` | no | Whether to enable Direct IAP for the Console companion service |
+| `console_image_tag` | `string` | `""` | no | The image tag for the supercargo-console service (Git SHA). Optional for local infra updates. |
+| `console_max_instances` | `number` | `3` | no | The maximum number of instances for the Console companion service |
 | `control_plane_topic` | `string` | *required* | no | The Pub/Sub topic ID for the control plane ingestion |
 | `create_gateway_invoker` | `bool` | `false` | no | Whether to create the IAM binding for the Gateway service account |
 | `current_health_view_id` | `string` | `"asset_current_health"` | no | BigQuery view ID for latest asset health analytical projection |
@@ -69,10 +75,11 @@ module "hub" {
 | `iap_enabled` | `bool` | `false` | no | Whether to enable IAP for the service |
 | `image_project_id` | `string` | *required* | no | Project ID where the Artifact Registry resides |
 | `ingress_type` | `string` | `"INGRESS_TRAFFIC_ALL"` | no | The type of ingress traffic allowed (INGRESS_TRAFFIC_ALL or INGRESS_TRAFFIC_INTERNAL_ONLY or INGRESS_TRAFFIC_INTERNAL_AND_GCLB) |
+| `max_instances` | `number` | `3` | no | The maximum number of instances for the Hub service |
 | `mcp_allowed_invokers` | `list(string)` | `[]` | no | List of IAM members authorized to invoke the MCP companion service (e.g. serviceAccount:..., group:...) |
 | `mcp_enabled` | `bool` | `false` | no | Whether to deploy the Supercargo MCP companion Cloud Run service |
 | `mcp_image_tag` | `string` | `""` | no | The image tag for the supercargo-mcp service (Git SHA). Optional for local infra updates. |
-| `mcp_max_instances` | `number` | `5` | no | The maximum number of instances for the MCP companion service |
+| `mcp_max_instances` | `number` | `3` | no | The maximum number of instances for the MCP companion service |
 | `mcp_oidc_audience` | `string` | `""` | no | Custom OIDC audience for the MCP companion service. In non-development environments, either this or var.oidc_audience must be set to enforce fail-closed token validation. |
 | `name_suffix` | `string` | `""` | no | Optional deterministic suffix appended to resource names for environment/branch disambiguation. Defaults to empty. |
 | `oidc_audience` | `string` | `""` | no | The expected audience for OIDC tokens |
@@ -81,6 +88,7 @@ module "hub" {
 | `project_number` | `string` | *required* | no | The GCP Project Number |
 | `region` | `string` | *required* | no | The GCP region |
 | `shovel_image_tag` | `string` | `""` | no | The image tag for the metadata_shovel service |
+| `shovel_max_instances` | `number` | `3` | no | The maximum number of instances for the metadata shovel service |
 | `shovel_oidc_audience` | `string` | `""` | no | The expected audience for metadata shovel OIDC tokens. Falls back to oidc_audience or supercargo-metadata-shovel-<env>. |
 | `topic_routing` | `map(string)` | `{}` | no | A map of URN prefixes to Pub/Sub topic names for custom routing in the metadata shovel. |
 
@@ -95,6 +103,9 @@ module "hub" {
 | `audit_table_id` | no | The BigQuery raw table ID for outbox audit events |
 | `audit_view_id` | no | The BigQuery view ID for canonical outbox audit events |
 | `catalog_dataset_id` | no | The BigQuery dataset ID for asset catalog and health history |
+| `console_service_account_email` | no | The service account email of the Supercargo Console companion service |
+| `console_service_name` | no | The name of the Supercargo Console companion Cloud Run service |
+| `console_service_url` | no | The URI of the Supercargo Console companion Cloud Run service |
 | `contract_changed_topic_id` | no | Pub/Sub topic ID for contract changed events |
 | `contract_deleted_topic_id` | no | Pub/Sub topic ID for contract deleted events |
 | `dataform_events_dlq_subscription_name` | no | The Pub/Sub pull subscription name for inspecting Dataform dead-letter messages |

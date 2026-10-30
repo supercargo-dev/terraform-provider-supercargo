@@ -45,6 +45,7 @@ module "loader" {
 | `image` | `string` | *required* | no | Container Image URL |
 | `ingress_config` | `string` | *required* | no | JSON Configuration for the Ingress Service |
 | `ingress_type` | `string` | `"INGRESS_TRAFFIC_INTERNAL_ONLY"` | no | The type of ingress traffic allowed (INGRESS_TRAFFIC_ALL or INGRESS_TRAFFIC_INTERNAL_ONLY or INGRESS_TRAFFIC_INTERNAL_AND_GCLB) |
+| `max_instances` | `number` | `3` | no | The maximum number of instances for the Loader service |
 | `project_id` | `string` | *required* | no | GCP Project ID |
 | `region` | `string` | `"europe-west1"` | no | GCP Region |
 | `target_topic_ids` | `list(string)` | *required* | no | List of Target Pub/Sub Topic IDs to grant publish permissions on |

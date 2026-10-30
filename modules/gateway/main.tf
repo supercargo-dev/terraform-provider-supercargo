@@ -64,6 +64,12 @@ resource "google_cloud_run_v2_service" "gateway" {
 
   template {
     service_account = local.service_account_email
+
+    scaling {
+      min_instance_count = 0
+      max_instance_count = var.max_instances
+    }
+
     containers {
       image = var.image
       env {
@@ -128,6 +134,7 @@ resource "google_cloud_run_v2_service" "gateway" {
         value = var.force_deploy_trigger
       }
       resources {
+        cpu_idle = true
         limits = {
           memory = var.container_memory
           cpu    = var.container_cpu

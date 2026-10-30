@@ -277,4 +277,11 @@ variable "create_service_account" {
   default     = true
 }
 
+variable "max_instances" {
+  description = "The maximum number of instances for the Gateway service"
+  type        = number
+  default     = 3
+}
+
+
 

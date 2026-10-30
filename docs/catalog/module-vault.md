@@ -49,6 +49,7 @@ module "vault" {
 | `ingress_type` | `string` | `"INGRESS_TRAFFIC_INTERNAL_ONLY"` | no | The ingress type for the Cloud Run service |
 | `key_rotation_period` | `string` | `"2592000s"` | no | The rotation period for the Cloud KMS master key (e.g. '2592000s' for 30 days). |
 | `keyring_name` | `string` | `"supercargo-vault-keyring"` | no | The name of the Cloud KMS KeyRing for the Vault. Defaults to 'supercargo-vault-keyring' (stable naming without random suffixes to prevent recreation of immutable KMS resources). |
+| `max_instances` | `number` | `3` | no | The maximum number of instances for the Vault service |
 | `name_suffix` | `string` | `""` | no | Optional deterministic suffix appended to resource names for environment/branch disambiguation. Defaults to empty. |
 | `oidc_audience` | `string` | `""` | no | The expected audience for OIDC tokens |
 | `project_id` | `string` | *required* | no | The GCP project ID |

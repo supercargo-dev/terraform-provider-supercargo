@@ -226,4 +226,11 @@ variable "service_account_id" {
   }
 }
 
+variable "max_instances" {
+  description = "The maximum number of instances for the Gateway service"
+  type        = number
+  default     = 3
+}
+
+
 

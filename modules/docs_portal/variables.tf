@@ -50,3 +50,10 @@ variable "iap_client_secret" {
   sensitive   = true
   default     = ""
 }
+
+variable "max_instances" {
+  description = "The maximum number of instances for the Docs Portal service"
+  type        = number
+  default     = 3
+}
+

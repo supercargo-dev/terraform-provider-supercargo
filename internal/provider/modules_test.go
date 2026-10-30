@@ -20,6 +20,7 @@ func TestModules_CloudRunLifecycleDecoupling(t *testing.T) {
 		{moduleName: "hub", resourceName: "hub"},
 		{moduleName: "hub", resourceName: "shovel"},
 		{moduleName: "hub", resourceName: "mcp"},
+		{moduleName: "hub", resourceName: "console"},
 		{moduleName: "vault", resourceName: "vault"},
 		{moduleName: "gateway", resourceName: "gateway"},
 		{moduleName: "loader", resourceName: "loader"},
@@ -3169,5 +3170,64 @@ func TestModules_ControlPlaneModuleVariablesAndEnv(t *testing.T) {
 
 		assert.Contains(t, loaderChunk, `name  = "ALLOWED_GCS_BUCKETS"`)
 		assert.Contains(t, loaderChunk, `value = var.allowed_gcs_buckets != "" ? var.allowed_gcs_buckets : "${var.project_id}-dropzone"`)
+	})
+
+	t.Run("AC5_RequestBasedBillingAndScaling_AllServices", func(t *testing.T) {
+		cloudRunServices := []struct {
+			moduleName       string
+			resourceName     string
+			maxInstancesVar  string
+			maxInstancesExpr string
+		}{
+			{moduleName: "hub", resourceName: "hub", maxInstancesVar: "max_instances", maxInstancesExpr: "var.max_instances"},
+			{moduleName: "hub", resourceName: "shovel", maxInstancesVar: "shovel_max_instances", maxInstancesExpr: "var.shovel_max_instances"},
+			{moduleName: "hub", resourceName: "mcp", maxInstancesVar: "mcp_max_instances", maxInstancesExpr: "var.mcp_max_instances"},
+			{moduleName: "hub", resourceName: "console", maxInstancesVar: "console_max_instances", maxInstancesExpr: "var.console_max_instances"},
+			{moduleName: "vault", resourceName: "vault", maxInstancesVar: "max_instances", maxInstancesExpr: "var.max_instances"},
+			{moduleName: "gateway", resourceName: "gateway", maxInstancesVar: "max_instances", maxInstancesExpr: "var.max_instances"},
+			{moduleName: "loader", resourceName: "loader", maxInstancesVar: "max_instances", maxInstancesExpr: "var.max_instances"},
+			{moduleName: "metadata_shovel", resourceName: "shovel", maxInstancesVar: "max_instances", maxInstancesExpr: "var.max_instances"},
+			{moduleName: "docs_portal", resourceName: "docs_portal", maxInstancesVar: "max_instances", maxInstancesExpr: "var.max_instances"},
+		}
+
+		for _, svc := range cloudRunServices {
+			t.Run(svc.moduleName+"/"+svc.resourceName, func(t *testing.T) {
+				varPath := filepath.Join(modulesDir, svc.moduleName, "variables.tf")
+				varBytes, err := os.ReadFile(varPath)
+				require.NoError(t, err)
+				varContent := string(varBytes)
+
+				assert.Contains(t, varContent, `variable "`+svc.maxInstancesVar+`"`)
+				varIdx := strings.Index(varContent, `variable "`+svc.maxInstancesVar+`"`)
+				if varIdx != -1 {
+					varBlock := varContent[varIdx:]
+					if endIdx := strings.Index(varBlock, "}"); endIdx != -1 {
+						varBlock = varBlock[:endIdx+1]
+					}
+					assert.Regexp(t, regexp.MustCompile(`default\s*=\s*3`), varBlock, "variable %s in %s must default to 3", svc.maxInstancesVar, svc.moduleName)
+				}
+
+				mainPath := filepath.Join(modulesDir, svc.moduleName, "main.tf")
+				mainBytes, err := os.ReadFile(mainPath)
+				require.NoError(t, err)
+				mainContent := string(mainBytes)
+
+				resHeader := `resource "google_cloud_run_v2_service" "` + svc.resourceName + `"`
+				idx := strings.Index(mainContent, resHeader)
+				require.NotEqual(t, -1, idx, "%s not found in %s", resHeader, mainPath)
+				resChunk := mainContent[idx:]
+				if nextRes := strings.Index(resChunk[len(resHeader):], "\nresource \""); nextRes != -1 {
+					resChunk = resChunk[:len(resHeader)+nextRes]
+				}
+
+				// Must configure request-based billing (cpu_idle = true)
+				assert.Regexp(t, regexp.MustCompile(`cpu_idle\s*=\s*true`), resChunk, "%s in %s must set cpu_idle = true for request-based billing", svc.resourceName, svc.moduleName)
+
+				// Must configure scaling { min_instance_count = 0, max_instance_count = ... }
+				assert.Contains(t, resChunk, "scaling {")
+				assert.Regexp(t, regexp.MustCompile(`min_instance_count\s*=\s*0`), resChunk)
+				assert.Contains(t, resChunk, "max_instance_count = "+svc.maxInstancesExpr)
+			})
+		}
 	})
 }
