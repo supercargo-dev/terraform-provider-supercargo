@@ -50,6 +50,11 @@ resource "google_cloud_run_v2_service" "shovel" {
     }
   }
 
+  traffic {
+    type    = "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"
+    percent = 100
+  }
+
   lifecycle {
     ignore_changes = [
       template[0].containers[0].image,

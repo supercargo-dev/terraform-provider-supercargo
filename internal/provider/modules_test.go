@@ -3227,6 +3227,10 @@ func TestModules_ControlPlaneModuleVariablesAndEnv(t *testing.T) {
 				assert.Contains(t, resChunk, "scaling {")
 				assert.Regexp(t, regexp.MustCompile(`min_instance_count\s*=\s*0`), resChunk)
 				assert.Contains(t, resChunk, "max_instance_count = "+svc.maxInstancesExpr)
+
+				// Must explicitly route 100% traffic to LATEST revision to prevent sticky failed Cloud Deploy revisions
+				assert.Contains(t, resChunk, `type    = "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"`)
+				assert.Contains(t, resChunk, `percent = 100`)
 			})
 		}
 	})
