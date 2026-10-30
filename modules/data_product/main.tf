@@ -74,6 +74,7 @@ module "gateway" {
   alert_notification_channels         = var.alert_notification_channels
   name_suffix                         = var.name_suffix
   service_account_id                  = var.service_account_id
+  max_instances                       = var.max_instances
 
   contracts = local.gateway_contracts
 }

@@ -78,6 +78,21 @@ output "mcp_service_account_email" {
   value       = var.mcp_enabled ? google_service_account.mcp_runtime[0].email : null
 }
 
+output "console_service_url" {
+  description = "The URI of the Supercargo Console companion Cloud Run service"
+  value       = var.console_enabled ? google_cloud_run_v2_service.console[0].uri : null
+}
+
+output "console_service_name" {
+  description = "The name of the Supercargo Console companion Cloud Run service"
+  value       = var.console_enabled ? google_cloud_run_v2_service.console[0].name : null
+}
+
+output "console_service_account_email" {
+  description = "The service account email of the Supercargo Console companion service"
+  value       = var.console_enabled ? google_service_account.console_runtime[0].email : null
+}
+
 output "health_events_topic_name" {
   description = "The Pub/Sub topic name for asset health transition events"
   value       = var.enable_health_mesh ? google_pubsub_topic.health_events[0].name : null

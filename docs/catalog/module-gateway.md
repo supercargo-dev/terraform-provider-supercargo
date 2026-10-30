@@ -56,11 +56,13 @@ module "gateway" {
 | `container_cpu` | `string` | `"1"` | no | The CPU limit for the container. |
 | `container_memory` | `string` | `"512Mi"` | no | The memory limit for the container. |
 | `contracts` | `map(object({ id = string schema = string }))` | `{}` | no | A map of contract configurations for strongly typed BigQuery tables |
+| `create_service_account` | `bool` | `true` | no | Whether to create the Gateway Service Account (set false when using a pre-existing service account) |
 | `custom_audiences` | `list(string)` | `[]` | no | List of custom audiences to accept for OIDC |
 | `dlq_alert_threshold` | `number` | `0` | no | Threshold count of undelivered messages in DLQ to trigger alert |
 | `dlq_runbook_url` | `string` | `"https://docs.supercargo.dev/operations/runbooks/dlq-remediation"` | no | Runbook URL for DLQ incident remediation |
 | `dlq_unacked_message_age_seconds` | `number` | `300` | no | Threshold age (in seconds) of oldest unacknowledged message in DLQ to trigger alert |
 | `enable_dlq_alerts` | `bool` | `true` | no | Whether to enable Cloud Monitoring alert policies for DLQ |
+| `environment` | `string` | `"dev"` | no | The deployment environment (e.g. dev, staging, prod) |
 | `force_deploy_trigger` | `string` | `"static"` | no | A value that, when changed, triggers a new Cloud Run revision (e.g. git SHA or image digest). Use 'latest' or a fixed value for idempotency. |
 | `gateway_audience` | `string` | `""` | no | The expected audience for OIDC tokens (e.g. the service URL) |
 | `hub_address` | `string` | *required* | no | The address of the Hub service |
@@ -71,6 +73,7 @@ module "gateway" {
 | `kms_address` | `string` | *required* | no | The address of the KMS (Vault) service |
 | `log_level` | `string` | `"info"` | no | Log level for the service |
 | `master_key_uri` | `string` | *required* | no | The URI of the Master Key in GCP KMS |
+| `max_instances` | `number` | `3` | no | The maximum number of instances for the Gateway service |
 | `name_suffix` | `string` | `""` | no | Optional deterministic suffix appended to resource names for environment/branch disambiguation. Defaults to empty. |
 | `product_id` | `string` | *required* | no | The ID of the Data Product (used for naming resources) |
 | `project_id` | `string` | *required* | no | The GCP project ID |
@@ -82,6 +85,7 @@ module "gateway" {
 | `pubsub_push_path` | `string` | `"/pubsub/push/"` | no | The URL path for Pub/Sub push requests |
 | `region` | `string` | *required* | no | The GCP region |
 | `service_account_id` | `string` | `""` | no | Optional custom service account ID for the Gateway. If unset, defaults to 'gateway-<product_id>' with optional name_suffix. |
+| `vault_address` | `string` | `""` | no | The address of the Vault service |
 | `vault_iap_client_id` | `string` | `""` | no | The IAP Client ID for the Vault service |
 | `vault_oidc_audience` | `string` | `""` | no | The OIDC audience for the Vault service (Internal OIDC) |
 
