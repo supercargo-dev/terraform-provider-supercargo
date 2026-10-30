@@ -288,5 +288,11 @@ variable "dlt_scheduler_service_account_id" {
   }
 }
 
+variable "dlt_scheduler_attempt_deadline" {
+  description = "The attempt deadline for Cloud Scheduler jobs triggering DLT Cloud Run jobs"
+  type        = string
+  default     = "320s"
+}
+
 
 

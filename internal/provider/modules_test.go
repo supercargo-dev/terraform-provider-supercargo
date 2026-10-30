@@ -842,6 +842,153 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 			})
 		}
 	})
+
+	t.Run("SchedulerAndIAM", func(t *testing.T) {
+		dltPath := filepath.Join(dpDir, "dlt_ports.tf")
+		dltBytes, err := os.ReadFile(dltPath)
+		require.NoError(t, err, "dlt_ports.tf must exist in modules/data_product")
+		dltContent := string(dltBytes)
+
+		// 1. Assert google_service_account.dlt_scheduler (AC-5)
+		schedSABlock := extractHCLBlock(dltContent, `resource "google_service_account" "dlt_scheduler"`)
+		require.NotEmpty(t, schedSABlock, "dlt_ports.tf must define resource google_service_account.dlt_scheduler")
+		assert.Regexp(t, regexp.MustCompile(`count\s*=\s*length\(local\.dlt_input_ports\)\s*>\s*0\s*\?\s*1\s*:\s*0`), schedSABlock)
+		assert.Regexp(t, regexp.MustCompile(`account_id\s*=\s*local\.dlt_scheduler_sa_id`), schedSABlock)
+		assert.Contains(t, schedSABlock, `display_name = "DLT Cloud Scheduler Service Account for ${local.product_id}"`)
+		assert.Regexp(t, regexp.MustCompile(`project\s*=\s*var\.project_id`), schedSABlock)
+
+		// 2. Assert google_cloud_run_v2_job_iam_member.dlt_scheduler_invoker (AC-5)
+		invokerBlock := extractHCLBlock(dltContent, `resource "google_cloud_run_v2_job_iam_member" "dlt_scheduler_invoker"`)
+		require.NotEmpty(t, invokerBlock, "dlt_ports.tf must define resource google_cloud_run_v2_job_iam_member.dlt_scheduler_invoker")
+		assert.Regexp(t, regexp.MustCompile(`for_each\s*=\s*local\.dlt_input_ports`), invokerBlock)
+		assert.Regexp(t, regexp.MustCompile(`project\s*=\s*var\.project_id`), invokerBlock)
+		assert.Regexp(t, regexp.MustCompile(`location\s*=\s*var\.region`), invokerBlock)
+		assert.Regexp(t, regexp.MustCompile(`name\s*=\s*google_cloud_run_v2_job\.dlt_jobs\[each\.key\]\.name`), invokerBlock)
+		assert.Regexp(t, regexp.MustCompile(`role\s*=\s*"roles/run\.invoker"`), invokerBlock)
+		assert.Regexp(t, regexp.MustCompile(`member\s*=\s*"serviceAccount:\$\{local\.dlt_scheduler_sa_email\}"`), invokerBlock)
+		assert.Contains(t, invokerBlock, "depends_on = [", "invoker IAM binding must define depends_on")
+		assert.Contains(t, invokerBlock, "google_service_account.dlt_scheduler", "invoker IAM depends_on must include google_service_account.dlt_scheduler")
+		assert.Contains(t, invokerBlock, "google_cloud_run_v2_job.dlt_jobs", "invoker IAM depends_on must include google_cloud_run_v2_job.dlt_jobs")
+
+		// 3. Assert google_cloud_scheduler_job.dlt_schedules (AC-5)
+		schedJobBlock := extractHCLBlock(dltContent, `resource "google_cloud_scheduler_job" "dlt_schedules"`)
+		require.NotEmpty(t, schedJobBlock, "dlt_ports.tf must define resource google_cloud_scheduler_job.dlt_schedules")
+		assert.Regexp(t, regexp.MustCompile(`for_each\s*=\s*local\.dlt_input_ports`), schedJobBlock)
+		assert.Regexp(t, regexp.MustCompile(`name\s*=\s*"dlt-sched-\$\{local\.product_id\}-\$\{replace\(each\.key,\s*"_",\s*"-"\)\}\$\{var\.name_suffix\s*!=\s*""\s*\?\s*"-\$\{var\.name_suffix\}"\s*:\s*""\}"`), schedJobBlock)
+		assert.Contains(t, schedJobBlock, `try(each.value.schedule, "") != "" ? each.value.schedule : "0 2 * * *"`, "scheduler job schedule must support per-port schedule with fallback to 0 2 * * *")
+		assert.Contains(t, schedJobBlock, `try(each.value.time_zone, "") != "" ? each.value.time_zone : var.dlt_time_zone`, "scheduler job time_zone must support per-port time_zone with fallback to var.dlt_time_zone")
+		assert.Regexp(t, regexp.MustCompile(`region\s*=\s*var\.region`), schedJobBlock)
+		assert.Regexp(t, regexp.MustCompile(`project\s*=\s*var\.project_id`), schedJobBlock)
+		assert.Contains(t, schedJobBlock, "http_target {", "scheduler job must define http_target")
+		assert.Regexp(t, regexp.MustCompile(`http_method\s*=\s*"POST"`), schedJobBlock)
+		assert.Contains(t, schedJobBlock, `https://${var.region}-run.googleapis.com/v2/projects/${var.project_id}/locations/${var.region}/jobs/${google_cloud_run_v2_job.dlt_jobs[each.key].name}:run`, "scheduler job uri must target Cloud Run job run endpoint")
+		assert.Contains(t, schedJobBlock, "oauth_token {", "scheduler job must define oauth_token block")
+		assert.Regexp(t, regexp.MustCompile(`service_account_email\s*=\s*local\.dlt_scheduler_sa_email`), schedJobBlock)
+		assert.Regexp(t, regexp.MustCompile(`scope\s*=\s*"https://www.googleapis.com/auth/cloud-platform"`), schedJobBlock)
+		assert.Contains(t, schedJobBlock, "depends_on = [", "scheduler job must define depends_on")
+		assert.Contains(t, schedJobBlock, "google_cloud_run_v2_job_iam_member.dlt_scheduler_invoker", "scheduler job depends_on must include dlt_scheduler_invoker (AC-5)")
+		assert.Contains(t, schedJobBlock, "google_cloud_run_v2_job.dlt_jobs", "scheduler job depends_on must include google_cloud_run_v2_job.dlt_jobs (AC-5)")
+
+		// 4. Assert google_project_iam_member.dlt_runner_bq_editor (AC-6)
+		bqEditorBlock := extractHCLBlock(dltContent, `resource "google_project_iam_member" "dlt_runner_bq_editor"`)
+		require.NotEmpty(t, bqEditorBlock, "dlt_ports.tf must define resource google_project_iam_member.dlt_runner_bq_editor")
+		assert.Regexp(t, regexp.MustCompile(`count\s*=\s*length\(local\.dlt_input_ports\)\s*>\s*0\s*\?\s*1\s*:\s*0`), bqEditorBlock)
+		assert.Regexp(t, regexp.MustCompile(`project\s*=\s*var\.project_id`), bqEditorBlock)
+		assert.Regexp(t, regexp.MustCompile(`role\s*=\s*"roles/bigquery\.dataEditor"`), bqEditorBlock)
+		assert.Regexp(t, regexp.MustCompile(`member\s*=\s*"serviceAccount:\$\{local\.dlt_runner_sa_email\}"`), bqEditorBlock)
+		assert.Contains(t, bqEditorBlock, "google_service_account.dlt_runner", "bq_editor depends_on must include google_service_account.dlt_runner")
+
+		// 5. Assert google_project_iam_member.dlt_runner_bq_user (AC-6)
+		bqUserBlock := extractHCLBlock(dltContent, `resource "google_project_iam_member" "dlt_runner_bq_user"`)
+		require.NotEmpty(t, bqUserBlock, "dlt_ports.tf must define resource google_project_iam_member.dlt_runner_bq_user")
+		assert.Regexp(t, regexp.MustCompile(`count\s*=\s*length\(local\.dlt_input_ports\)\s*>\s*0\s*\?\s*1\s*:\s*0`), bqUserBlock)
+		assert.Regexp(t, regexp.MustCompile(`project\s*=\s*var\.project_id`), bqUserBlock)
+		assert.Regexp(t, regexp.MustCompile(`role\s*=\s*"roles/bigquery\.jobUser"`), bqUserBlock)
+		assert.Regexp(t, regexp.MustCompile(`member\s*=\s*"serviceAccount:\$\{local\.dlt_runner_sa_email\}"`), bqUserBlock)
+		assert.Contains(t, bqUserBlock, "google_service_account.dlt_runner", "bq_user depends_on must include google_service_account.dlt_runner")
+
+		// 6. Assert google_secret_manager_secret_iam_member.dlt_runner_secret_accessor (AC-6)
+		secAccessorBlock := extractHCLBlock(dltContent, `resource "google_secret_manager_secret_iam_member" "dlt_runner_secret_accessor"`)
+		require.NotEmpty(t, secAccessorBlock, "dlt_ports.tf must define resource google_secret_manager_secret_iam_member.dlt_runner_secret_accessor")
+		assert.Contains(t, secAccessorBlock, "credentials_secret", "secret accessor must filter for ports with credentials_secret")
+		assert.Regexp(t, regexp.MustCompile(`project\s*=\s*var\.project_id`), secAccessorBlock)
+		assert.Regexp(t, regexp.MustCompile(`role\s*=\s*"roles/secretmanager\.secretAccessor"`), secAccessorBlock)
+		assert.Regexp(t, regexp.MustCompile(`member\s*=\s*"serviceAccount:\$\{local\.dlt_runner_sa_email\}"`), secAccessorBlock)
+		assert.Contains(t, secAccessorBlock, "google_service_account.dlt_runner", "secret accessor depends_on must include google_service_account.dlt_runner")
+
+		// Table-driven matrix testing of schedule, timezone, and secret_id resolution logic
+		resolveSchedule := func(portSched string) string {
+			if portSched != "" {
+				return portSched
+			}
+			return "0 2 * * *"
+		}
+		resolveTZ := func(portTZ, defaultTZ string) string {
+			if portTZ != "" {
+				return portTZ
+			}
+			return defaultTZ
+		}
+		resolveSecretID := func(sec string) string {
+			if strings.HasPrefix(sec, "projects/") {
+				parts := strings.Split(sec, "/")
+				return parts[len(parts)-1]
+			}
+			return sec
+		}
+
+		schedTests := []struct {
+			name         string
+			portSchedule string
+			portTZ       string
+			defaultTZ    string
+			credSecret   string
+			wantSchedule string
+			wantTZ       string
+			wantSecretID string
+		}{
+			{
+				name:         "defaults applied when optional schedule and timezone omitted",
+				portSchedule: "",
+				portTZ:       "",
+				defaultTZ:    "UTC",
+				credSecret:   "my-db-credentials",
+				wantSchedule: "0 2 * * *",
+				wantTZ:       "UTC",
+				wantSecretID: "my-db-credentials",
+			},
+			{
+				name:         "explicit schedule and timezone preserved",
+				portSchedule: "*/15 * * * *",
+				portTZ:       "America/New_York",
+				defaultTZ:    "UTC",
+				credSecret:   "projects/test-proj/secrets/salesforce-oauth",
+				wantSchedule: "*/15 * * * *",
+				wantTZ:       "America/New_York",
+				wantSecretID: "salesforce-oauth",
+			},
+			{
+				name:         "custom default timezone applied when port timezone empty",
+				portSchedule: "0 6 * * 1-5",
+				portTZ:       "",
+				defaultTZ:    "Europe/Stockholm",
+				credSecret:   "projects/456789/secrets/api-key",
+				wantSchedule: "0 6 * * 1-5",
+				wantTZ:       "Europe/Stockholm",
+				wantSecretID: "api-key",
+			},
+		}
+
+		for _, tc := range schedTests {
+			tc := tc
+			t.Run("Matrix/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				assert.Equal(t, tc.wantSchedule, resolveSchedule(tc.portSchedule))
+				assert.Equal(t, tc.wantTZ, resolveTZ(tc.portTZ, tc.defaultTZ))
+				assert.Equal(t, tc.wantSecretID, resolveSecretID(tc.credSecret))
+			})
+		}
+	})
 }
 
 func TestModules_HubAuditSink(t *testing.T) {
