@@ -3352,132 +3352,106 @@ func TestModules_AnalyticsGitHubSync(t *testing.T) {
 		}
 	})
 
-	t.Run("Variables", func(t *testing.T) {
-		content := readAnalyticsGitHubSyncModuleFile(t, "variables.tf")
-
-		tests := []struct {
-			name     string
-			expected []string
-		}{
-			{
-				name: "project_id variable",
-				expected: []string{
-					`variable "project_id"`,
-					`type        = string`,
-				},
-			},
-			{
-				name: "region variable with default",
-				expected: []string{
-					`variable "region"`,
-					`type        = string`,
-					`default     = "europe-west1"`,
-				},
-			},
-			{
-				name: "job_name variable with default",
-				expected: []string{
-					`variable "job_name"`,
-					`type        = string`,
-					`default     = "analytics-github-sync"`,
-				},
-			},
-			{
-				name: "container_image variable",
-				expected: []string{
-					`variable "container_image"`,
-					`type        = string`,
-				},
-			},
-			{
-				name: "org variable",
-				expected: []string{
-					`variable "org"`,
-					`type        = string`,
-				},
-			},
-			{
-				name: "topic variable with default",
-				expected: []string{
-					`variable "topic"`,
-					`type        = string`,
-					`default     = "supercargo-analytics"`,
-				},
-			},
-			{
-				name: "dataset variable with default",
-				expected: []string{
-					`variable "dataset"`,
-					`type        = string`,
-					`default     = "supercargo_github"`,
-				},
-			},
-			{
-				name: "vault_url variable",
-				expected: []string{
-					`variable "vault_url"`,
-					`type        = string`,
-				},
-			},
-			{
-				name: "vault_audience variable",
-				expected: []string{
-					`variable "vault_audience"`,
-					`type        = string`,
-				},
-			},
-			{
-				name: "github_token_secret_id variable",
-				expected: []string{
-					`variable "github_token_secret_id"`,
-					`type        = string`,
-				},
-			},
-			{
-				name: "deletion_protection variable",
-				expected: []string{
-					`variable "deletion_protection"`,
-					`type        = bool`,
-					`default     = false`,
-				},
-			},
-			{
-				name: "schedule variable",
-				expected: []string{
-					`variable "schedule"`,
-					`type        = string`,
-				},
-			},
-			{
-				name: "time_zone variable",
-				expected: []string{
-					`variable "time_zone"`,
-					`type        = string`,
-				},
-			},
-		}
-
-		for _, tc := range tests {
-			t.Run(tc.name, func(t *testing.T) {
-				for _, snippet := range tc.expected {
-					assert.Contains(t, content, snippet)
-				}
-			})
-		}
-	})
-
-	t.Run("DeterministicLocals", func(t *testing.T) {
+	t.Run("DeterministicLocalsAndFallbacks", func(t *testing.T) {
 		content := readAnalyticsGitHubSyncModuleFile(t, "main.tf")
 
 		assert.Contains(t, content, `locals {`)
 		assert.Contains(t, content, `sa_email`)
-		assert.Contains(t, content, `"${var.service_account_id != null && var.service_account_id != "" ? var.service_account_id : "analytics-github-sync-sa"}@${var.project_id}.iam.gserviceaccount.com"`)
 		assert.Contains(t, content, `scheduler_sa_email`)
-		assert.Contains(t, content, `"${var.scheduler_service_account_id != null && var.scheduler_service_account_id != "" ? var.scheduler_service_account_id : "analytics-github-sync-sched-sa"}@${var.project_id}.iam.gserviceaccount.com"`)
+
+		// Table-driven verification of deterministic SA email derivation and scheduler job name derivation
+		deriveSAEmail := func(saID, defaultID, projectID string) string {
+			id := defaultID
+			if saID != "" {
+				id = saID
+			}
+			return fmt.Sprintf("%s@%s.iam.gserviceaccount.com", id, projectID)
+		}
+		deriveSchedJobName := func(customName, jobName string) string {
+			if customName != "" {
+				return customName
+			}
+			return fmt.Sprintf("%s-schedule", jobName)
+		}
+
+		saTests := []struct {
+			name        string
+			customID    string
+			defaultID   string
+			projectID   string
+			wantSAEmail string
+		}{
+			{
+				name:        "custom runner SA id overrides default",
+				customID:    "my-custom-runner-sa",
+				defaultID:   "analytics-github-sync-sa",
+				projectID:   "corp-prod-analytics",
+				wantSAEmail: "my-custom-runner-sa@corp-prod-analytics.iam.gserviceaccount.com",
+			},
+			{
+				name:        "empty runner SA id falls back to analytics-github-sync-sa",
+				customID:    "",
+				defaultID:   "analytics-github-sync-sa",
+				projectID:   "corp-prod-analytics",
+				wantSAEmail: "analytics-github-sync-sa@corp-prod-analytics.iam.gserviceaccount.com",
+			},
+			{
+				name:        "custom scheduler SA id overrides default",
+				customID:    "my-custom-sched-sa",
+				defaultID:   "analytics-github-sync-sched-sa",
+				projectID:   "corp-prod-analytics",
+				wantSAEmail: "my-custom-sched-sa@corp-prod-analytics.iam.gserviceaccount.com",
+			},
+			{
+				name:        "empty scheduler SA id falls back to analytics-github-sync-sched-sa",
+				customID:    "",
+				defaultID:   "analytics-github-sync-sched-sa",
+				projectID:   "corp-prod-analytics",
+				wantSAEmail: "analytics-github-sync-sched-sa@corp-prod-analytics.iam.gserviceaccount.com",
+			},
+		}
+
+		for _, tc := range saTests {
+			tc := tc
+			t.Run("Derivation/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				assert.Equal(t, tc.wantSAEmail, deriveSAEmail(tc.customID, tc.defaultID, tc.projectID))
+			})
+		}
+
+		schedTests := []struct {
+			name        string
+			customSched string
+			jobName     string
+			wantName    string
+		}{
+			{
+				name:        "custom scheduler job name overrides default",
+				customSched: "hourly-github-sync",
+				jobName:     "analytics-github-sync",
+				wantName:    "hourly-github-sync",
+			},
+			{
+				name:        "omitted scheduler job name appends -schedule suffix",
+				customSched: "",
+				jobName:     "custom-sync-job",
+				wantName:    "custom-sync-job-schedule",
+			},
+		}
+
+		for _, tc := range schedTests {
+			tc := tc
+			t.Run("SchedName/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				assert.Equal(t, tc.wantName, deriveSchedJobName(tc.customSched, tc.jobName))
+			})
+		}
 	})
 
 	t.Run("CloudRunJob", func(t *testing.T) {
 		content := readAnalyticsGitHubSyncModuleFile(t, "main.tf")
+		jobBlock := extractHCLBlock(content, `resource "google_cloud_run_v2_job" "sync_job"`)
+		require.NotEmpty(t, jobBlock, "google_cloud_run_v2_job.sync_job must exist")
 
 		tests := []struct {
 			name     string
@@ -3498,9 +3472,9 @@ func TestModules_AnalyticsGitHubSync(t *testing.T) {
 				snippets: []string{
 					`lifecycle {`,
 					`ignore_changes = [`,
-					`template[0].template[0].containers[0].image,`,
-					`client,`,
-					`client_version,`,
+					`template[0].template[0].containers[0].image`,
+					`client`,
+					`client_version`,
 				},
 			},
 			{
@@ -3510,19 +3484,42 @@ func TestModules_AnalyticsGitHubSync(t *testing.T) {
 					`value = var.vault_url`,
 					`name  = "SUPERCARGO_VAULT_AUDIENCE"`,
 					`value = var.vault_audience`,
+					`name  = "SUPERCARGO_HUB_URL"`,
+					`value = var.hub_url`,
+					`name  = "SUPERCARGO_HUB_AUDIENCE"`,
+					`value = var.hub_audience`,
 					`name  = "GOOGLE_CLOUD_PROJECT"`,
 					`value = var.project_id`,
 					`name  = "DESTINATION__BIGQUERY__LOCATION"`,
+				},
+			},
+			{
+				name: "secret injection for legacy and unified dlt runner",
+				snippets: []string{
 					`name = "GITHUB_TOKEN"`,
-					`secret_key_ref {`,
+					`name = "SUPERCARGO_CREDENTIALS_SECRET"`,
 					`secret  = var.github_token_secret_id`,
 					`version = "latest"`,
 				},
 			},
 			{
-				name: "service account assignment",
+				name: "container args compatibility",
+				snippets: []string{
+					`"--destination"`,
+					`"bigquery"`,
+					`"--dataset"`,
+					`var.dataset`,
+					`"--org"`,
+					`var.org`,
+					`"--topic"`,
+					`var.topic`,
+				},
+			},
+			{
+				name: "service account assignment and depends_on",
 				snippets: []string{
 					`service_account = local.sa_email`,
+					`google_service_account.sync_sa`,
 				},
 			},
 		}
@@ -3575,6 +3572,7 @@ func TestModules_AnalyticsGitHubSync(t *testing.T) {
 					`resource "google_secret_manager_secret_iam_member"`,
 					`"roles/secretmanager.secretAccessor"`,
 					`"serviceAccount:${local.sa_email}"`,
+					`secret_id = var.github_token_secret_id`,
 				},
 			},
 		}
@@ -3585,6 +3583,50 @@ func TestModules_AnalyticsGitHubSync(t *testing.T) {
 					assert.Contains(t, content, snippet)
 				}
 			})
+		}
+	})
+
+	t.Run("VariablesPreservedAndExtended", func(t *testing.T) {
+		content := readAnalyticsGitHubSyncModuleFile(t, "variables.tf")
+
+		expectedVars := []struct {
+			name       string
+			varType    string
+			defaultVal string
+		}{
+			{name: "project_id", varType: "string", defaultVal: ""},
+			{name: "region", varType: "string", defaultVal: `"europe-west1"`},
+			{name: "job_name", varType: "string", defaultVal: `"analytics-github-sync"`},
+			{name: "container_image", varType: "string", defaultVal: ""},
+			{name: "org", varType: "string", defaultVal: ""},
+			{name: "topic", varType: "string", defaultVal: `"supercargo-analytics"`},
+			{name: "dataset", varType: "string", defaultVal: `"supercargo_github"`},
+			{name: "vault_url", varType: "string", defaultVal: `""`},
+			{name: "vault_audience", varType: "string", defaultVal: `""`},
+			{name: "github_token_secret_id", varType: "string", defaultVal: ""},
+			{name: "service_account_id", varType: "string", defaultVal: `"analytics-github-sync-sa"`},
+			{name: "scheduler_service_account_id", varType: "string", defaultVal: `"analytics-github-sync-sched-sa"`},
+			{name: "schedule", varType: "string", defaultVal: `"0 * * * *"`},
+			{name: "time_zone", varType: "string", defaultVal: `"Etc/UTC"`},
+			{name: "scheduler_job_name", varType: "string", defaultVal: "null"},
+			{name: "scheduler_attempt_deadline", varType: "string", defaultVal: `"320s"`},
+			{name: "deletion_protection", varType: "bool", defaultVal: "false"},
+			{name: "cpu_limit", varType: "string", defaultVal: `"1"`},
+			{name: "memory_limit", varType: "string", defaultVal: `"1Gi"`},
+			{name: "timeout", varType: "string", defaultVal: `"600s"`},
+			{name: "max_retries", varType: "number", defaultVal: "1"},
+			// 2 new optional variables for Hub telemetry / health reporting
+			{name: "hub_url", varType: "string", defaultVal: `""`},
+			{name: "hub_audience", varType: "string", defaultVal: `""`},
+		}
+
+		for _, ev := range expectedVars {
+			block := extractHCLBlock(content, fmt.Sprintf(`variable "%s"`, ev.name))
+			require.NotEmpty(t, block, "variable %q must exist in variables.tf", ev.name)
+			assert.Contains(t, block, fmt.Sprintf("type        = %s", ev.varType), "variable %q must have type %s", ev.name, ev.varType)
+			if ev.defaultVal != "" {
+				assert.Contains(t, block, fmt.Sprintf("default     = %s", ev.defaultVal), "variable %q must have default %s", ev.name, ev.defaultVal)
+			}
 		}
 	})
 
@@ -3649,6 +3691,11 @@ func TestModules_AnalyticsGitHubSync(t *testing.T) {
 		assert.Contains(t, content, "Cloud Run")
 		assert.Contains(t, content, "Cloud Scheduler")
 		assert.Contains(t, content, "BigQuery")
+		assert.Contains(t, content, "ghcr.io/supercargo-dev/supercargo-dlt-runner")
+		assert.Contains(t, content, "dlt://")
+		assert.Contains(t, content, "`hub_url`")
+		assert.Contains(t, content, "`hub_audience`")
+		assert.Contains(t, content, "`SUPERCARGO_CREDENTIALS_SECRET`")
 	})
 }
 
