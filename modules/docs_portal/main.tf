@@ -20,10 +20,16 @@ resource "google_cloud_run_v2_service" "docs_portal" {
   deletion_protection = false
 
   template {
+    scaling {
+      min_instance_count = 0
+      max_instance_count = var.max_instances
+    }
+
     containers {
       image = var.image
 
       resources {
+        cpu_idle = true
         limits = {
           memory = "256Mi"
           cpu    = "1"

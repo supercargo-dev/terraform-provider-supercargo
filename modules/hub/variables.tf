@@ -180,7 +180,7 @@ variable "mcp_image_tag" {
 variable "mcp_max_instances" {
   description = "The maximum number of instances for the MCP companion service"
   type        = number
-  default     = 5
+  default     = 3
 }
 
 variable "mcp_allowed_invokers" {
@@ -254,3 +254,52 @@ variable "shovel_oidc_audience" {
   type        = string
   default     = ""
 }
+
+variable "max_instances" {
+  description = "The maximum number of instances for the Hub service"
+  type        = number
+  default     = 3
+}
+
+variable "shovel_max_instances" {
+  description = "The maximum number of instances for the metadata shovel service"
+  type        = number
+  default     = 3
+}
+
+variable "console_enabled" {
+  description = "Whether to deploy the Supercargo Console companion Cloud Run service"
+  type        = bool
+  default     = false
+}
+
+variable "console_image_tag" {
+  description = "The image tag for the supercargo-console service (Git SHA). Optional for local infra updates."
+  type        = string
+  default     = ""
+}
+
+variable "console_max_instances" {
+  description = "The maximum number of instances for the Console companion service"
+  type        = number
+  default     = 3
+}
+
+variable "console_allowed_invokers" {
+  description = "List of IAM members authorized to invoke the Console companion service"
+  type        = list(string)
+  default     = []
+}
+
+variable "console_iap_enabled" {
+  description = "Whether to enable Direct IAP for the Console companion service"
+  type        = bool
+  default     = false
+}
+
+variable "console_iap_audience" {
+  description = "Expected IAP JWT audience for the Console companion service"
+  type        = string
+  default     = ""
+}
+

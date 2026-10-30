@@ -22,6 +22,7 @@ func TestModules_CloudRunLifecycleDecoupling(t *testing.T) {
 		{moduleName: "hub", resourceName: "hub"},
 		{moduleName: "hub", resourceName: "shovel"},
 		{moduleName: "hub", resourceName: "mcp"},
+		{moduleName: "hub", resourceName: "console"},
 		{moduleName: "vault", resourceName: "vault"},
 		{moduleName: "gateway", resourceName: "gateway"},
 		{moduleName: "loader", resourceName: "loader"},
@@ -3879,5 +3880,184 @@ func TestModules_DocsPortal(t *testing.T) {
 		assert.Contains(t, content, "docs_portal")
 		assert.Contains(t, content, "Cloud Run")
 		assert.Contains(t, content, "Identity-Aware Proxy")
+	})
+}
+
+func TestModules_ControlPlaneModuleVariablesAndEnv(t *testing.T) {
+	modulesDir := "../../modules"
+
+	t.Run("AC1_Vault_VariablesAndEnv", func(t *testing.T) {
+		varPath := filepath.Join(modulesDir, "vault", "variables.tf")
+		varContentBytes, err := os.ReadFile(varPath)
+		require.NoError(t, err)
+		varContent := string(varContentBytes)
+
+		// Assert variables
+		assert.Contains(t, varContent, `variable "telemetry_identity_salt"`)
+		assert.Contains(t, varContent, `default     = "supercargo-default-salt"`)
+		assert.Contains(t, varContent, `variable "telemetry_topic_id"`)
+		assert.Contains(t, varContent, `default     = "supercargo-platform-telemetry"`)
+		assert.Contains(t, varContent, `variable "authorized_tokenizer_sa"`)
+
+		mainPath := filepath.Join(modulesDir, "vault", "main.tf")
+		mainContentBytes, err := os.ReadFile(mainPath)
+		require.NoError(t, err)
+		mainContent := string(mainContentBytes)
+
+		// Assert local.vault_audience
+		assert.Regexp(t, regexp.MustCompile(`vault_audience\s*=`), mainContent)
+
+		// Assert container env vars in google_cloud_run_v2_service.vault
+		vaultRes := `resource "google_cloud_run_v2_service" "vault"`
+		idx := strings.Index(mainContent, vaultRes)
+		require.NotEqual(t, -1, idx, "google_cloud_run_v2_service.vault not found")
+		vaultChunk := mainContent[idx:]
+		if nextRes := strings.Index(vaultChunk[len(vaultRes):], "\nresource \""); nextRes != -1 {
+			vaultChunk = vaultChunk[:len(vaultRes)+nextRes]
+		}
+
+		assert.Contains(t, vaultChunk, `name  = "OIDC_AUDIENCE"`)
+		assert.Contains(t, vaultChunk, `value = local.vault_audience`)
+		assert.Contains(t, vaultChunk, `name  = "VAULT_AUDIENCE"`)
+		assert.Contains(t, vaultChunk, `name  = "SUPERCARGO_TELEMETRY_IDENTITY_SALT"`)
+		assert.Contains(t, vaultChunk, `value = var.telemetry_identity_salt`)
+		assert.Contains(t, vaultChunk, `name  = "VAULT_TELEMETRY_TOPIC_ID"`)
+		assert.Contains(t, vaultChunk, `value = var.telemetry_topic_id`)
+		assert.Contains(t, vaultChunk, `name  = "VAULT_AUTHORIZED_TOKENIZER_SA"`)
+		assert.Contains(t, vaultChunk, `value = var.authorized_tokenizer_sa != "" ? var.authorized_tokenizer_sa : var.gateway_service_account_email`)
+	})
+
+	t.Run("AC2_Gateway_VariablesAndEnv", func(t *testing.T) {
+		varPath := filepath.Join(modulesDir, "gateway", "variables.tf")
+		varContentBytes, err := os.ReadFile(varPath)
+		require.NoError(t, err)
+		varContent := string(varContentBytes)
+
+		// Assert variables
+		assert.Contains(t, varContent, `variable "gateway_audience"`)
+		assert.Contains(t, varContent, `variable "environment"`)
+		assert.Contains(t, varContent, `default     = "dev"`)
+		assert.Contains(t, varContent, `variable "vault_address"`)
+		assert.Contains(t, varContent, `variable "create_service_account"`)
+		assert.Contains(t, varContent, `default     = true`)
+
+		mainPath := filepath.Join(modulesDir, "gateway", "main.tf")
+		mainContentBytes, err := os.ReadFile(mainPath)
+		require.NoError(t, err)
+		mainContent := string(mainContentBytes)
+
+		// Assert conditional service account creation and local.service_account_email usage
+		assert.Regexp(t, regexp.MustCompile(`count\s*=\s*var\.create_service_account \? 1 : 0`), mainContent)
+		assert.Contains(t, mainContent, `serviceAccount:${local.service_account_email}`)
+
+		// Assert container env vars in google_cloud_run_v2_service.gateway
+		gwRes := `resource "google_cloud_run_v2_service" "gateway"`
+		idx := strings.Index(mainContent, gwRes)
+		require.NotEqual(t, -1, idx, "google_cloud_run_v2_service.gateway not found")
+		gwChunk := mainContent[idx:]
+		if nextRes := strings.Index(gwChunk[len(gwRes):], "\nresource \""); nextRes != -1 {
+			gwChunk = gwChunk[:len(gwRes)+nextRes]
+		}
+
+		assert.Contains(t, gwChunk, `service_account = local.service_account_email`)
+		assert.Contains(t, gwChunk, `name  = "GATEWAY_AUDIENCE"`)
+		assert.Contains(t, gwChunk, `value = var.gateway_audience != "" ? var.gateway_audience : "supercargo-gateway-${var.product_id}-${var.environment}"`)
+		assert.Contains(t, gwChunk, `name  = "VAULT_ADDRESS"`)
+		assert.Contains(t, gwChunk, `value = var.vault_address != "" ? var.vault_address : var.kms_address`)
+	})
+
+	t.Run("AC3_Hub_DataLineageViewerIAM", func(t *testing.T) {
+		mainPath := filepath.Join(modulesDir, "hub", "main.tf")
+		mainContentBytes, err := os.ReadFile(mainPath)
+		require.NoError(t, err)
+		mainContent := string(mainContentBytes)
+
+		assert.Contains(t, mainContent, `resource "google_project_iam_member" "hub_datalineage_viewer"`)
+		assert.Contains(t, mainContent, `role       = "roles/datalineage.viewer"`)
+		assert.Contains(t, mainContent, `member     = "serviceAccount:${google_service_account.hub_runtime.email}"`)
+	})
+
+	t.Run("AC4_Loader_VariablesAndEnv", func(t *testing.T) {
+		varPath := filepath.Join(modulesDir, "loader", "variables.tf")
+		varContentBytes, err := os.ReadFile(varPath)
+		require.NoError(t, err)
+		varContent := string(varContentBytes)
+
+		assert.Contains(t, varContent, `variable "allowed_gcs_buckets"`)
+
+		mainPath := filepath.Join(modulesDir, "loader", "main.tf")
+		mainContentBytes, err := os.ReadFile(mainPath)
+		require.NoError(t, err)
+		mainContent := string(mainContentBytes)
+
+		loaderRes := `resource "google_cloud_run_v2_service" "loader"`
+		idx := strings.Index(mainContent, loaderRes)
+		require.NotEqual(t, -1, idx, "google_cloud_run_v2_service.loader not found")
+		loaderChunk := mainContent[idx:]
+		if nextRes := strings.Index(loaderChunk[len(loaderRes):], "\nresource \""); nextRes != -1 {
+			loaderChunk = loaderChunk[:len(loaderRes)+nextRes]
+		}
+
+		assert.Contains(t, loaderChunk, `name  = "ALLOWED_GCS_BUCKETS"`)
+		assert.Contains(t, loaderChunk, `value = var.allowed_gcs_buckets != "" ? var.allowed_gcs_buckets : "${var.project_id}-dropzone"`)
+	})
+
+	t.Run("AC5_RequestBasedBillingAndScaling_AllServices", func(t *testing.T) {
+		cloudRunServices := []struct {
+			moduleName       string
+			resourceName     string
+			maxInstancesVar  string
+			maxInstancesExpr string
+		}{
+			{moduleName: "hub", resourceName: "hub", maxInstancesVar: "max_instances", maxInstancesExpr: "var.max_instances"},
+			{moduleName: "hub", resourceName: "shovel", maxInstancesVar: "shovel_max_instances", maxInstancesExpr: "var.shovel_max_instances"},
+			{moduleName: "hub", resourceName: "mcp", maxInstancesVar: "mcp_max_instances", maxInstancesExpr: "var.mcp_max_instances"},
+			{moduleName: "hub", resourceName: "console", maxInstancesVar: "console_max_instances", maxInstancesExpr: "var.console_max_instances"},
+			{moduleName: "vault", resourceName: "vault", maxInstancesVar: "max_instances", maxInstancesExpr: "var.max_instances"},
+			{moduleName: "gateway", resourceName: "gateway", maxInstancesVar: "max_instances", maxInstancesExpr: "var.max_instances"},
+			{moduleName: "loader", resourceName: "loader", maxInstancesVar: "max_instances", maxInstancesExpr: "var.max_instances"},
+			{moduleName: "metadata_shovel", resourceName: "shovel", maxInstancesVar: "max_instances", maxInstancesExpr: "var.max_instances"},
+			{moduleName: "docs_portal", resourceName: "docs_portal", maxInstancesVar: "max_instances", maxInstancesExpr: "var.max_instances"},
+		}
+
+		for _, svc := range cloudRunServices {
+			t.Run(svc.moduleName+"/"+svc.resourceName, func(t *testing.T) {
+				varPath := filepath.Join(modulesDir, svc.moduleName, "variables.tf")
+				varBytes, err := os.ReadFile(varPath)
+				require.NoError(t, err)
+				varContent := string(varBytes)
+
+				assert.Contains(t, varContent, `variable "`+svc.maxInstancesVar+`"`)
+				varIdx := strings.Index(varContent, `variable "`+svc.maxInstancesVar+`"`)
+				if varIdx != -1 {
+					varBlock := varContent[varIdx:]
+					if endIdx := strings.Index(varBlock, "}"); endIdx != -1 {
+						varBlock = varBlock[:endIdx+1]
+					}
+					assert.Regexp(t, regexp.MustCompile(`default\s*=\s*3`), varBlock, "variable %s in %s must default to 3", svc.maxInstancesVar, svc.moduleName)
+				}
+
+				mainPath := filepath.Join(modulesDir, svc.moduleName, "main.tf")
+				mainBytes, err := os.ReadFile(mainPath)
+				require.NoError(t, err)
+				mainContent := string(mainBytes)
+
+				resHeader := `resource "google_cloud_run_v2_service" "` + svc.resourceName + `"`
+				idx := strings.Index(mainContent, resHeader)
+				require.NotEqual(t, -1, idx, "%s not found in %s", resHeader, mainPath)
+				resChunk := mainContent[idx:]
+				if nextRes := strings.Index(resChunk[len(resHeader):], "\nresource \""); nextRes != -1 {
+					resChunk = resChunk[:len(resHeader)+nextRes]
+				}
+
+				// Must configure request-based billing (cpu_idle = true)
+				assert.Regexp(t, regexp.MustCompile(`cpu_idle\s*=\s*true`), resChunk, "%s in %s must set cpu_idle = true for request-based billing", svc.resourceName, svc.moduleName)
+
+				// Must configure scaling { min_instance_count = 0, max_instance_count = ... }
+				assert.Contains(t, resChunk, "scaling {")
+				assert.Regexp(t, regexp.MustCompile(`min_instance_count\s*=\s*0`), resChunk)
+				assert.Contains(t, resChunk, "max_instance_count = "+svc.maxInstancesExpr)
+			})
+		}
 	})
 }

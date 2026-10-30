@@ -44,3 +44,16 @@ variable "ingress_type" {
   type        = string
   default     = "INGRESS_TRAFFIC_INTERNAL_ONLY"
 }
+
+variable "allowed_gcs_buckets" {
+  description = "Comma-separated list of allowed GCS bucket names for ingestion"
+  type        = string
+  default     = ""
+}
+
+variable "max_instances" {
+  description = "The maximum number of instances for the Loader service"
+  type        = number
+  default     = 3
+}
+

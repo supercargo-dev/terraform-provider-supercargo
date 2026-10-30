@@ -13,6 +13,12 @@ variable "product_id" {
   type        = string
 }
 
+variable "environment" {
+  description = "The deployment environment (e.g. dev, staging, prod)"
+  type        = string
+  default     = "dev"
+}
+
 variable "image" {
   description = "The container image for The Guardian service"
   type        = string
@@ -75,6 +81,12 @@ variable "hub_address" {
 variable "kms_address" {
   description = "The address of the KMS (Vault) service"
   type        = string
+}
+
+variable "vault_address" {
+  description = "The address of the Vault service"
+  type        = string
+  default     = ""
 }
 
 variable "master_key_uri" {
@@ -258,5 +270,18 @@ variable "service_account_id" {
     error_message = "The service_account_id must be between 6 and 30 characters and conform to GCP service account naming conventions."
   }
 }
+
+variable "create_service_account" {
+  description = "Whether to create the Gateway Service Account (set false when using a pre-existing service account)"
+  type        = bool
+  default     = true
+}
+
+variable "max_instances" {
+  description = "The maximum number of instances for the Gateway service"
+  type        = number
+  default     = 3
+}
+
 
 

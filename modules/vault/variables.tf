@@ -134,3 +134,28 @@ variable "name_suffix" {
   default     = ""
 }
 
+variable "telemetry_identity_salt" {
+  description = "Identity salt for vault operational telemetry hashing"
+  type        = string
+  default     = "supercargo-default-salt"
+}
+
+variable "telemetry_topic_id" {
+  description = "Target Pub/Sub topic ID for vault operational telemetry"
+  type        = string
+  default     = "supercargo-platform-telemetry"
+}
+
+variable "authorized_tokenizer_sa" {
+  description = "Authorized tokenizer service account email"
+  type        = string
+  default     = ""
+}
+
+variable "max_instances" {
+  description = "The maximum number of instances for the Vault service"
+  type        = number
+  default     = 3
+}
+
+

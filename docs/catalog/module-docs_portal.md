@@ -39,6 +39,7 @@ module "docs_portal" {
 | `iap_enabled` | `bool` | `true` | no | Whether to enable Identity-Aware Proxy (IAP) directly on the Cloud Run service |
 | `image` | `string` | *required* | no | The container image to deploy to Cloud Run |
 | `licensed_domains` | `list(string)` | `[]` | no | List of corporate domains authorized to access the docs portal via IAP (e.g., ['example.com'] or ['domain:example.com']) |
+| `max_instances` | `number` | `3` | no | The maximum number of instances for the Docs Portal service |
 | `project_id` | `string` | *required* | no | The GCP project ID where resources will be provisioned |
 | `region` | `string` | `"europe-west1"` | no | The GCP region for regional resources (Cloud Run, Domain Mapping) |
 | `service_name` | `string` | `"docs-portal"` | no | The name of the Cloud Run service |

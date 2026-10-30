@@ -41,3 +41,10 @@ variable "ingress_type" {
   type        = string
   default     = "INGRESS_TRAFFIC_INTERNAL_ONLY"
 }
+
+variable "max_instances" {
+  description = "The maximum number of instances for the Metadata Shovel service"
+  type        = number
+  default     = 3
+}
+

@@ -34,6 +34,14 @@ resource "google_project_iam_member" "hub_datalineage_producer" {
   depends_on = [google_project_service.hub_apis]
 }
 
+// Grant Hub access to view lineage
+resource "google_project_iam_member" "hub_datalineage_viewer" {
+  project    = var.project_id
+  role       = "roles/datalineage.viewer"
+  member     = "serviceAccount:${google_service_account.hub_runtime.email}"
+  depends_on = [google_project_service.hub_apis]
+}
+
 // Grant Hub access to manage Dataplex Catalog and Data Products
 resource "google_project_iam_member" "hub_dataplex_catalog_admin" {
   project    = var.project_id
@@ -325,8 +333,21 @@ resource "google_cloud_run_v2_service" "hub" {
   template {
     service_account = google_service_account.hub_runtime.email
 
+    scaling {
+      min_instance_count = 0
+      max_instance_count = var.max_instances
+    }
+
     containers {
       image = "${var.region}-docker.pkg.dev/${var.image_project_id}/hub/hub:${var.hub_image_tag == "" ? "latest" : var.hub_image_tag}"
+
+      resources {
+        cpu_idle = true
+        limits = {
+          cpu    = "1000m"
+          memory = "512Mi"
+        }
+      }
 
       env {
         name  = "ENVIRONMENT"
@@ -443,8 +464,22 @@ resource "google_cloud_run_v2_service" "shovel" {
 
   template {
     service_account = google_service_account.shovel_runtime.email
+
+    scaling {
+      min_instance_count = 0
+      max_instance_count = var.shovel_max_instances
+    }
+
     containers {
       image = "${var.region}-docker.pkg.dev/${var.image_project_id}/metadata-shovel/metadata-shovel:${var.shovel_image_tag == "" ? "latest" : var.shovel_image_tag}"
+
+      resources {
+        cpu_idle = true
+        limits = {
+          cpu    = "1000m"
+          memory = "512Mi"
+        }
+      }
       env {
         name  = "TARGET_TOPIC"
         value = var.control_plane_topic
@@ -1043,6 +1078,7 @@ resource "google_cloud_run_v2_service" "mcp" {
       }
 
       resources {
+        cpu_idle = true
         limits = {
           cpu    = "1"
           memory = "512Mi"
@@ -1131,6 +1167,149 @@ resource "google_cloud_run_v2_service_iam_member" "mcp_invokers" {
   project  = var.project_id
   location = var.region
   name     = google_cloud_run_v2_service.mcp[0].name
+  role     = "roles/run.invoker"
+  member   = each.value
+}
+
+# ----------------------------------------------------------------------------------------------------------------------
+# CONSOLE COMPANION SERVICE (SSR Web UI Sidecar)
+# ----------------------------------------------------------------------------------------------------------------------
+
+resource "google_service_account" "console_runtime" {
+  count        = var.console_enabled ? 1 : 0
+  project      = var.project_id
+  account_id   = "console-runtime-sa${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
+  display_name = "Supercargo Console Companion Runtime Service Account"
+  depends_on   = [time_sleep.wait_for_apis]
+}
+
+resource "google_cloud_run_v2_service_iam_member" "console_hub_invoker" {
+  count    = var.console_enabled ? 1 : 0
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.hub.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.console_runtime[0].email}"
+}
+
+resource "google_cloud_run_v2_service" "console" {
+  count               = var.console_enabled ? 1 : 0
+  provider            = google-beta
+  project             = var.project_id
+  name                = "console${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
+  location            = var.region
+  launch_stage        = "BETA"
+  ingress             = var.ingress_type
+  iap_enabled         = var.console_iap_enabled
+  deletion_protection = false
+
+  depends_on = [time_sleep.wait_for_apis]
+
+  template {
+    service_account = google_service_account.console_runtime[0].email
+
+    scaling {
+      min_instance_count = 0
+      max_instance_count = var.console_max_instances
+    }
+
+    containers {
+      image = "${var.region}-docker.pkg.dev/${var.image_project_id}/hub/supercargo-console:${var.console_image_tag == "" ? "latest" : var.console_image_tag}"
+
+      ports {
+        container_port = 8088
+      }
+
+      resources {
+        cpu_idle = true
+        limits = {
+          cpu    = "1"
+          memory = "512Mi"
+        }
+      }
+
+      env {
+        name  = "PORT"
+        value = "8088"
+      }
+
+      env {
+        name  = "HUB_URL"
+        value = google_cloud_run_v2_service.hub.uri
+      }
+
+      env {
+        name  = "HUB_OIDC_AUDIENCE"
+        value = var.oidc_audience != "" ? var.oidc_audience : google_cloud_run_v2_service.hub.uri
+      }
+
+      env {
+        name  = "ENVIRONMENT"
+        value = var.environment
+      }
+
+      env {
+        name  = "SUPERCARGO_ENV"
+        value = var.environment
+      }
+
+      env {
+        name  = "GCP_PROJECT_ID"
+        value = var.firestore_project_id
+      }
+
+      env {
+        name  = "IAP_ENFORCE"
+        value = var.console_iap_enabled ? "true" : "false"
+      }
+
+      env {
+        name  = "IAP_AUDIENCE"
+        value = var.console_iap_audience
+      }
+
+      env {
+        name  = "FORCE_DEPLOY"
+        value = var.force_deploy_trigger
+      }
+
+      startup_probe {
+        http_get {
+          path = "/healthz"
+          port = 8088
+        }
+        initial_delay_seconds = 0
+        period_seconds        = 5
+        timeout_seconds       = 2
+        failure_threshold     = 12
+      }
+
+      liveness_probe {
+        http_get {
+          path = "/healthz"
+          port = 8088
+        }
+        period_seconds    = 10
+        timeout_seconds   = 2
+        failure_threshold = 3
+      }
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      template[0].containers[0].image,
+      client,
+      client_version
+    ]
+  }
+}
+
+resource "google_cloud_run_v2_service_iam_member" "console_invokers" {
+  for_each = var.console_enabled ? toset(var.console_allowed_invokers) : []
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.console[0].name
   role     = "roles/run.invoker"
   member   = each.value
 }

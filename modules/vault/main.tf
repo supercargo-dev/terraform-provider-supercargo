@@ -1,3 +1,7 @@
+locals {
+  vault_audience = var.oidc_audience != "" ? var.oidc_audience : "supercargo-vault"
+}
+
 resource "google_project_service" "vault_apis" {
   for_each = toset([
     "cloudkms.googleapis.com",
@@ -181,8 +185,21 @@ resource "google_cloud_run_v2_service" "vault" {
   template {
     service_account = google_service_account.vault_sa.email
 
+    scaling {
+      min_instance_count = 0
+      max_instance_count = var.max_instances
+    }
+
     containers {
       image = var.image
+
+      resources {
+        cpu_idle = true
+        limits = {
+          cpu    = "1000m"
+          memory = "512Mi"
+        }
+      }
 
       env {
         name  = "GCP_PROJECT_ID"
@@ -206,7 +223,27 @@ resource "google_cloud_run_v2_service" "vault" {
 
       env {
         name  = "OIDC_AUDIENCE"
-        value = var.oidc_audience
+        value = local.vault_audience
+      }
+
+      env {
+        name  = "VAULT_AUDIENCE"
+        value = local.vault_audience
+      }
+
+      env {
+        name  = "SUPERCARGO_TELEMETRY_IDENTITY_SALT"
+        value = var.telemetry_identity_salt
+      }
+
+      env {
+        name  = "VAULT_TELEMETRY_TOPIC_ID"
+        value = var.telemetry_topic_id
+      }
+
+      env {
+        name  = "VAULT_AUTHORIZED_TOKENIZER_SA"
+        value = var.authorized_tokenizer_sa != "" ? var.authorized_tokenizer_sa : var.gateway_service_account_email
       }
 
       env {

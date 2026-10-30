@@ -15,6 +15,12 @@ resource "google_cloud_run_v2_service" "loader" {
 
   template {
     service_account = google_service_account.loader_sa.email
+
+    scaling {
+      min_instance_count = 0
+      max_instance_count = var.max_instances
+    }
+
     containers {
       image = var.image
       env {
@@ -29,7 +35,12 @@ resource "google_cloud_run_v2_service" "loader" {
         name  = "DLQ_TOPIC"
         value = var.dlq_topic_id
       }
+      env {
+        name  = "ALLOWED_GCS_BUCKETS"
+        value = var.allowed_gcs_buckets != "" ? var.allowed_gcs_buckets : "${var.project_id}-dropzone"
+      }
       resources {
+        cpu_idle = true
         limits = {
           memory = "512Mi"
           cpu    = "1"
