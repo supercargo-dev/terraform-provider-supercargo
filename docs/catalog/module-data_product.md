@@ -15,24 +15,15 @@ Terraform module for deploying and configuring `data_product`.
 ```mermaid
 flowchart TD
     subgraph Ingestion["Data Product Ingestion"]
-        subgraph Streaming["Streaming (Push)"]
-            Producer["Producer Service"] -->|Publish Events| RawTopic["Raw Topic (Pub/Sub)"]
-            RawTopic -->|Push Subscription| Gateway["Gateway (Cloud Run)"]
-            Gateway -->|Quarantine| DLQ["Dead Letter Queue (Pub/Sub)"]
-            Gateway -->|Clean Events| CleanTopic["Clean Topic (Pub/Sub)"]
-            CleanTopic -->|Storage Sink| BigQuery[("BigQuery Tables")]
-        end
-        subgraph BatchIngress["DLT Ingestion (Pull)"]
-            Sched["Cloud Scheduler"] -->|POST :run| DLTJob["Cloud Run v2 Job"]
-            DLTJob -->|Extract & Transform| ExternalSource[("External DB / API")]
-            DLTJob -->|Direct Ingestion| BigQuery
-        end
+        Producer["Producer Service"] -->|Publish Events| RawTopic["Raw Topic (Pub/Sub)"]
+        RawTopic -->|Push Subscription| Gateway["Gateway (Cloud Run)"]
+        Gateway -->|Quarantine| DLQ["Dead Letter Queue (Pub/Sub)"]
+        Gateway -->|Clean Events| CleanTopic["Clean Topic (Pub/Sub)"]
+        CleanTopic -->|Storage Sink| BigQuery[("BigQuery Tables")]
     end
     subgraph Governance["Platform Governance"]
         Gateway -.->|Contract & Policy Check| Hub["Hub Service"]
         Gateway -.->|PII Pseudonymization| Vault["Vault Service"]
-        DLTJob -.->|Contract & Policy Check| Hub
-        DLTJob -.->|PII Pseudonymization| Vault
     end
 ```
 
@@ -49,21 +40,6 @@ module "data_product" {
   project_id               = var.project_id
   region                   = var.region
 }
-```
-
-## Operational Backfills
-
-Each configured DLT input port automatically computes a ready-to-run backfill command available in `dlt_backfill_commands`:
-
-```bash
-# View all available backfill commands
-terraform output dlt_backfill_commands
-
-# Execute backfill for a specific port
-gcloud run jobs execute <dlt-job-name> \
-  --region <region> \
-  --project <project-id> \
-  --args="--since=2026-01-01T00:00:00Z"
 ```
 
 ## Configuration Variables
@@ -91,10 +67,10 @@ gcloud run jobs execute <dlt-job-name> \
 | `dlt_max_retries` | `number` | `3` | no | The maximum number of retry attempts for failed DLT Cloud Run jobs |
 | `dlt_memory` | `string` | `"1Gi"` | no | The memory limit for DLT Cloud Run jobs |
 | `dlt_runner_image` | `string` | `"ghcr.io/supercargo-dev/supercargo-dlt-runner:latest"` | no | The container image for DLT pipeline runners |
-| `dlt_runner_service_account_id` | `string` | `""` | no | Optional custom service account ID for DLT runner Cloud Run jobs |
+| `dlt_runner_service_account_id` | `string` | `""` | no | Optional custom service account ID for DLT runner Cloud Run jobs. If unset, derived deterministically. |
 | `dlt_scheduler_attempt_deadline` | `string` | `"320s"` | no | The attempt deadline for Cloud Scheduler jobs triggering DLT Cloud Run jobs |
-| `dlt_scheduler_service_account_id` | `string` | `""` | no | Optional custom service account ID for DLT Cloud Scheduler jobs |
-| `dlt_time_zone` | `string` | `"UTC"` | no | Time zone for Cloud Scheduler cron jobs |
+| `dlt_scheduler_service_account_id` | `string` | `""` | no | Optional custom service account ID for DLT Cloud Scheduler jobs. If unset, derived deterministically. |
+| `dlt_time_zone` | `string` | `"UTC"` | no | Time zone for Cloud Scheduler cron jobs (e.g. UTC, America/New_York) |
 | `dlt_timeout` | `string` | `"3600s"` | no | The maximum execution timeout for DLT Cloud Run jobs |
 | `enable_dlq_alerts` | `bool` | `true` | no | Whether to enable Cloud Monitoring alert policies for DLQ |
 | `force_deploy_trigger` | `string` | `"static"` | no | A value that, when changed, triggers a new Cloud Run revision (e.g. git SHA or image digest). Use 'latest' or a fixed value for idempotency. |
@@ -126,15 +102,15 @@ gcloud run jobs execute <dlt-job-name> \
 | `bigquery_table_ids` | no | A map of contract names to BigQuery table IDs |
 | `clean_topic_id` | no | The ID of the Clean topic |
 | `contracts` | no | Map of auto-discovered or explicitly provided contracts |
+| `dlq_alert_policy_age_id` | no | The ID of the Cloud Monitoring alert policy for DLQ oldest unacked message age |
+| `dlq_alert_policy_undelivered_id` | no | The ID of the Cloud Monitoring alert policy for DLQ undelivered messages |
+| `dlq_subscription_id` | no | The ID of the Dead Letter Queue Subscription |
+| `dlq_topic_id` | no | The ID of the Dead Letter Queue topic |
 | `dlt_backfill_commands` | no | Ready-to-run gcloud commands for ad-hoc DLT historical backfills |
 | `dlt_cloud_run_job_names` | no | Map of DLT input port names to their Cloud Run v2 Job names |
 | `dlt_cloud_scheduler_job_ids` | no | Map of DLT input port names to their Cloud Scheduler job IDs |
 | `dlt_runner_service_account_email` | no | The email of the DLT Runner Service Account (null if no DLT ports declared) |
 | `dlt_scheduler_service_account_email` | no | The email of the DLT Cloud Scheduler Service Account (null if no DLT ports declared) |
-| `dlq_alert_policy_age_id` | no | The ID of the Cloud Monitoring alert policy for DLQ oldest unacked message age |
-| `dlq_alert_policy_undelivered_id` | no | The ID of the Cloud Monitoring alert policy for DLQ undelivered messages |
-| `dlq_subscription_id` | no | The ID of the Dead Letter Queue Subscription |
-| `dlq_topic_id` | no | The ID of the Dead Letter Queue topic |
 | `gateway_service_name` | no | The name of the Gateway Cloud Run service |
 | `gateway_url` | no | The URL of the deployed Cloud Run Gateway |
 | `input_subscription_ids` | no | Map of input port names to their Pub/Sub push subscription IDs |
