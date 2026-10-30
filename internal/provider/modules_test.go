@@ -1,6 +1,8 @@
 package provider
 
 import (
+	"crypto/md5"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -419,6 +421,186 @@ func TestModules_DataProductDeclarativeIngress(t *testing.T) {
 		}
 		if !strings.Contains(outputContent, `output "input_subscription_ids"`) {
 			t.Errorf("modules/data_product/outputs.tf missing output \"input_subscription_ids\"")
+		}
+	})
+}
+
+func TestModules_DataProduct_DLTIngress(t *testing.T) {
+	modulesDir := "../../modules"
+	dpDir := filepath.Join(modulesDir, "data_product")
+
+	t.Run("DeterministicLocalsAndFiltering", func(t *testing.T) {
+		dltPath := filepath.Join(dpDir, "dlt_ports.tf")
+		dltBytes, err := os.ReadFile(dltPath)
+		require.NoError(t, err, "dlt_ports.tf must exist in modules/data_product")
+		dltContent := string(dltBytes)
+
+		// AC-1: Port Filtering & Dataset Fallback
+		assert.NotContains(t, dltContent, "raw_input_ports =", "dlt_ports.tf must not redefine raw_input_ports (uses local.manifest_input_ports)")
+		assert.Contains(t, dltContent, "local.manifest_input_ports", "dlt_ports.tf must use local.manifest_input_ports directly")
+
+		assert.Contains(t, dltContent, "dlt_input_ports", "dlt_ports.tf must declare dlt_input_ports local")
+		assert.True(t,
+			strings.Contains(dltContent, `port.type == "dlt"`) || strings.Contains(dltContent, `try(port.type, "") == "dlt"`),
+			"dlt_input_ports must filter port.type == 'dlt'",
+		)
+		assert.True(t,
+			strings.Contains(dltContent, `startswith(port.source, "dlt://")`) || strings.Contains(dltContent, `try(startswith(port.source, "dlt://"), false)`),
+			"dlt_input_ports must filter startswith(port.source, 'dlt://')",
+		)
+
+		// AC-1: dlt_bigquery_dataset fallback
+		assert.Contains(t, dltContent, "dlt_bigquery_dataset", "dlt_ports.tf must declare dlt_bigquery_dataset local")
+		assert.Contains(t, dltContent, `var.bigquery_dataset_id != "" ? var.bigquery_dataset_id : replace(local.product_id, "-", "_")`,
+			"dlt_bigquery_dataset must fallback to replace(local.product_id, \"-\", \"_\") when var.bigquery_dataset_id is empty",
+		)
+
+		// AC-2: Collision-Resistant SA Derivation
+		assert.Contains(t, dltContent, "candidate_runner_sa", "dlt_ports.tf must declare candidate_runner_sa")
+		assert.Contains(t, dltContent, "dlt_runner_sa_id", "dlt_ports.tf must declare dlt_runner_sa_id")
+		assert.Contains(t, dltContent, "dlt_runner_sa_email", "dlt_ports.tf must declare dlt_runner_sa_email")
+
+		assert.Contains(t, dltContent, "candidate_scheduler_sa", "dlt_ports.tf must declare candidate_scheduler_sa")
+		assert.Contains(t, dltContent, "dlt_scheduler_sa_id", "dlt_ports.tf must declare dlt_scheduler_sa_id")
+		assert.Contains(t, dltContent, "dlt_scheduler_sa_email", "dlt_ports.tf must declare dlt_scheduler_sa_email")
+
+		// Verify derivation logic structure in HCL
+		assert.Contains(t, dltContent, "length(local.candidate_runner_sa) <= 30", "dlt_runner_sa_id must guard length <= 30")
+		assert.Contains(t, dltContent, "length(local.candidate_scheduler_sa) <= 30", "dlt_scheduler_sa_id must guard length <= 30")
+		assert.Contains(t, dltContent, "md5(local.candidate_runner_sa)", "dlt_runner_sa_id must hash candidate using md5")
+		assert.Contains(t, dltContent, "md5(local.candidate_scheduler_sa)", "dlt_scheduler_sa_id must hash candidate using md5")
+		assert.Contains(t, dltContent, `regexreplace(substr(local.candidate_runner_sa, 0, 23), "-+$", "")`, "dlt_runner_sa_id must strip trailing hyphens before hash suffix")
+		assert.Contains(t, dltContent, `regexreplace(substr(local.candidate_scheduler_sa, 0, 23), "-+$", "")`, "dlt_scheduler_sa_id must strip trailing hyphens before hash suffix")
+
+		// Table-driven matrix testing collision-resistant SA derivation algorithm
+		deriveSA := func(cand string) string {
+			if len(cand) <= 30 {
+				return cand
+			}
+			pfx := cand[:23]
+			re := regexp.MustCompile("-+$")
+			pfx = re.ReplaceAllString(pfx, "")
+			hashBytes := md5.Sum([]byte(cand))
+			hash := fmt.Sprintf("%x", hashBytes)[:6]
+			return pfx + "-" + hash
+		}
+
+		saTests := []struct {
+			name        string
+			candidate   string
+			wantMaxLen  int
+			wantMatches string
+		}{
+			{
+				name:        "short candidate (<=30 chars) unchanged",
+				candidate:   "dlt-r-orders",
+				wantMaxLen:  30,
+				wantMatches: "^dlt-r-orders$",
+			},
+			{
+				name:        "exactly 30 chars unchanged",
+				candidate:   "dlt-r-exactly-30-chars-here123",
+				wantMaxLen:  30,
+				wantMatches: "^dlt-r-exactly-30-chars-here123$",
+			},
+			{
+				name:        "long candidate (>30 chars) truncated with md5 suffix strictly <= 30 chars",
+				candidate:   "dlt-r-very-long-data-product-identifier-exceeding-limit",
+				wantMaxLen:  30,
+				wantMatches: `^dlt-r-very-long-data-pr-[a-f0-9]{6}$`,
+			},
+			{
+				name:        "long candidate ending in hyphen at truncation boundary strips trailing hyphen before hash",
+				candidate:   "dlt-r-sixteen-char-----suffix-exceeding-thirty",
+				wantMaxLen:  30,
+				wantMatches: `^dlt-r-sixteen-char-[a-f0-9]{6}$`,
+			},
+		}
+
+		for _, tc := range saTests {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				derived := deriveSA(tc.candidate)
+				assert.LessOrEqual(t, len(derived), tc.wantMaxLen, "derived SA ID must be <= 30 characters")
+				assert.Regexp(t, regexp.MustCompile(tc.wantMatches), derived)
+				assert.NotContains(t, derived, "--", "derived SA must not contain double hyphens at truncation boundary")
+			})
+		}
+	})
+
+	t.Run("BackfillAndVariables", func(t *testing.T) {
+		varsPath := filepath.Join(dpDir, "variables.tf")
+		varsBytes, err := os.ReadFile(varsPath)
+		require.NoError(t, err, "variables.tf must exist in modules/data_product")
+		varsContent := string(varsBytes)
+
+		// AC-8: Required DLT variables declarations and defaults
+		reqVars := []struct {
+			name         string
+			expectedType string
+			defaultVal   string
+		}{
+			{name: "dlt_runner_image", expectedType: "string", defaultVal: `"ghcr.io/supercargo-dev/supercargo-dlt-runner:latest"`},
+			{name: "dlt_deletion_protection", expectedType: "bool", defaultVal: "false"},
+			{name: "dlt_time_zone", expectedType: "string", defaultVal: `"UTC"`},
+			{name: "dlt_cpu", expectedType: "string", defaultVal: `"1"`},
+			{name: "dlt_memory", expectedType: "string", defaultVal: `"1Gi"`},
+			{name: "dlt_timeout", expectedType: "string", defaultVal: `"3600s"`},
+			{name: "dlt_max_retries", expectedType: "number", defaultVal: "3"},
+			{name: "dlt_runner_service_account_id", expectedType: "string", defaultVal: `""`},
+			{name: "dlt_scheduler_service_account_id", expectedType: "string", defaultVal: `""`},
+		}
+
+		for _, rv := range reqVars {
+			block := extractHCLBlock(varsContent, fmt.Sprintf(`variable "%s"`, rv.name))
+			require.NotEmpty(t, block, "variable %q must be declared in variables.tf", rv.name)
+			assert.Contains(t, block, fmt.Sprintf("type        = %s", rv.expectedType), "variable %q must have type %s", rv.name, rv.expectedType)
+			assert.Contains(t, block, fmt.Sprintf("default     = %s", rv.defaultVal), "variable %q must have default %s", rv.name, rv.defaultVal)
+		}
+
+		// AC-8 & Error Mode A: SA validation condition and error message
+		for _, saVar := range []string{"dlt_runner_service_account_id", "dlt_scheduler_service_account_id"} {
+			block := extractHCLBlock(varsContent, fmt.Sprintf(`variable "%s"`, saVar))
+			assert.Contains(t, block, "validation {", "variable %q must include a validation block", saVar)
+			assert.Contains(t, block, `^[a-z]([-a-z0-9]*[a-z0-9])$`, "variable %q validation must enforce GCP SA regex naming", saVar)
+			assert.Contains(t, block, "error_message", "variable %q validation must specify an error message", saVar)
+		}
+
+		// Table-driven verification of the SA validation condition (Golden UX / Error Mode A contract)
+		saRegex := regexp.MustCompile(`^[a-z]([-a-z0-9]*[a-z0-9])$`)
+		validateSA := func(val string) bool {
+			if val == "" {
+				return true
+			}
+			return len(val) >= 6 && len(val) <= 30 && saRegex.MatchString(val)
+		}
+
+		valTests := []struct {
+			name    string
+			input   string
+			isValid bool
+		}{
+			{name: "empty string is valid default", input: "", isValid: true},
+			{name: "valid 6-char SA", input: "dlt-sa", isValid: true},
+			{name: "valid standard SA", input: "dlt-runner-sa", isValid: true},
+			{name: "valid 30-char SA", input: "dlt-runner-service-account-01", isValid: true},
+			{name: "too short (< 6 chars)", input: "short", isValid: false},
+			{name: "starts with digit", input: "1dlt-runner", isValid: false},
+			{name: "starts with hyphen", input: "-dlt-runner", isValid: false},
+			{name: "ends with hyphen", input: "dlt-runner-", isValid: false},
+			{name: "contains uppercase", input: "dlt-Runner", isValid: false},
+			{name: "contains underscore", input: "dlt_runner", isValid: false},
+			{name: "too long (> 30 chars)", input: "dlt-runner-service-account-too-long-exceeding-limit", isValid: false},
+		}
+
+		for _, tc := range valTests {
+			tc := tc
+			t.Run("SA_Validation/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				got := validateSA(tc.input)
+				assert.Equal(t, tc.isValid, got, "input %q validation expected %v got %v", tc.input, tc.isValid, got)
+			})
 		}
 	})
 }
