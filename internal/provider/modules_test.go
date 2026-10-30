@@ -603,6 +603,245 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 			})
 		}
 	})
+
+	t.Run("CloudRunV2Job", func(t *testing.T) {
+		dltPath := filepath.Join(dpDir, "dlt_ports.tf")
+		dltBytes, err := os.ReadFile(dltPath)
+		require.NoError(t, err, "dlt_ports.tf must exist in modules/data_product")
+		dltContent := string(dltBytes)
+
+		// 1. Assert google_service_account.dlt_runner block
+		runnerSABlock := extractHCLBlock(dltContent, `resource "google_service_account" "dlt_runner"`)
+		require.NotEmpty(t, runnerSABlock, "dlt_ports.tf must define resource google_service_account.dlt_runner")
+		assert.Regexp(t, regexp.MustCompile(`count\s*=\s*length\(local\.dlt_input_ports\)\s*>\s*0\s*\?\s*1\s*:\s*0`), runnerSABlock)
+		assert.Regexp(t, regexp.MustCompile(`account_id\s*=\s*local\.dlt_runner_sa_id`), runnerSABlock)
+		assert.Contains(t, runnerSABlock, `display_name = "DLT Ingestion Runner Service Account for ${local.product_id}"`)
+		assert.Regexp(t, regexp.MustCompile(`project\s*=\s*var\.project_id`), runnerSABlock)
+
+		// 2. Assert google_cloud_run_v2_job.dlt_jobs block
+		jobBlock := extractHCLBlock(dltContent, `resource "google_cloud_run_v2_job" "dlt_jobs"`)
+		require.NotEmpty(t, jobBlock, "dlt_ports.tf must define resource google_cloud_run_v2_job.dlt_jobs")
+		assert.Regexp(t, regexp.MustCompile(`for_each\s*=\s*local\.dlt_input_ports`), jobBlock)
+		assert.Regexp(t, regexp.MustCompile(`name\s*=\s*"dlt-\$\{local\.product_id\}-\$\{replace\(each\.key,\s*"_",\s*"-"\)\}\$\{var\.name_suffix\s*!=\s*""\s*\?\s*"-\$\{var\.name_suffix\}"\s*:\s*""\}"`), jobBlock)
+		assert.Regexp(t, regexp.MustCompile(`location\s*=\s*var\.region`), jobBlock)
+		assert.Regexp(t, regexp.MustCompile(`project\s*=\s*var\.project_id`), jobBlock)
+		assert.Regexp(t, regexp.MustCompile(`deletion_protection\s*=\s*var\.dlt_deletion_protection`), jobBlock)
+
+		// Template attributes
+		assert.Regexp(t, regexp.MustCompile(`service_account\s*=\s*local\.dlt_runner_sa_email`), jobBlock)
+		assert.Regexp(t, regexp.MustCompile(`max_retries\s*=\s*var\.dlt_max_retries`), jobBlock)
+		assert.Regexp(t, regexp.MustCompile(`timeout\s*=\s*var\.dlt_timeout`), jobBlock)
+		assert.Regexp(t, regexp.MustCompile(`image\s*=\s*var\.dlt_runner_image`), jobBlock)
+
+		// AC-3: Dynamic Container Arguments
+		assert.Contains(t, jobBlock, "compact(flatten([", "job args must use compact(flatten([...])) (AC-3)")
+		assert.Contains(t, jobBlock, `"--source"`, "job args must include --source")
+		assert.Contains(t, jobBlock, `"--contract-urn"`, "job args must include --contract-urn")
+		assert.Contains(t, jobBlock, `"--product-urn"`, "job args must include --product-urn")
+		assert.Contains(t, jobBlock, `data.supercargo_data_product.this.urn`, "job args must reference data.supercargo_data_product.this.urn for --product-urn (AC-3)")
+		assert.Contains(t, jobBlock, `"--destination"`, "job args must include --destination")
+		assert.Contains(t, jobBlock, `"bigquery"`, "job args destination must be bigquery")
+		assert.Contains(t, jobBlock, `"--dataset"`, "job args must include --dataset")
+		assert.Contains(t, jobBlock, `local.dlt_bigquery_dataset`, "job args must reference local.dlt_bigquery_dataset")
+		assert.Contains(t, jobBlock, `"--pipeline-name"`, "job args must include --pipeline-name")
+
+		// Table fallback for sql_database and filesystem
+		assert.Contains(t, jobBlock, `["--table", try(each.value.table, each.key)]`, "job args must append --table with fallback to each.key for sql_database/filesystem (AC-3)")
+
+		// Optional field guards
+		assert.Contains(t, jobBlock, `"--cursor-field"`, "job args must support optional --cursor-field")
+		assert.Contains(t, jobBlock, `"--primary-key"`, "job args must support optional --primary-key")
+		assert.Contains(t, jobBlock, `"--write-disposition"`, "job args must support optional --write-disposition")
+		assert.Contains(t, jobBlock, `"--cold-start-window"`, "job args must support optional --cold-start-window")
+		assert.Contains(t, jobBlock, `"--entrypoint"`, "job args must support optional --entrypoint")
+
+		// Environment variables
+		assert.Contains(t, jobBlock, `"SUPERCARGO_HUB_URL"`, "job env must define SUPERCARGO_HUB_URL")
+		assert.Contains(t, jobBlock, `var.hub_address`, "job env SUPERCARGO_HUB_URL must bind var.hub_address")
+		assert.Contains(t, jobBlock, `"SUPERCARGO_HUB_AUDIENCE"`, "job env must define SUPERCARGO_HUB_AUDIENCE")
+		assert.Contains(t, jobBlock, `var.hub_oidc_audience`, "job env SUPERCARGO_HUB_AUDIENCE must bind var.hub_oidc_audience")
+		assert.Contains(t, jobBlock, `"SUPERCARGO_VAULT_URL"`, "job env must define SUPERCARGO_VAULT_URL")
+		assert.Contains(t, jobBlock, `var.kms_address`, "job env SUPERCARGO_VAULT_URL must bind var.kms_address")
+		assert.Contains(t, jobBlock, `"SUPERCARGO_VAULT_AUDIENCE"`, "job env must define SUPERCARGO_VAULT_AUDIENCE")
+		assert.Contains(t, jobBlock, `var.vault_oidc_audience`, "job env SUPERCARGO_VAULT_AUDIENCE must bind var.vault_oidc_audience")
+		assert.Contains(t, jobBlock, `"GOOGLE_CLOUD_PROJECT"`, "job env must define GOOGLE_CLOUD_PROJECT")
+		assert.Contains(t, jobBlock, `"DESTINATION__BIGQUERY__LOCATION"`, "job env must define DESTINATION__BIGQUERY__LOCATION")
+
+		// Dynamic secret environment bindings
+		assert.Contains(t, jobBlock, `dynamic "env"`, "job must declare dynamic env blocks for secrets")
+		assert.Contains(t, jobBlock, `"SUPERCARGO_DB_CREDENTIALS"`, "job must mount credentials to SUPERCARGO_DB_CREDENTIALS")
+		assert.Contains(t, jobBlock, `"SUPERCARGO_CREDENTIALS_SECRET"`, "job must mount credentials to SUPERCARGO_CREDENTIALS_SECRET")
+		assert.Contains(t, jobBlock, `secret_key_ref`, "job secret mount must use value_source.secret_key_ref")
+		assert.Contains(t, jobBlock, `version = "latest"`, "secret_key_ref must use latest version")
+
+		// Container resources
+		assert.Regexp(t, regexp.MustCompile(`cpu\s*=\s*var\.dlt_cpu`), jobBlock)
+		assert.Regexp(t, regexp.MustCompile(`memory\s*=\s*var\.dlt_memory`), jobBlock)
+
+		// AC-4: Lifecycle ignore_changes & depends_on
+		assert.Contains(t, jobBlock, "lifecycle {", "job must define lifecycle block")
+		assert.Contains(t, jobBlock, "ignore_changes = [", "job must define ignore_changes in lifecycle")
+		assert.Contains(t, jobBlock, "template[0].template[0].containers[0].image", "ignore_changes must ignore container image")
+		assert.Contains(t, jobBlock, "client", "ignore_changes must ignore client")
+		assert.Contains(t, jobBlock, "client_version", "ignore_changes must ignore client_version")
+		assert.Contains(t, jobBlock, "depends_on = [", "job must define depends_on")
+		assert.Contains(t, jobBlock, "google_service_account.dlt_runner", "job depends_on must include google_service_account.dlt_runner (AC-4)")
+
+		// Table-driven verification of argument synthesis behavior across canonical input matrix
+		type dltPort struct {
+			key              string
+			source           string
+			table            string
+			contractUrn      string
+			cursorField      string
+			primaryKey       string
+			writeDisposition string
+			coldStartWindow  string
+			entrypoint       string
+		}
+
+		synthesizeArgs := func(productID, productURN, dataset string, p dltPort) []string {
+			var args []string
+			args = append(args, "--source", p.source)
+			contractUrn := p.contractUrn
+			if contractUrn == "" {
+				contractUrn = p.key
+			}
+			args = append(args, "--contract-urn", contractUrn)
+			args = append(args, "--product-urn", productURN)
+			args = append(args, "--destination", "bigquery")
+			args = append(args, "--dataset", dataset)
+			args = append(args, "--pipeline-name", fmt.Sprintf("dlt-%s-%s", productID, strings.ReplaceAll(p.key, "_", "-")))
+
+			isSQLOrFS := strings.Contains(p.source, "sql_database") || strings.Contains(p.source, "filesystem")
+			if isSQLOrFS {
+				t := p.table
+				if t == "" {
+					t = p.key
+				}
+				args = append(args, "--table", t)
+			}
+			if p.cursorField != "" {
+				args = append(args, "--cursor-field", p.cursorField)
+			}
+			if p.primaryKey != "" {
+				args = append(args, "--primary-key", p.primaryKey)
+			}
+			if p.writeDisposition != "" {
+				args = append(args, "--write-disposition", p.writeDisposition)
+			}
+			if p.coldStartWindow != "" {
+				args = append(args, "--cold-start-window", p.coldStartWindow)
+			}
+			if p.entrypoint != "" {
+				args = append(args, "--entrypoint", p.entrypoint)
+			}
+			return args
+		}
+
+		argMatrix := []struct {
+			name        string
+			port        dltPort
+			wantContain []string
+			wantAbsent  []string
+		}{
+			{
+				name: "sql_database with explicit table and optional fields",
+				port: dltPort{
+					key:              "raw_orders",
+					source:           "dlt://sql_database",
+					table:            "orders",
+					contractUrn:      "urn:sc:contract:orders:v1",
+					cursorField:      "updated_at",
+					primaryKey:       "id",
+					writeDisposition: "merge",
+					coldStartWindow:  "30d",
+				},
+				wantContain: []string{
+					"--source", "dlt://sql_database",
+					"--contract-urn", "urn:sc:contract:orders:v1",
+					"--product-urn", "urn:sc:product:sales:v1",
+					"--table", "orders",
+					"--cursor-field", "updated_at",
+					"--primary-key", "id",
+					"--write-disposition", "merge",
+					"--cold-start-window", "30d",
+				},
+				wantAbsent: []string{"--entrypoint"},
+			},
+			{
+				name: "sql_database omitting table falls back to port key to prevent runtime ValueError",
+				port: dltPort{
+					key:         "customers_sync",
+					source:      "dlt://sql_database",
+					contractUrn: "urn:sc:contract:customers:v1",
+				},
+				wantContain: []string{
+					"--source", "dlt://sql_database",
+					"--table", "customers_sync",
+					"--pipeline-name", "dlt-sales-customers-sync",
+				},
+				wantAbsent: []string{"--cursor-field", "--primary-key", "--write-disposition", "--cold-start-window", "--entrypoint"},
+			},
+			{
+				name: "filesystem with explicit table",
+				port: dltPort{
+					key:         "gcs_events",
+					source:      "dlt://filesystem",
+					table:       "events_raw",
+					contractUrn: "urn:sc:contract:events:v1",
+				},
+				wantContain: []string{
+					"--source", "dlt://filesystem",
+					"--table", "events_raw",
+				},
+				wantAbsent: []string{"--entrypoint"},
+			},
+			{
+				name: "rest_api connector does not include --table",
+				port: dltPort{
+					key:              "stripe_charges",
+					source:           "dlt://rest_api",
+					contractUrn:      "urn:sc:contract:stripe:v1",
+					writeDisposition: "append",
+				},
+				wantContain: []string{
+					"--source", "dlt://rest_api",
+					"--contract-urn", "urn:sc:contract:stripe:v1",
+					"--write-disposition", "append",
+				},
+				wantAbsent: []string{"--table", "--entrypoint"},
+			},
+			{
+				name: "custom python pipeline with entrypoint",
+				port: dltPort{
+					key:         "custom_feed",
+					source:      "dlt://custom",
+					contractUrn: "urn:sc:contract:custom:v1",
+					entrypoint:  "pipelines/feed.py:load_data",
+				},
+				wantContain: []string{
+					"--source", "dlt://custom",
+					"--entrypoint", "pipelines/feed.py:load_data",
+				},
+				wantAbsent: []string{"--table"},
+			},
+		}
+
+		for _, tc := range argMatrix {
+			tc := tc
+			t.Run("ArgMatrix/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				args := synthesizeArgs("sales", "urn:sc:product:sales:v1", "sales_bronze", tc.port)
+				for _, expected := range tc.wantContain {
+					assert.Contains(t, args, expected, "synthesized args should contain %q", expected)
+				}
+				for _, forbidden := range tc.wantAbsent {
+					assert.NotContains(t, args, forbidden, "synthesized args should not contain %q", forbidden)
+				}
+			})
+		}
+	})
 }
 
 func TestModules_HubAuditSink(t *testing.T) {
