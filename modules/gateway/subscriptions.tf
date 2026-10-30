@@ -54,7 +54,7 @@ resource "google_pubsub_subscription" "raw_push" {
     push_endpoint = "${google_cloud_run_v2_service.gateway.uri}${var.pubsub_push_path}"
     oidc_token {
       service_account_email = google_service_account.push_invoker.email
-      audience              = var.gateway_audience
+      audience              = var.gateway_audience != "" ? trimspace(split(",", var.gateway_audience)[0]) : google_cloud_run_v2_service.gateway.uri
     }
   }
 

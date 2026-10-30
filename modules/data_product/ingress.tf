@@ -49,7 +49,7 @@ resource "google_pubsub_subscription" "input_push" {
     push_endpoint = can(each.value.contract.urn) ? "${module.gateway.service_url}/pubsub/push/${each.value.contract.urn}" : "${module.gateway.service_url}/pubsub/push/${each.key}"
     oidc_token {
       service_account_email = module.gateway.push_invoker_service_account_email
-      audience              = var.gateway_audience
+      audience              = var.gateway_audience != "" ? trimspace(split(",", var.gateway_audience)[0]) : module.gateway.service_url
     }
   }
 
