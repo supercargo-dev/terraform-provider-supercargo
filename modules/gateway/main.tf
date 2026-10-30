@@ -35,6 +35,7 @@ locals {
 }
 
 resource "google_service_account" "gateway" {
+  count        = var.create_service_account ? 1 : 0
   account_id   = local.service_account_id
   display_name = "Gateway Service Account for ${var.product_id}"
   project      = var.project_id
@@ -54,6 +55,7 @@ resource "google_cloud_run_v2_service" "gateway" {
 
   depends_on = [
     time_sleep.wait_for_gateway_apis,
+    google_service_account.gateway,
     google_project_iam_member.gateway_logging,
     google_project_iam_member.gateway_monitoring,
     google_pubsub_topic_iam_member.gateway_publisher_clean,
@@ -61,7 +63,7 @@ resource "google_cloud_run_v2_service" "gateway" {
   ]
 
   template {
-    service_account = google_service_account.gateway.email
+    service_account = local.service_account_email
     containers {
       image = var.image
       env {
@@ -82,7 +84,7 @@ resource "google_cloud_run_v2_service" "gateway" {
       }
       env {
         name  = "VAULT_ADDRESS"
-        value = var.kms_address
+        value = var.vault_address != "" ? var.vault_address : var.kms_address
       }
       env {
         name  = "CLEAN_TOPIC"
@@ -114,7 +116,7 @@ resource "google_cloud_run_v2_service" "gateway" {
       }
       env {
         name  = "GATEWAY_AUDIENCE"
-        value = var.gateway_audience
+        value = var.gateway_audience != "" ? var.gateway_audience : "supercargo-gateway-${var.product_id}-${var.environment}"
       }
       env {
         name  = "AUTH_ENFORCE"
@@ -201,18 +203,20 @@ resource "google_bigquery_table" "validated_data" {
 
 // IAM: Gateway needs to publish to Clean
 resource "google_pubsub_topic_iam_member" "gateway_publisher_clean" {
-  topic   = google_pubsub_topic.clean.name
-  role    = "roles/pubsub.publisher"
-  member  = "serviceAccount:${google_service_account.gateway.email}"
-  project = var.project_id
+  topic      = google_pubsub_topic.clean.name
+  role       = "roles/pubsub.publisher"
+  member     = "serviceAccount:${local.service_account_email}"
+  project    = var.project_id
+  depends_on = [google_service_account.gateway]
 }
 
 // IAM: Gateway needs to publish to DLQ (if we do explicit dead-lettering)
 resource "google_pubsub_topic_iam_member" "gateway_publisher_dlq" {
-  topic   = google_pubsub_topic.dlq.name
-  role    = "roles/pubsub.publisher"
-  member  = "serviceAccount:${google_service_account.gateway.email}"
-  project = var.project_id
+  topic      = google_pubsub_topic.dlq.name
+  role       = "roles/pubsub.publisher"
+  member     = "serviceAccount:${local.service_account_email}"
+  project    = var.project_id
+  depends_on = [google_service_account.gateway]
 }
 
 locals {
@@ -231,19 +235,22 @@ resource "google_cloud_run_v2_service_iam_member" "authorized_invokers" {
 
 
 resource "google_project_iam_member" "gateway_logging" {
-  project = var.project_id
-  role    = "roles/logging.logWriter"
-  member  = "serviceAccount:${google_service_account.gateway.email}"
+  project    = var.project_id
+  role       = "roles/logging.logWriter"
+  member     = "serviceAccount:${local.service_account_email}"
+  depends_on = [google_service_account.gateway]
 }
 
 resource "google_project_iam_member" "gateway_monitoring" {
-  project = var.project_id
-  role    = "roles/monitoring.metricWriter"
-  member  = "serviceAccount:${google_service_account.gateway.email}"
+  project    = var.project_id
+  role       = "roles/monitoring.metricWriter"
+  member     = "serviceAccount:${local.service_account_email}"
+  depends_on = [google_service_account.gateway]
 }
 
 resource "google_service_account_iam_member" "gateway_token_creator" {
-  service_account_id = google_service_account.gateway.name
+  service_account_id = "projects/${var.project_id}/serviceAccounts/${local.service_account_email}"
   role               = "roles/iam.serviceAccountOpenIdTokenCreator"
-  member             = "serviceAccount:${google_service_account.gateway.email}"
+  member             = "serviceAccount:${local.service_account_email}"
+  depends_on         = [google_service_account.gateway]
 }

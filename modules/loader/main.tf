@@ -29,6 +29,10 @@ resource "google_cloud_run_v2_service" "loader" {
         name  = "DLQ_TOPIC"
         value = var.dlq_topic_id
       }
+      env {
+        name  = "ALLOWED_GCS_BUCKETS"
+        value = var.allowed_gcs_buckets != "" ? var.allowed_gcs_buckets : "${var.project_id}-dropzone"
+      }
       resources {
         limits = {
           memory = "512Mi"

@@ -37,6 +37,7 @@ module "vault" {
 | :--- | :--- | :--- | :--- | :--- |
 | `auth_enforce` | `bool` | `true` | no | Whether to enforce OIDC authentication (Shadow Mode if false) |
 | `authorized_invokers` | `list(string)` | `[]` | no | List of IAM members authorized to invoke the vault directly |
+| `authorized_tokenizer_sa` | `string` | `""` | no | Authorized tokenizer service account email |
 | `crypto_key_name` | `string` | `"supercargo-vault-master-key"` | no | The name of the Cloud KMS CryptoKey for the Vault master key. Defaults to 'supercargo-vault-master-key'. |
 | `custom_audiences` | `list(string)` | `[]` | no | List of custom audiences to accept for OIDC |
 | `force_deploy_trigger` | `string` | `"static"` | no | A value that, when changed, triggers a new Cloud Run revision (e.g. git SHA or image digest). Use 'latest' or a fixed value for idempotency. |
@@ -54,6 +55,8 @@ module "vault" {
 | `project_number` | `string` | *required* | no | The GCP Project Number |
 | `region` | `string` | `"europe-west1"` | no | The GCP region |
 | `service_name` | `string` | `"vault"` | no | The name of the Cloud Run service |
+| `telemetry_identity_salt` | `string` | `"supercargo-default-salt"` | no | Identity salt for vault operational telemetry hashing |
+| `telemetry_topic_id` | `string` | `"supercargo-platform-telemetry"` | no | Target Pub/Sub topic ID for vault operational telemetry |
 
 ## Module Outputs
 

@@ -38,6 +38,7 @@ module "loader" {
 
 | Variable | Type | Default | Sensitive | Description |
 | :--- | :--- | :--- | :--- | :--- |
+| `allowed_gcs_buckets` | `string` | `""` | no | Comma-separated list of allowed GCS bucket names for ingestion |
 | `bucket_name` | `string` | *required* | no | Source GCS Bucket Name |
 | `dlq_topic_id` | `string` | *required* | no | Pub/Sub Topic ID for Dead Letter Queue |
 | `domain_name` | `string` | *required* | no | Data Domain Name (e.g. finance, marketing) |

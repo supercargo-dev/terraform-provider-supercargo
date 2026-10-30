@@ -34,6 +34,14 @@ resource "google_project_iam_member" "hub_datalineage_producer" {
   depends_on = [google_project_service.hub_apis]
 }
 
+// Grant Hub access to view lineage
+resource "google_project_iam_member" "hub_datalineage_viewer" {
+  project    = var.project_id
+  role       = "roles/datalineage.viewer"
+  member     = "serviceAccount:${google_service_account.hub_runtime.email}"
+  depends_on = [google_project_service.hub_apis]
+}
+
 // Grant Hub access to manage Dataplex Catalog and Data Products
 resource "google_project_iam_member" "hub_dataplex_catalog_admin" {
   project    = var.project_id
