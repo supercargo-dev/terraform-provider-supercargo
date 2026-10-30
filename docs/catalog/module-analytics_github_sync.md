@@ -39,6 +39,8 @@ module "analytics_github_sync" {
 | `dataset` | `string` | `"supercargo_github"` | no | Target BigQuery dataset name. |
 | `deletion_protection` | `bool` | `false` | no | Whether to protect the Cloud Run Job from deletion. |
 | `github_token_secret_id` | `string` | *required* | no | Secret Manager secret ID containing the GitHub personal access token. |
+| `hub_audience` | `string` | `""` | no | Supercargo Hub OIDC audience for authentication. |
+| `hub_url` | `string` | `""` | no | Supercargo Hub service URL for runner asset health reporting. |
 | `job_name` | `string` | `"analytics-github-sync"` | no | Name of the Cloud Run v2 Job. |
 | `max_retries` | `number` | `1` | no | Number of retries for failed tasks. |
 | `memory_limit` | `string` | `"1Gi"` | no | Memory limit for the Cloud Run container. |

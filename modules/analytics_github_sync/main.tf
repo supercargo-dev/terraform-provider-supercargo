@@ -45,6 +45,14 @@ resource "google_cloud_run_v2_job" "sync_job" {
           value = var.vault_audience
         }
         env {
+          name  = "SUPERCARGO_HUB_URL"
+          value = var.hub_url
+        }
+        env {
+          name  = "SUPERCARGO_HUB_AUDIENCE"
+          value = var.hub_audience
+        }
+        env {
           name  = "GOOGLE_CLOUD_PROJECT"
           value = var.project_id
         }
@@ -54,6 +62,15 @@ resource "google_cloud_run_v2_job" "sync_job" {
         }
         env {
           name = "GITHUB_TOKEN"
+          value_source {
+            secret_key_ref {
+              secret  = var.github_token_secret_id
+              version = "latest"
+            }
+          }
+        }
+        env {
+          name = "SUPERCARGO_CREDENTIALS_SECRET"
           value_source {
             secret_key_ref {
               secret  = var.github_token_secret_id

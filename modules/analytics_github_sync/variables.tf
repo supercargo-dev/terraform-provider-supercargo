@@ -49,6 +49,18 @@ variable "vault_audience" {
   default     = ""
 }
 
+variable "hub_url" {
+  description = "Supercargo Hub service URL for runner asset health reporting."
+  type        = string
+  default     = ""
+}
+
+variable "hub_audience" {
+  description = "Supercargo Hub OIDC audience for authentication."
+  type        = string
+  default     = ""
+}
+
 variable "github_token_secret_id" {
   description = "Secret Manager secret ID containing the GitHub personal access token."
   type        = string
