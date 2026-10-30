@@ -233,7 +233,7 @@ variable "dlt_runner_image" {
 }
 
 variable "dlt_deletion_protection" {
-  description = "Whether to protect DLT BigQuery tables from accidental deletion"
+  description = "Whether to protect DLT Cloud Run v2 Jobs from accidental deletion"
   type        = bool
   default     = false
 }

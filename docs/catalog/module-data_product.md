@@ -87,7 +87,7 @@ gcloud run jobs execute <dlt-job-name> \
 | `dlq_runbook_url` | `string` | `"https://docs.supercargo.dev/operations/runbooks/dlq-remediation"` | no | Runbook URL for DLQ incident remediation |
 | `dlq_unacked_message_age_seconds` | `number` | `300` | no | Threshold age (in seconds) of oldest unacknowledged message in DLQ to trigger alert |
 | `dlt_cpu` | `string` | `"1"` | no | The CPU allocation for DLT Cloud Run jobs |
-| `dlt_deletion_protection` | `bool` | `false` | no | Whether to protect DLT BigQuery tables from accidental deletion |
+| `dlt_deletion_protection` | `bool` | `false` | no | Whether to protect DLT Cloud Run v2 Jobs from accidental deletion |
 | `dlt_max_retries` | `number` | `3` | no | The maximum number of retry attempts for failed DLT Cloud Run jobs |
 | `dlt_memory` | `string` | `"1Gi"` | no | The memory limit for DLT Cloud Run jobs |
 | `dlt_runner_image` | `string` | `"ghcr.io/supercargo-dev/supercargo-dlt-runner:latest"` | no | The container image for DLT pipeline runners |

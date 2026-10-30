@@ -99,7 +99,7 @@ gcloud run jobs execute <job-name> \
 | `name_suffix` | Optional deterministic suffix appended to resource names | `string` | `""` | no |
 | `service_account_id` | Optional custom service account ID for the Gateway | `string` | `""` | no |
 | `dlt_runner_image` | The container image for DLT pipeline runners | `string` | `"ghcr.io/supercargo-dev/supercargo-dlt-runner:latest"` | no |
-| `dlt_deletion_protection` | Whether to protect DLT BigQuery tables from accidental deletion | `bool` | `false` | no |
+| `dlt_deletion_protection` | Whether to protect DLT Cloud Run v2 Jobs from accidental deletion | `bool` | `false` | no |
 | `dlt_time_zone` | Time zone for Cloud Scheduler cron jobs | `string` | `"UTC"` | no |
 | `dlt_cpu` | The CPU allocation for DLT Cloud Run jobs | `string` | `"1"` | no |
 | `dlt_memory` | The memory limit for DLT Cloud Run jobs | `string` | `"1Gi"` | no |

@@ -637,6 +637,7 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 		assert.Contains(t, jobBlock, "compact(flatten([", "job args must use compact(flatten([...])) (AC-3)")
 		assert.Contains(t, jobBlock, `"--source"`, "job args must include --source")
 		assert.Contains(t, jobBlock, `"--contract-urn"`, "job args must include --contract-urn")
+		assert.Contains(t, jobBlock, `try(each.value.contract_urn, try(each.value.contract.urn, try(each.value.contract, each.key)))`, "job args must resolve contract URN supporting nested contract.urn, direct contract string, or port key fallback")
 		assert.Contains(t, jobBlock, `"--product-urn"`, "job args must include --product-urn")
 		assert.Contains(t, jobBlock, `data.supercargo_data_product.this.urn`, "job args must reference data.supercargo_data_product.this.urn for --product-urn (AC-3)")
 		assert.Contains(t, jobBlock, `"--destination"`, "job args must include --destination")
@@ -644,6 +645,7 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 		assert.Contains(t, jobBlock, `"--dataset"`, "job args must include --dataset")
 		assert.Contains(t, jobBlock, `local.dlt_bigquery_dataset`, "job args must reference local.dlt_bigquery_dataset")
 		assert.Contains(t, jobBlock, `"--pipeline-name"`, "job args must include --pipeline-name")
+		assert.Contains(t, jobBlock, `"dlt_${replace(local.product_id, "-", "_")}_${replace(each.key, "-", "_")}${var.name_suffix != "" ? "_${replace(var.name_suffix, "-", "_")}" : ""}"`, "job args pipeline-name must format with underscores and optional name_suffix")
 
 		// Table fallback for sql_database and filesystem
 		assert.Contains(t, jobBlock, `["--table", try(each.value.table, each.key)]`, "job args must append --table with fallback to each.key for sql_database/filesystem (AC-3)")
@@ -693,6 +695,7 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 			source           string
 			table            string
 			contractUrn      string
+			contract         any
 			cursorField      string
 			primaryKey       string
 			writeDisposition string
@@ -700,18 +703,45 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 			entrypoint       string
 		}
 
-		synthesizeArgs := func(productID, productURN, dataset string, p dltPort) []string {
+		resolveContractURN := func(p dltPort) string {
+			if p.contractUrn != "" {
+				return p.contractUrn
+			}
+			switch c := p.contract.(type) {
+			case map[string]string:
+				if u, ok := c["urn"]; ok && u != "" {
+					return u
+				}
+			case map[string]any:
+				if u, ok := c["urn"].(string); ok && u != "" {
+					return u
+				}
+			case string:
+				if c != "" {
+					return c
+				}
+			}
+			return p.key
+		}
+
+		formatPipelineName := func(productID, portKey, nameSuffix string) string {
+			normProduct := strings.ReplaceAll(productID, "-", "_")
+			normPort := strings.ReplaceAll(portKey, "-", "_")
+			suffix := ""
+			if nameSuffix != "" {
+				suffix = "_" + strings.ReplaceAll(nameSuffix, "-", "_")
+			}
+			return fmt.Sprintf("dlt_%s_%s%s", normProduct, normPort, suffix)
+		}
+
+		synthesizeArgs := func(productID, productURN, dataset, nameSuffix string, p dltPort) []string {
 			var args []string
 			args = append(args, "--source", p.source)
-			contractUrn := p.contractUrn
-			if contractUrn == "" {
-				contractUrn = p.key
-			}
-			args = append(args, "--contract-urn", contractUrn)
+			args = append(args, "--contract-urn", resolveContractURN(p))
 			args = append(args, "--product-urn", productURN)
 			args = append(args, "--destination", "bigquery")
 			args = append(args, "--dataset", dataset)
-			args = append(args, "--pipeline-name", fmt.Sprintf("dlt-%s-%s", productID, strings.ReplaceAll(p.key, "_", "-")))
+			args = append(args, "--pipeline-name", formatPipelineName(productID, p.key, nameSuffix))
 
 			isSQLOrFS := strings.Contains(p.source, "sql_database") || strings.Contains(p.source, "filesystem")
 			if isSQLOrFS {
@@ -741,6 +771,7 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 
 		argMatrix := []struct {
 			name        string
+			nameSuffix  string
 			port        dltPort
 			wantContain []string
 			wantAbsent  []string
@@ -779,9 +810,81 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 				wantContain: []string{
 					"--source", "dlt://sql_database",
 					"--table", "customers_sync",
-					"--pipeline-name", "dlt-sales-customers-sync",
+					"--pipeline-name", "dlt_sales_customers_sync",
 				},
 				wantAbsent: []string{"--cursor-field", "--primary-key", "--write-disposition", "--cold-start-window", "--entrypoint"},
+			},
+			{
+				name: "nested contract map { urn: ... } resolves contract URN correctly",
+				port: dltPort{
+					key:    "nested_contract_port",
+					source: "dlt://sql_database",
+					contract: map[string]string{
+						"urn": "urn:sc:contract:nested_orders:v1",
+					},
+				},
+				wantContain: []string{
+					"--source", "dlt://sql_database",
+					"--contract-urn", "urn:sc:contract:nested_orders:v1",
+					"--pipeline-name", "dlt_sales_nested_contract_port",
+				},
+				wantAbsent: []string{"--entrypoint"},
+			},
+			{
+				name: "direct contract string resolves contract URN correctly",
+				port: dltPort{
+					key:      "direct_contract_port",
+					source:   "dlt://rest_api",
+					contract: "urn:sc:contract:direct_orders:v1",
+				},
+				wantContain: []string{
+					"--source", "dlt://rest_api",
+					"--contract-urn", "urn:sc:contract:direct_orders:v1",
+					"--pipeline-name", "dlt_sales_direct_contract_port",
+				},
+				wantAbsent: []string{"--entrypoint"},
+			},
+			{
+				name: "contract_urn takes precedence over contract map",
+				port: dltPort{
+					key:         "override_port",
+					source:      "dlt://rest_api",
+					contractUrn: "urn:sc:contract:override:v1",
+					contract: map[string]string{
+						"urn": "urn:sc:contract:ignored:v1",
+					},
+				},
+				wantContain: []string{
+					"--source", "dlt://rest_api",
+					"--contract-urn", "urn:sc:contract:override:v1",
+				},
+				wantAbsent: []string{"urn:sc:contract:ignored:v1"},
+			},
+			{
+				name: "omitting contract and contract_urn falls back to port key",
+				port: dltPort{
+					key:    "fallback_port_key",
+					source: "dlt://rest_api",
+				},
+				wantContain: []string{
+					"--source", "dlt://rest_api",
+					"--contract-urn", "fallback_port_key",
+				},
+			},
+			{
+				name:       "multi-tenant pipeline-name appends normalized name_suffix",
+				nameSuffix: "dev-feature-1",
+				port: dltPort{
+					key:         "tenant_orders",
+					source:      "dlt://rest_api",
+					contractUrn: "urn:sc:contract:tenant_orders:v1",
+				},
+				wantContain: []string{
+					"--source", "dlt://rest_api",
+					"--contract-urn", "urn:sc:contract:tenant_orders:v1",
+					"--pipeline-name", "dlt_sales_tenant_orders_dev_feature_1",
+				},
+				wantAbsent: []string{"--entrypoint"},
 			},
 			{
 				name: "filesystem with explicit table",
@@ -832,7 +935,7 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 			tc := tc
 			t.Run("ArgMatrix/"+tc.name, func(t *testing.T) {
 				t.Parallel()
-				args := synthesizeArgs("sales", "urn:sc:product:sales:v1", "sales_bronze", tc.port)
+				args := synthesizeArgs("sales", "urn:sc:product:sales:v1", "sales_bronze", tc.nameSuffix, tc.port)
 				for _, expected := range tc.wantContain {
 					assert.Contains(t, args, expected, "synthesized args should contain %q", expected)
 				}
@@ -910,11 +1013,57 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 		// 6. Assert google_secret_manager_secret_iam_member.dlt_runner_secret_accessor (AC-6)
 		secAccessorBlock := extractHCLBlock(dltContent, `resource "google_secret_manager_secret_iam_member" "dlt_runner_secret_accessor"`)
 		require.NotEmpty(t, secAccessorBlock, "dlt_ports.tf must define resource google_secret_manager_secret_iam_member.dlt_runner_secret_accessor")
-		assert.Contains(t, secAccessorBlock, "credentials_secret", "secret accessor must filter for ports with credentials_secret")
+		assert.Contains(t, secAccessorBlock, "toset([", "secret accessor must deduplicate secrets using toset to prevent GCP ETag 412 race conditions")
+		assert.Contains(t, secAccessorBlock, "v.credentials_secret", "secret accessor must iterate over credentials_secret")
 		assert.Regexp(t, regexp.MustCompile(`project\s*=\s*var\.project_id`), secAccessorBlock)
 		assert.Regexp(t, regexp.MustCompile(`role\s*=\s*"roles/secretmanager\.secretAccessor"`), secAccessorBlock)
 		assert.Regexp(t, regexp.MustCompile(`member\s*=\s*"serviceAccount:\$\{local\.dlt_runner_sa_email\}"`), secAccessorBlock)
 		assert.Contains(t, secAccessorBlock, "google_service_account.dlt_runner", "secret accessor depends_on must include google_service_account.dlt_runner")
+
+		// Canonical table-driven verification of Secret Manager IAM deduplication logic across multi-port sharing
+		dedupSecrets := func(portSecrets []string) []string {
+			seen := make(map[string]struct{})
+			var res []string
+			for _, s := range portSecrets {
+				if s != "" {
+					if _, exists := seen[s]; !exists {
+						seen[s] = struct{}{}
+						res = append(res, s)
+					}
+				}
+			}
+			return res
+		}
+
+		dedupTests := []struct {
+			name        string
+			portSecrets []string
+			wantDedup   []string
+		}{
+			{
+				name:        "multiple ports sharing the exact same secret are deduplicated to single IAM binding",
+				portSecrets: []string{"shared-postgres-secret", "shared-postgres-secret", "shared-postgres-secret"},
+				wantDedup:   []string{"shared-postgres-secret"},
+			},
+			{
+				name:        "multiple ports with distinct secrets produce distinct bindings",
+				portSecrets: []string{"postgres-secret", "salesforce-oauth", "stripe-api-key"},
+				wantDedup:   []string{"postgres-secret", "salesforce-oauth", "stripe-api-key"},
+			},
+			{
+				name:        "ports with empty credentials_secret are excluded",
+				portSecrets: []string{"", "postgres-secret", "", "snowflake-creds"},
+				wantDedup:   []string{"postgres-secret", "snowflake-creds"},
+			},
+		}
+
+		for _, tc := range dedupTests {
+			tc := tc
+			t.Run("SecretDedup/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				assert.Equal(t, tc.wantDedup, dedupSecrets(tc.portSecrets))
+			})
+		}
 
 		// Table-driven matrix testing of schedule, timezone, and secret_id resolution logic
 		resolveSchedule := func(portSched string) string {

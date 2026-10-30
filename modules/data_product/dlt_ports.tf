@@ -47,7 +47,7 @@ resource "google_cloud_run_v2_job" "dlt_jobs" {
           "--source",
           each.value.source,
           "--contract-urn",
-          try(each.value.contract_urn, try(each.value.contract, each.key)),
+          try(each.value.contract_urn, try(each.value.contract.urn, try(each.value.contract, each.key))),
           "--product-urn",
           data.supercargo_data_product.this.urn,
           "--destination",
@@ -55,7 +55,7 @@ resource "google_cloud_run_v2_job" "dlt_jobs" {
           "--dataset",
           local.dlt_bigquery_dataset,
           "--pipeline-name",
-          "dlt-${local.product_id}-${replace(each.key, "_", "-")}",
+          "dlt_${replace(local.product_id, "-", "_")}_${replace(each.key, "-", "_")}${var.name_suffix != "" ? "_${replace(var.name_suffix, "-", "_")}" : ""}",
           can(regex("(sql_database|filesystem)", each.value.source)) ? ["--table", try(each.value.table, each.key)] : [],
           try(each.value.cursor_field, "") != "" ? ["--cursor-field", each.value.cursor_field] : [],
           try(each.value.primary_key, "") != "" ? ["--primary-key", each.value.primary_key] : [],
@@ -213,12 +213,12 @@ resource "google_project_iam_member" "dlt_runner_bq_user" {
 
 # AC-6: Secret Manager Secret Accessor IAM Binding for DLT Runner SA
 resource "google_secret_manager_secret_iam_member" "dlt_runner_secret_accessor" {
-  for_each = {
-    for k, v in local.dlt_input_ports : k => v
+  for_each = toset([
+    for k, v in local.dlt_input_ports : v.credentials_secret
     if try(v.credentials_secret, "") != ""
-  }
+  ])
   project   = var.project_id
-  secret_id = startswith(each.value.credentials_secret, "projects/") ? element(split("/", each.value.credentials_secret), length(split("/", each.value.credentials_secret)) - 1) : each.value.credentials_secret
+  secret_id = startswith(each.value, "projects/") ? element(split("/", each.value), length(split("/", each.value)) - 1) : each.value
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${local.dlt_runner_sa_email}"
 
