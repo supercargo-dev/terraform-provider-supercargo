@@ -232,5 +232,72 @@ variable "max_instances" {
   default     = 3
 }
 
+variable "dlt_runner_image" {
+  description = "The container image for DLT pipeline runners"
+  type        = string
+  default     = "ghcr.io/supercargo-dev/supercargo-dlt-runner:latest"
+}
+
+variable "dlt_deletion_protection" {
+  description = "Whether to protect DLT Cloud Run v2 Jobs from accidental deletion"
+  type        = bool
+  default     = false
+}
+
+variable "dlt_time_zone" {
+  description = "Time zone for Cloud Scheduler cron jobs (e.g. UTC, America/New_York)"
+  type        = string
+  default     = "UTC"
+}
+
+variable "dlt_cpu" {
+  description = "The CPU allocation for DLT Cloud Run jobs"
+  type        = string
+  default     = "1"
+}
+
+variable "dlt_memory" {
+  description = "The memory limit for DLT Cloud Run jobs"
+  type        = string
+  default     = "1Gi"
+}
+
+variable "dlt_timeout" {
+  description = "The maximum execution timeout for DLT Cloud Run jobs"
+  type        = string
+  default     = "3600s"
+}
+
+variable "dlt_max_retries" {
+  description = "The maximum number of retry attempts for failed DLT Cloud Run jobs"
+  type        = number
+  default     = 3
+}
+
+variable "dlt_runner_service_account_id" {
+  description = "Optional custom service account ID for DLT runner Cloud Run jobs. If unset, derived deterministically."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.dlt_runner_service_account_id == "" || (length(var.dlt_runner_service_account_id) >= 6 && length(var.dlt_runner_service_account_id) <= 30 && can(regex("^[a-z]([-a-z0-9]*[a-z0-9])$", var.dlt_runner_service_account_id)))
+    error_message = "The dlt_runner_service_account_id must be between 6 and 30 characters and conform to GCP service account naming conventions."
+  }
+}
+
+variable "dlt_scheduler_service_account_id" {
+  description = "Optional custom service account ID for DLT Cloud Scheduler jobs. If unset, derived deterministically."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.dlt_scheduler_service_account_id == "" || (length(var.dlt_scheduler_service_account_id) >= 6 && length(var.dlt_scheduler_service_account_id) <= 30 && can(regex("^[a-z]([-a-z0-9]*[a-z0-9])$", var.dlt_scheduler_service_account_id)))
+    error_message = "The dlt_scheduler_service_account_id must be between 6 and 30 characters and conform to GCP service account naming conventions."
+  }
+}
+
+variable "dlt_scheduler_attempt_deadline" {
+  description = "The attempt deadline for Cloud Scheduler jobs triggering DLT Cloud Run jobs"
+  type        = string
+  default     = "320s"
+}
 
 

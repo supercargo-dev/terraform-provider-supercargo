@@ -83,5 +83,30 @@ output "dlq_alert_policy_age_id" {
   value       = module.gateway.dlq_alert_policy_age_id
 }
 
+output "dlt_cloud_run_job_names" {
+  description = "Map of DLT input port names to their Cloud Run v2 Job names"
+  value       = { for k, v in google_cloud_run_v2_job.dlt_jobs : k => v.name }
+}
+
+output "dlt_cloud_scheduler_job_ids" {
+  description = "Map of DLT input port names to their Cloud Scheduler job IDs"
+  value       = { for k, v in google_cloud_scheduler_job.dlt_schedules : k => v.id }
+}
+
+output "dlt_backfill_commands" {
+  description = "Ready-to-run gcloud commands for ad-hoc DLT historical backfills"
+  value       = { for k, v in local.dlt_input_ports : k => "gcloud run jobs execute ${google_cloud_run_v2_job.dlt_jobs[k].name} --region ${var.region} --project ${var.project_id} --args=\"--since=2026-01-01T00:00:00Z\"" }
+}
+
+output "dlt_runner_service_account_email" {
+  description = "The email of the DLT Runner Service Account (null if no DLT ports declared)"
+  value       = length(local.dlt_input_ports) > 0 ? local.dlt_runner_sa_email : null
+}
+
+output "dlt_scheduler_service_account_email" {
+  description = "The email of the DLT Cloud Scheduler Service Account (null if no DLT ports declared)"
+  value       = length(local.dlt_input_ports) > 0 ? local.dlt_scheduler_sa_email : null
+}
+
 
 

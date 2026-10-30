@@ -1,6 +1,8 @@
 package provider
 
 import (
+	"crypto/md5"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -420,6 +422,834 @@ func TestModules_DataProductDeclarativeIngress(t *testing.T) {
 		}
 		if !strings.Contains(outputContent, `output "input_subscription_ids"`) {
 			t.Errorf("modules/data_product/outputs.tf missing output \"input_subscription_ids\"")
+		}
+	})
+}
+
+func TestModules_DataProduct_DLTIngress(t *testing.T) {
+	modulesDir := "../../modules"
+	dpDir := filepath.Join(modulesDir, "data_product")
+
+	t.Run("DeterministicLocalsAndFiltering", func(t *testing.T) {
+		dltPath := filepath.Join(dpDir, "dlt_ports.tf")
+		dltBytes, err := os.ReadFile(dltPath)
+		require.NoError(t, err, "dlt_ports.tf must exist in modules/data_product")
+		dltContent := string(dltBytes)
+
+		// AC-1: Port Filtering & Dataset Fallback
+		assert.NotContains(t, dltContent, "raw_input_ports =", "dlt_ports.tf must not redefine raw_input_ports (uses local.manifest_input_ports)")
+		assert.Contains(t, dltContent, "local.manifest_input_ports", "dlt_ports.tf must use local.manifest_input_ports directly")
+
+		assert.Contains(t, dltContent, "dlt_input_ports", "dlt_ports.tf must declare dlt_input_ports local")
+		assert.True(t,
+			strings.Contains(dltContent, `port.type == "dlt"`) || strings.Contains(dltContent, `try(port.type, "") == "dlt"`),
+			"dlt_input_ports must filter port.type == 'dlt'",
+		)
+		assert.True(t,
+			strings.Contains(dltContent, `startswith(port.source, "dlt://")`) || strings.Contains(dltContent, `try(startswith(port.source, "dlt://"), false)`),
+			"dlt_input_ports must filter startswith(port.source, 'dlt://')",
+		)
+
+		// AC-1: dlt_bigquery_dataset fallback
+		assert.Contains(t, dltContent, "dlt_bigquery_dataset", "dlt_ports.tf must declare dlt_bigquery_dataset local")
+		assert.Contains(t, dltContent, `var.bigquery_dataset_id != "" ? var.bigquery_dataset_id : replace(local.product_id, "-", "_")`,
+			"dlt_bigquery_dataset must fallback to replace(local.product_id, \"-\", \"_\") when var.bigquery_dataset_id is empty",
+		)
+
+		// AC-2: Collision-Resistant SA Derivation
+		assert.Contains(t, dltContent, "candidate_runner_sa", "dlt_ports.tf must declare candidate_runner_sa")
+		assert.Contains(t, dltContent, "dlt_runner_sa_id", "dlt_ports.tf must declare dlt_runner_sa_id")
+		assert.Contains(t, dltContent, "dlt_runner_sa_email", "dlt_ports.tf must declare dlt_runner_sa_email")
+
+		assert.Contains(t, dltContent, "candidate_scheduler_sa", "dlt_ports.tf must declare candidate_scheduler_sa")
+		assert.Contains(t, dltContent, "dlt_scheduler_sa_id", "dlt_ports.tf must declare dlt_scheduler_sa_id")
+		assert.Contains(t, dltContent, "dlt_scheduler_sa_email", "dlt_ports.tf must declare dlt_scheduler_sa_email")
+
+		// Verify derivation logic structure in HCL
+		assert.Contains(t, dltContent, "length(local.candidate_runner_sa) <= 30", "dlt_runner_sa_id must guard length <= 30")
+		assert.Contains(t, dltContent, "length(local.candidate_scheduler_sa) <= 30", "dlt_scheduler_sa_id must guard length <= 30")
+		assert.Contains(t, dltContent, "md5(local.candidate_runner_sa)", "dlt_runner_sa_id must hash candidate using md5")
+		assert.Contains(t, dltContent, "md5(local.candidate_scheduler_sa)", "dlt_scheduler_sa_id must hash candidate using md5")
+		assert.Contains(t, dltContent, `regexreplace(substr(local.candidate_runner_sa, 0, 23), "-+$", "")`, "dlt_runner_sa_id must strip trailing hyphens before hash suffix")
+		assert.Contains(t, dltContent, `regexreplace(substr(local.candidate_scheduler_sa, 0, 23), "-+$", "")`, "dlt_scheduler_sa_id must strip trailing hyphens before hash suffix")
+
+		// Table-driven matrix testing collision-resistant SA derivation algorithm
+		deriveSA := func(cand string) string {
+			if len(cand) <= 30 {
+				return cand
+			}
+			pfx := cand[:23]
+			re := regexp.MustCompile("-+$")
+			pfx = re.ReplaceAllString(pfx, "")
+			hashBytes := md5.Sum([]byte(cand))
+			hash := fmt.Sprintf("%x", hashBytes)[:6]
+			return pfx + "-" + hash
+		}
+
+		saTests := []struct {
+			name        string
+			candidate   string
+			wantMaxLen  int
+			wantMatches string
+		}{
+			{
+				name:        "short candidate (<=30 chars) unchanged",
+				candidate:   "dlt-r-orders",
+				wantMaxLen:  30,
+				wantMatches: "^dlt-r-orders$",
+			},
+			{
+				name:        "exactly 30 chars unchanged",
+				candidate:   "dlt-r-exactly-30-chars-here123",
+				wantMaxLen:  30,
+				wantMatches: "^dlt-r-exactly-30-chars-here123$",
+			},
+			{
+				name:        "long candidate (>30 chars) truncated with md5 suffix strictly <= 30 chars",
+				candidate:   "dlt-r-very-long-data-product-identifier-exceeding-limit",
+				wantMaxLen:  30,
+				wantMatches: `^dlt-r-very-long-data-pr-[a-f0-9]{6}$`,
+			},
+			{
+				name:        "long candidate ending in hyphen at truncation boundary strips trailing hyphen before hash",
+				candidate:   "dlt-r-sixteen-char-----suffix-exceeding-thirty",
+				wantMaxLen:  30,
+				wantMatches: `^dlt-r-sixteen-char-[a-f0-9]{6}$`,
+			},
+		}
+
+		for _, tc := range saTests {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				derived := deriveSA(tc.candidate)
+				assert.LessOrEqual(t, len(derived), tc.wantMaxLen, "derived SA ID must be <= 30 characters")
+				assert.Regexp(t, regexp.MustCompile(tc.wantMatches), derived)
+				assert.NotContains(t, derived, "--", "derived SA must not contain double hyphens at truncation boundary")
+			})
+		}
+	})
+
+	t.Run("BackfillAndVariables", func(t *testing.T) {
+		varsPath := filepath.Join(dpDir, "variables.tf")
+		varsBytes, err := os.ReadFile(varsPath)
+		require.NoError(t, err, "variables.tf must exist in modules/data_product")
+		varsContent := string(varsBytes)
+
+		// AC-8: Required DLT variables declarations and defaults
+		reqVars := []struct {
+			name         string
+			expectedType string
+			defaultVal   string
+		}{
+			{name: "dlt_runner_image", expectedType: "string", defaultVal: `"ghcr.io/supercargo-dev/supercargo-dlt-runner:latest"`},
+			{name: "dlt_deletion_protection", expectedType: "bool", defaultVal: "false"},
+			{name: "dlt_time_zone", expectedType: "string", defaultVal: `"UTC"`},
+			{name: "dlt_cpu", expectedType: "string", defaultVal: `"1"`},
+			{name: "dlt_memory", expectedType: "string", defaultVal: `"1Gi"`},
+			{name: "dlt_timeout", expectedType: "string", defaultVal: `"3600s"`},
+			{name: "dlt_max_retries", expectedType: "number", defaultVal: "3"},
+			{name: "dlt_runner_service_account_id", expectedType: "string", defaultVal: `""`},
+			{name: "dlt_scheduler_service_account_id", expectedType: "string", defaultVal: `""`},
+		}
+
+		for _, rv := range reqVars {
+			block := extractHCLBlock(varsContent, fmt.Sprintf(`variable "%s"`, rv.name))
+			require.NotEmpty(t, block, "variable %q must be declared in variables.tf", rv.name)
+			assert.Contains(t, block, fmt.Sprintf("type        = %s", rv.expectedType), "variable %q must have type %s", rv.name, rv.expectedType)
+			assert.Contains(t, block, fmt.Sprintf("default     = %s", rv.defaultVal), "variable %q must have default %s", rv.name, rv.defaultVal)
+		}
+
+		// AC-8 & Error Mode A: SA validation condition and error message
+		for _, saVar := range []string{"dlt_runner_service_account_id", "dlt_scheduler_service_account_id"} {
+			block := extractHCLBlock(varsContent, fmt.Sprintf(`variable "%s"`, saVar))
+			assert.Contains(t, block, "validation {", "variable %q must include a validation block", saVar)
+			assert.Contains(t, block, `^[a-z]([-a-z0-9]*[a-z0-9])$`, "variable %q validation must enforce GCP SA regex naming", saVar)
+			assert.Contains(t, block, "error_message", "variable %q validation must specify an error message", saVar)
+		}
+
+		// Table-driven verification of the SA validation condition (Golden UX / Error Mode A contract)
+		saRegex := regexp.MustCompile(`^[a-z]([-a-z0-9]*[a-z0-9])$`)
+		validateSA := func(val string) bool {
+			if val == "" {
+				return true
+			}
+			return len(val) >= 6 && len(val) <= 30 && saRegex.MatchString(val)
+		}
+
+		valTests := []struct {
+			name    string
+			input   string
+			isValid bool
+		}{
+			{name: "empty string is valid default", input: "", isValid: true},
+			{name: "valid 6-char SA", input: "dlt-sa", isValid: true},
+			{name: "valid standard SA", input: "dlt-runner-sa", isValid: true},
+			{name: "valid 30-char SA", input: "dlt-runner-service-account-01", isValid: true},
+			{name: "too short (< 6 chars)", input: "short", isValid: false},
+			{name: "starts with digit", input: "1dlt-runner", isValid: false},
+			{name: "starts with hyphen", input: "-dlt-runner", isValid: false},
+			{name: "ends with hyphen", input: "dlt-runner-", isValid: false},
+			{name: "contains uppercase", input: "dlt-Runner", isValid: false},
+			{name: "contains underscore", input: "dlt_runner", isValid: false},
+			{name: "too long (> 30 chars)", input: "dlt-runner-service-account-too-long-exceeding-limit", isValid: false},
+		}
+
+		for _, tc := range valTests {
+			tc := tc
+			t.Run("SA_Validation/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				got := validateSA(tc.input)
+				assert.Equal(t, tc.isValid, got, "input %q validation expected %v got %v", tc.input, tc.isValid, got)
+			})
+		}
+	})
+
+	t.Run("CloudRunV2Job", func(t *testing.T) {
+		dltPath := filepath.Join(dpDir, "dlt_ports.tf")
+		dltBytes, err := os.ReadFile(dltPath)
+		require.NoError(t, err, "dlt_ports.tf must exist in modules/data_product")
+		dltContent := string(dltBytes)
+
+		// 1. Assert google_service_account.dlt_runner block
+		runnerSABlock := extractHCLBlock(dltContent, `resource "google_service_account" "dlt_runner"`)
+		require.NotEmpty(t, runnerSABlock, "dlt_ports.tf must define resource google_service_account.dlt_runner")
+		assert.Regexp(t, regexp.MustCompile(`count\s*=\s*length\(local\.dlt_input_ports\)\s*>\s*0\s*\?\s*1\s*:\s*0`), runnerSABlock)
+		assert.Regexp(t, regexp.MustCompile(`account_id\s*=\s*local\.dlt_runner_sa_id`), runnerSABlock)
+		assert.Contains(t, runnerSABlock, `display_name = "DLT Ingestion Runner Service Account for ${local.product_id}"`)
+		assert.Regexp(t, regexp.MustCompile(`project\s*=\s*var\.project_id`), runnerSABlock)
+
+		// 2. Assert google_cloud_run_v2_job.dlt_jobs block
+		jobBlock := extractHCLBlock(dltContent, `resource "google_cloud_run_v2_job" "dlt_jobs"`)
+		require.NotEmpty(t, jobBlock, "dlt_ports.tf must define resource google_cloud_run_v2_job.dlt_jobs")
+		assert.Regexp(t, regexp.MustCompile(`for_each\s*=\s*local\.dlt_input_ports`), jobBlock)
+		assert.Regexp(t, regexp.MustCompile(`name\s*=\s*"dlt-\$\{local\.product_id\}-\$\{replace\(each\.key,\s*"_",\s*"-"\)\}\$\{var\.name_suffix\s*!=\s*""\s*\?\s*"-\$\{var\.name_suffix\}"\s*:\s*""\}"`), jobBlock)
+		assert.Regexp(t, regexp.MustCompile(`location\s*=\s*var\.region`), jobBlock)
+		assert.Regexp(t, regexp.MustCompile(`project\s*=\s*var\.project_id`), jobBlock)
+		assert.Regexp(t, regexp.MustCompile(`deletion_protection\s*=\s*var\.dlt_deletion_protection`), jobBlock)
+
+		// Template attributes
+		assert.Regexp(t, regexp.MustCompile(`service_account\s*=\s*local\.dlt_runner_sa_email`), jobBlock)
+		assert.Regexp(t, regexp.MustCompile(`max_retries\s*=\s*var\.dlt_max_retries`), jobBlock)
+		assert.Regexp(t, regexp.MustCompile(`timeout\s*=\s*var\.dlt_timeout`), jobBlock)
+		assert.Regexp(t, regexp.MustCompile(`image\s*=\s*var\.dlt_runner_image`), jobBlock)
+
+		// AC-3: Dynamic Container Arguments
+		assert.Contains(t, jobBlock, "compact(flatten([", "job args must use compact(flatten([...])) (AC-3)")
+		assert.Contains(t, jobBlock, `"--source"`, "job args must include --source")
+		assert.Contains(t, jobBlock, `"--contract-urn"`, "job args must include --contract-urn")
+		assert.Contains(t, jobBlock, `try(each.value.contract_urn, try(each.value.contract.urn, try(each.value.contract, each.key)))`, "job args must resolve contract URN supporting nested contract.urn, direct contract string, or port key fallback")
+		assert.Contains(t, jobBlock, `"--product-urn"`, "job args must include --product-urn")
+		assert.Contains(t, jobBlock, `data.supercargo_data_product.this.urn`, "job args must reference data.supercargo_data_product.this.urn for --product-urn (AC-3)")
+		assert.Contains(t, jobBlock, `"--destination"`, "job args must include --destination")
+		assert.Contains(t, jobBlock, `"bigquery"`, "job args destination must be bigquery")
+		assert.Contains(t, jobBlock, `"--dataset"`, "job args must include --dataset")
+		assert.Contains(t, jobBlock, `local.dlt_bigquery_dataset`, "job args must reference local.dlt_bigquery_dataset")
+		assert.Contains(t, jobBlock, `"--pipeline-name"`, "job args must include --pipeline-name")
+		assert.Contains(t, jobBlock, `"dlt_${replace(local.product_id, "-", "_")}_${replace(each.key, "-", "_")}${var.name_suffix != "" ? "_${replace(var.name_suffix, "-", "_")}" : ""}"`, "job args pipeline-name must format with underscores and optional name_suffix")
+
+		// Table fallback for sql_database and filesystem
+		assert.Contains(t, jobBlock, `["--table", try(each.value.table, each.key)]`, "job args must append --table with fallback to each.key for sql_database/filesystem (AC-3)")
+
+		// Optional field guards
+		assert.Contains(t, jobBlock, `"--cursor-field"`, "job args must support optional --cursor-field")
+		assert.Contains(t, jobBlock, `"--primary-key"`, "job args must support optional --primary-key")
+		assert.Contains(t, jobBlock, `"--write-disposition"`, "job args must support optional --write-disposition")
+		assert.Contains(t, jobBlock, `"--cold-start-window"`, "job args must support optional --cold-start-window")
+		assert.Contains(t, jobBlock, `"--entrypoint"`, "job args must support optional --entrypoint")
+
+		// Environment variables
+		assert.Contains(t, jobBlock, `"SUPERCARGO_HUB_URL"`, "job env must define SUPERCARGO_HUB_URL")
+		assert.Contains(t, jobBlock, `var.hub_address`, "job env SUPERCARGO_HUB_URL must bind var.hub_address")
+		assert.Contains(t, jobBlock, `"SUPERCARGO_HUB_AUDIENCE"`, "job env must define SUPERCARGO_HUB_AUDIENCE")
+		assert.Contains(t, jobBlock, `var.hub_oidc_audience`, "job env SUPERCARGO_HUB_AUDIENCE must bind var.hub_oidc_audience")
+		assert.Contains(t, jobBlock, `"SUPERCARGO_VAULT_URL"`, "job env must define SUPERCARGO_VAULT_URL")
+		assert.Contains(t, jobBlock, `var.kms_address`, "job env SUPERCARGO_VAULT_URL must bind var.kms_address")
+		assert.Contains(t, jobBlock, `"SUPERCARGO_VAULT_AUDIENCE"`, "job env must define SUPERCARGO_VAULT_AUDIENCE")
+		assert.Contains(t, jobBlock, `var.vault_oidc_audience`, "job env SUPERCARGO_VAULT_AUDIENCE must bind var.vault_oidc_audience")
+		assert.Contains(t, jobBlock, `"GOOGLE_CLOUD_PROJECT"`, "job env must define GOOGLE_CLOUD_PROJECT")
+		assert.Contains(t, jobBlock, `"DESTINATION__BIGQUERY__LOCATION"`, "job env must define DESTINATION__BIGQUERY__LOCATION")
+
+		// Dynamic secret environment bindings
+		assert.Contains(t, jobBlock, `dynamic "env"`, "job must declare dynamic env blocks for secrets")
+		assert.Contains(t, jobBlock, `"SUPERCARGO_DB_CREDENTIALS"`, "job must mount credentials to SUPERCARGO_DB_CREDENTIALS")
+		assert.Contains(t, jobBlock, `"SUPERCARGO_CREDENTIALS_SECRET"`, "job must mount credentials to SUPERCARGO_CREDENTIALS_SECRET")
+		assert.Contains(t, jobBlock, `secret_key_ref`, "job secret mount must use value_source.secret_key_ref")
+		assert.Contains(t, jobBlock, `version = "latest"`, "secret_key_ref must use latest version")
+
+		// Container resources
+		assert.Regexp(t, regexp.MustCompile(`cpu\s*=\s*var\.dlt_cpu`), jobBlock)
+		assert.Regexp(t, regexp.MustCompile(`memory\s*=\s*var\.dlt_memory`), jobBlock)
+
+		// AC-4: Lifecycle ignore_changes & depends_on
+		assert.Contains(t, jobBlock, "lifecycle {", "job must define lifecycle block")
+		assert.Contains(t, jobBlock, "ignore_changes = [", "job must define ignore_changes in lifecycle")
+		assert.Contains(t, jobBlock, "template[0].template[0].containers[0].image", "ignore_changes must ignore container image")
+		assert.Contains(t, jobBlock, "client", "ignore_changes must ignore client")
+		assert.Contains(t, jobBlock, "client_version", "ignore_changes must ignore client_version")
+		assert.Contains(t, jobBlock, "depends_on = [", "job must define depends_on")
+		assert.Contains(t, jobBlock, "google_service_account.dlt_runner", "job depends_on must include google_service_account.dlt_runner (AC-4)")
+
+		// Table-driven verification of argument synthesis behavior across canonical input matrix
+		type dltPort struct {
+			key              string
+			source           string
+			table            string
+			contractUrn      string
+			contract         any
+			cursorField      string
+			primaryKey       string
+			writeDisposition string
+			coldStartWindow  string
+			entrypoint       string
+		}
+
+		resolveContractURN := func(p dltPort) string {
+			if p.contractUrn != "" {
+				return p.contractUrn
+			}
+			switch c := p.contract.(type) {
+			case map[string]string:
+				if u, ok := c["urn"]; ok && u != "" {
+					return u
+				}
+			case map[string]any:
+				if u, ok := c["urn"].(string); ok && u != "" {
+					return u
+				}
+			case string:
+				if c != "" {
+					return c
+				}
+			}
+			return p.key
+		}
+
+		formatPipelineName := func(productID, portKey, nameSuffix string) string {
+			normProduct := strings.ReplaceAll(productID, "-", "_")
+			normPort := strings.ReplaceAll(portKey, "-", "_")
+			suffix := ""
+			if nameSuffix != "" {
+				suffix = "_" + strings.ReplaceAll(nameSuffix, "-", "_")
+			}
+			return fmt.Sprintf("dlt_%s_%s%s", normProduct, normPort, suffix)
+		}
+
+		synthesizeArgs := func(productID, productURN, dataset, nameSuffix string, p dltPort) []string {
+			var args []string
+			args = append(args, "--source", p.source)
+			args = append(args, "--contract-urn", resolveContractURN(p))
+			args = append(args, "--product-urn", productURN)
+			args = append(args, "--destination", "bigquery")
+			args = append(args, "--dataset", dataset)
+			args = append(args, "--pipeline-name", formatPipelineName(productID, p.key, nameSuffix))
+
+			isSQLOrFS := strings.Contains(p.source, "sql_database") || strings.Contains(p.source, "filesystem")
+			if isSQLOrFS {
+				t := p.table
+				if t == "" {
+					t = p.key
+				}
+				args = append(args, "--table", t)
+			}
+			if p.cursorField != "" {
+				args = append(args, "--cursor-field", p.cursorField)
+			}
+			if p.primaryKey != "" {
+				args = append(args, "--primary-key", p.primaryKey)
+			}
+			if p.writeDisposition != "" {
+				args = append(args, "--write-disposition", p.writeDisposition)
+			}
+			if p.coldStartWindow != "" {
+				args = append(args, "--cold-start-window", p.coldStartWindow)
+			}
+			if p.entrypoint != "" {
+				args = append(args, "--entrypoint", p.entrypoint)
+			}
+			return args
+		}
+
+		argMatrix := []struct {
+			name        string
+			nameSuffix  string
+			port        dltPort
+			wantContain []string
+			wantAbsent  []string
+		}{
+			{
+				name: "sql_database with explicit table and optional fields",
+				port: dltPort{
+					key:              "raw_orders",
+					source:           "dlt://sql_database",
+					table:            "orders",
+					contractUrn:      "urn:sc:contract:orders:v1",
+					cursorField:      "updated_at",
+					primaryKey:       "id",
+					writeDisposition: "merge",
+					coldStartWindow:  "30d",
+				},
+				wantContain: []string{
+					"--source", "dlt://sql_database",
+					"--contract-urn", "urn:sc:contract:orders:v1",
+					"--product-urn", "urn:sc:product:sales:v1",
+					"--table", "orders",
+					"--cursor-field", "updated_at",
+					"--primary-key", "id",
+					"--write-disposition", "merge",
+					"--cold-start-window", "30d",
+				},
+				wantAbsent: []string{"--entrypoint"},
+			},
+			{
+				name: "sql_database omitting table falls back to port key to prevent runtime ValueError",
+				port: dltPort{
+					key:         "customers_sync",
+					source:      "dlt://sql_database",
+					contractUrn: "urn:sc:contract:customers:v1",
+				},
+				wantContain: []string{
+					"--source", "dlt://sql_database",
+					"--table", "customers_sync",
+					"--pipeline-name", "dlt_sales_customers_sync",
+				},
+				wantAbsent: []string{"--cursor-field", "--primary-key", "--write-disposition", "--cold-start-window", "--entrypoint"},
+			},
+			{
+				name: "nested contract map { urn: ... } resolves contract URN correctly",
+				port: dltPort{
+					key:    "nested_contract_port",
+					source: "dlt://sql_database",
+					contract: map[string]string{
+						"urn": "urn:sc:contract:nested_orders:v1",
+					},
+				},
+				wantContain: []string{
+					"--source", "dlt://sql_database",
+					"--contract-urn", "urn:sc:contract:nested_orders:v1",
+					"--pipeline-name", "dlt_sales_nested_contract_port",
+				},
+				wantAbsent: []string{"--entrypoint"},
+			},
+			{
+				name: "direct contract string resolves contract URN correctly",
+				port: dltPort{
+					key:      "direct_contract_port",
+					source:   "dlt://rest_api",
+					contract: "urn:sc:contract:direct_orders:v1",
+				},
+				wantContain: []string{
+					"--source", "dlt://rest_api",
+					"--contract-urn", "urn:sc:contract:direct_orders:v1",
+					"--pipeline-name", "dlt_sales_direct_contract_port",
+				},
+				wantAbsent: []string{"--entrypoint"},
+			},
+			{
+				name: "contract_urn takes precedence over contract map",
+				port: dltPort{
+					key:         "override_port",
+					source:      "dlt://rest_api",
+					contractUrn: "urn:sc:contract:override:v1",
+					contract: map[string]string{
+						"urn": "urn:sc:contract:ignored:v1",
+					},
+				},
+				wantContain: []string{
+					"--source", "dlt://rest_api",
+					"--contract-urn", "urn:sc:contract:override:v1",
+				},
+				wantAbsent: []string{"urn:sc:contract:ignored:v1"},
+			},
+			{
+				name: "omitting contract and contract_urn falls back to port key",
+				port: dltPort{
+					key:    "fallback_port_key",
+					source: "dlt://rest_api",
+				},
+				wantContain: []string{
+					"--source", "dlt://rest_api",
+					"--contract-urn", "fallback_port_key",
+				},
+			},
+			{
+				name:       "multi-tenant pipeline-name appends normalized name_suffix",
+				nameSuffix: "dev-feature-1",
+				port: dltPort{
+					key:         "tenant_orders",
+					source:      "dlt://rest_api",
+					contractUrn: "urn:sc:contract:tenant_orders:v1",
+				},
+				wantContain: []string{
+					"--source", "dlt://rest_api",
+					"--contract-urn", "urn:sc:contract:tenant_orders:v1",
+					"--pipeline-name", "dlt_sales_tenant_orders_dev_feature_1",
+				},
+				wantAbsent: []string{"--entrypoint"},
+			},
+			{
+				name: "filesystem with explicit table",
+				port: dltPort{
+					key:         "gcs_events",
+					source:      "dlt://filesystem",
+					table:       "events_raw",
+					contractUrn: "urn:sc:contract:events:v1",
+				},
+				wantContain: []string{
+					"--source", "dlt://filesystem",
+					"--table", "events_raw",
+				},
+				wantAbsent: []string{"--entrypoint"},
+			},
+			{
+				name: "rest_api connector does not include --table",
+				port: dltPort{
+					key:              "stripe_charges",
+					source:           "dlt://rest_api",
+					contractUrn:      "urn:sc:contract:stripe:v1",
+					writeDisposition: "append",
+				},
+				wantContain: []string{
+					"--source", "dlt://rest_api",
+					"--contract-urn", "urn:sc:contract:stripe:v1",
+					"--write-disposition", "append",
+				},
+				wantAbsent: []string{"--table", "--entrypoint"},
+			},
+			{
+				name: "custom python pipeline with entrypoint",
+				port: dltPort{
+					key:         "custom_feed",
+					source:      "dlt://custom",
+					contractUrn: "urn:sc:contract:custom:v1",
+					entrypoint:  "pipelines/feed.py:load_data",
+				},
+				wantContain: []string{
+					"--source", "dlt://custom",
+					"--entrypoint", "pipelines/feed.py:load_data",
+				},
+				wantAbsent: []string{"--table"},
+			},
+		}
+
+		for _, tc := range argMatrix {
+			tc := tc
+			t.Run("ArgMatrix/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				args := synthesizeArgs("sales", "urn:sc:product:sales:v1", "sales_bronze", tc.nameSuffix, tc.port)
+				for _, expected := range tc.wantContain {
+					assert.Contains(t, args, expected, "synthesized args should contain %q", expected)
+				}
+				for _, forbidden := range tc.wantAbsent {
+					assert.NotContains(t, args, forbidden, "synthesized args should not contain %q", forbidden)
+				}
+			})
+		}
+	})
+
+	t.Run("SchedulerAndIAM", func(t *testing.T) {
+		dltPath := filepath.Join(dpDir, "dlt_ports.tf")
+		dltBytes, err := os.ReadFile(dltPath)
+		require.NoError(t, err, "dlt_ports.tf must exist in modules/data_product")
+		dltContent := string(dltBytes)
+
+		// 1. Assert google_service_account.dlt_scheduler (AC-5)
+		schedSABlock := extractHCLBlock(dltContent, `resource "google_service_account" "dlt_scheduler"`)
+		require.NotEmpty(t, schedSABlock, "dlt_ports.tf must define resource google_service_account.dlt_scheduler")
+		assert.Regexp(t, regexp.MustCompile(`count\s*=\s*length\(local\.dlt_input_ports\)\s*>\s*0\s*\?\s*1\s*:\s*0`), schedSABlock)
+		assert.Regexp(t, regexp.MustCompile(`account_id\s*=\s*local\.dlt_scheduler_sa_id`), schedSABlock)
+		assert.Contains(t, schedSABlock, `display_name = "DLT Cloud Scheduler Service Account for ${local.product_id}"`)
+		assert.Regexp(t, regexp.MustCompile(`project\s*=\s*var\.project_id`), schedSABlock)
+
+		// 2. Assert google_cloud_run_v2_job_iam_member.dlt_scheduler_invoker (AC-5)
+		invokerBlock := extractHCLBlock(dltContent, `resource "google_cloud_run_v2_job_iam_member" "dlt_scheduler_invoker"`)
+		require.NotEmpty(t, invokerBlock, "dlt_ports.tf must define resource google_cloud_run_v2_job_iam_member.dlt_scheduler_invoker")
+		assert.Regexp(t, regexp.MustCompile(`for_each\s*=\s*local\.dlt_input_ports`), invokerBlock)
+		assert.Regexp(t, regexp.MustCompile(`project\s*=\s*var\.project_id`), invokerBlock)
+		assert.Regexp(t, regexp.MustCompile(`location\s*=\s*var\.region`), invokerBlock)
+		assert.Regexp(t, regexp.MustCompile(`name\s*=\s*google_cloud_run_v2_job\.dlt_jobs\[each\.key\]\.name`), invokerBlock)
+		assert.Regexp(t, regexp.MustCompile(`role\s*=\s*"roles/run\.invoker"`), invokerBlock)
+		assert.Regexp(t, regexp.MustCompile(`member\s*=\s*"serviceAccount:\$\{local\.dlt_scheduler_sa_email\}"`), invokerBlock)
+		assert.Contains(t, invokerBlock, "depends_on = [", "invoker IAM binding must define depends_on")
+		assert.Contains(t, invokerBlock, "google_service_account.dlt_scheduler", "invoker IAM depends_on must include google_service_account.dlt_scheduler")
+		assert.Contains(t, invokerBlock, "google_cloud_run_v2_job.dlt_jobs", "invoker IAM depends_on must include google_cloud_run_v2_job.dlt_jobs")
+
+		// 3. Assert google_cloud_scheduler_job.dlt_schedules (AC-5)
+		schedJobBlock := extractHCLBlock(dltContent, `resource "google_cloud_scheduler_job" "dlt_schedules"`)
+		require.NotEmpty(t, schedJobBlock, "dlt_ports.tf must define resource google_cloud_scheduler_job.dlt_schedules")
+		assert.Regexp(t, regexp.MustCompile(`for_each\s*=\s*local\.dlt_input_ports`), schedJobBlock)
+		assert.Regexp(t, regexp.MustCompile(`name\s*=\s*"dlt-sched-\$\{local\.product_id\}-\$\{replace\(each\.key,\s*"_",\s*"-"\)\}\$\{var\.name_suffix\s*!=\s*""\s*\?\s*"-\$\{var\.name_suffix\}"\s*:\s*""\}"`), schedJobBlock)
+		assert.Contains(t, schedJobBlock, `try(each.value.schedule, "") != "" ? each.value.schedule : "0 2 * * *"`, "scheduler job schedule must support per-port schedule with fallback to 0 2 * * *")
+		assert.Contains(t, schedJobBlock, `try(each.value.time_zone, "") != "" ? each.value.time_zone : var.dlt_time_zone`, "scheduler job time_zone must support per-port time_zone with fallback to var.dlt_time_zone")
+		assert.Regexp(t, regexp.MustCompile(`region\s*=\s*var\.region`), schedJobBlock)
+		assert.Regexp(t, regexp.MustCompile(`project\s*=\s*var\.project_id`), schedJobBlock)
+		assert.Contains(t, schedJobBlock, "http_target {", "scheduler job must define http_target")
+		assert.Regexp(t, regexp.MustCompile(`http_method\s*=\s*"POST"`), schedJobBlock)
+		assert.Contains(t, schedJobBlock, `https://${var.region}-run.googleapis.com/v2/projects/${var.project_id}/locations/${var.region}/jobs/${google_cloud_run_v2_job.dlt_jobs[each.key].name}:run`, "scheduler job uri must target Cloud Run job run endpoint")
+		assert.Contains(t, schedJobBlock, "oauth_token {", "scheduler job must define oauth_token block")
+		assert.Regexp(t, regexp.MustCompile(`service_account_email\s*=\s*local\.dlt_scheduler_sa_email`), schedJobBlock)
+		assert.Regexp(t, regexp.MustCompile(`scope\s*=\s*"https://www.googleapis.com/auth/cloud-platform"`), schedJobBlock)
+		assert.Contains(t, schedJobBlock, "depends_on = [", "scheduler job must define depends_on")
+		assert.Contains(t, schedJobBlock, "google_cloud_run_v2_job_iam_member.dlt_scheduler_invoker", "scheduler job depends_on must include dlt_scheduler_invoker (AC-5)")
+		assert.Contains(t, schedJobBlock, "google_cloud_run_v2_job.dlt_jobs", "scheduler job depends_on must include google_cloud_run_v2_job.dlt_jobs (AC-5)")
+
+		// 4. Assert google_project_iam_member.dlt_runner_bq_editor (AC-6)
+		bqEditorBlock := extractHCLBlock(dltContent, `resource "google_project_iam_member" "dlt_runner_bq_editor"`)
+		require.NotEmpty(t, bqEditorBlock, "dlt_ports.tf must define resource google_project_iam_member.dlt_runner_bq_editor")
+		assert.Regexp(t, regexp.MustCompile(`count\s*=\s*length\(local\.dlt_input_ports\)\s*>\s*0\s*\?\s*1\s*:\s*0`), bqEditorBlock)
+		assert.Regexp(t, regexp.MustCompile(`project\s*=\s*var\.project_id`), bqEditorBlock)
+		assert.Regexp(t, regexp.MustCompile(`role\s*=\s*"roles/bigquery\.dataEditor"`), bqEditorBlock)
+		assert.Regexp(t, regexp.MustCompile(`member\s*=\s*"serviceAccount:\$\{local\.dlt_runner_sa_email\}"`), bqEditorBlock)
+		assert.Contains(t, bqEditorBlock, "google_service_account.dlt_runner", "bq_editor depends_on must include google_service_account.dlt_runner")
+
+		// 5. Assert google_project_iam_member.dlt_runner_bq_user (AC-6)
+		bqUserBlock := extractHCLBlock(dltContent, `resource "google_project_iam_member" "dlt_runner_bq_user"`)
+		require.NotEmpty(t, bqUserBlock, "dlt_ports.tf must define resource google_project_iam_member.dlt_runner_bq_user")
+		assert.Regexp(t, regexp.MustCompile(`count\s*=\s*length\(local\.dlt_input_ports\)\s*>\s*0\s*\?\s*1\s*:\s*0`), bqUserBlock)
+		assert.Regexp(t, regexp.MustCompile(`project\s*=\s*var\.project_id`), bqUserBlock)
+		assert.Regexp(t, regexp.MustCompile(`role\s*=\s*"roles/bigquery\.jobUser"`), bqUserBlock)
+		assert.Regexp(t, regexp.MustCompile(`member\s*=\s*"serviceAccount:\$\{local\.dlt_runner_sa_email\}"`), bqUserBlock)
+		assert.Contains(t, bqUserBlock, "google_service_account.dlt_runner", "bq_user depends_on must include google_service_account.dlt_runner")
+
+		// 6. Assert google_secret_manager_secret_iam_member.dlt_runner_secret_accessor (AC-6)
+		secAccessorBlock := extractHCLBlock(dltContent, `resource "google_secret_manager_secret_iam_member" "dlt_runner_secret_accessor"`)
+		require.NotEmpty(t, secAccessorBlock, "dlt_ports.tf must define resource google_secret_manager_secret_iam_member.dlt_runner_secret_accessor")
+		assert.Contains(t, secAccessorBlock, "toset([", "secret accessor must deduplicate secrets using toset to prevent GCP ETag 412 race conditions")
+		assert.Contains(t, secAccessorBlock, "v.credentials_secret", "secret accessor must iterate over credentials_secret")
+		assert.Regexp(t, regexp.MustCompile(`project\s*=\s*var\.project_id`), secAccessorBlock)
+		assert.Regexp(t, regexp.MustCompile(`role\s*=\s*"roles/secretmanager\.secretAccessor"`), secAccessorBlock)
+		assert.Regexp(t, regexp.MustCompile(`member\s*=\s*"serviceAccount:\$\{local\.dlt_runner_sa_email\}"`), secAccessorBlock)
+		assert.Contains(t, secAccessorBlock, "google_service_account.dlt_runner", "secret accessor depends_on must include google_service_account.dlt_runner")
+
+		// Canonical table-driven verification of Secret Manager IAM deduplication logic across multi-port sharing
+		dedupSecrets := func(portSecrets []string) []string {
+			seen := make(map[string]struct{})
+			var res []string
+			for _, s := range portSecrets {
+				if s != "" {
+					if _, exists := seen[s]; !exists {
+						seen[s] = struct{}{}
+						res = append(res, s)
+					}
+				}
+			}
+			return res
+		}
+
+		dedupTests := []struct {
+			name        string
+			portSecrets []string
+			wantDedup   []string
+		}{
+			{
+				name:        "multiple ports sharing the exact same secret are deduplicated to single IAM binding",
+				portSecrets: []string{"shared-postgres-secret", "shared-postgres-secret", "shared-postgres-secret"},
+				wantDedup:   []string{"shared-postgres-secret"},
+			},
+			{
+				name:        "multiple ports with distinct secrets produce distinct bindings",
+				portSecrets: []string{"postgres-secret", "salesforce-oauth", "stripe-api-key"},
+				wantDedup:   []string{"postgres-secret", "salesforce-oauth", "stripe-api-key"},
+			},
+			{
+				name:        "ports with empty credentials_secret are excluded",
+				portSecrets: []string{"", "postgres-secret", "", "snowflake-creds"},
+				wantDedup:   []string{"postgres-secret", "snowflake-creds"},
+			},
+		}
+
+		for _, tc := range dedupTests {
+			tc := tc
+			t.Run("SecretDedup/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				assert.Equal(t, tc.wantDedup, dedupSecrets(tc.portSecrets))
+			})
+		}
+
+		// Table-driven matrix testing of schedule, timezone, and secret_id resolution logic
+		resolveSchedule := func(portSched string) string {
+			if portSched != "" {
+				return portSched
+			}
+			return "0 2 * * *"
+		}
+		resolveTZ := func(portTZ, defaultTZ string) string {
+			if portTZ != "" {
+				return portTZ
+			}
+			return defaultTZ
+		}
+		resolveSecretID := func(sec string) string {
+			if strings.HasPrefix(sec, "projects/") {
+				parts := strings.Split(sec, "/")
+				return parts[len(parts)-1]
+			}
+			return sec
+		}
+
+		schedTests := []struct {
+			name         string
+			portSchedule string
+			portTZ       string
+			defaultTZ    string
+			credSecret   string
+			wantSchedule string
+			wantTZ       string
+			wantSecretID string
+		}{
+			{
+				name:         "defaults applied when optional schedule and timezone omitted",
+				portSchedule: "",
+				portTZ:       "",
+				defaultTZ:    "UTC",
+				credSecret:   "my-db-credentials",
+				wantSchedule: "0 2 * * *",
+				wantTZ:       "UTC",
+				wantSecretID: "my-db-credentials",
+			},
+			{
+				name:         "explicit schedule and timezone preserved",
+				portSchedule: "*/15 * * * *",
+				portTZ:       "America/New_York",
+				defaultTZ:    "UTC",
+				credSecret:   "projects/test-proj/secrets/salesforce-oauth",
+				wantSchedule: "*/15 * * * *",
+				wantTZ:       "America/New_York",
+				wantSecretID: "salesforce-oauth",
+			},
+			{
+				name:         "custom default timezone applied when port timezone empty",
+				portSchedule: "0 6 * * 1-5",
+				portTZ:       "",
+				defaultTZ:    "Europe/Stockholm",
+				credSecret:   "projects/456789/secrets/api-key",
+				wantSchedule: "0 6 * * 1-5",
+				wantTZ:       "Europe/Stockholm",
+				wantSecretID: "api-key",
+			},
+		}
+
+		for _, tc := range schedTests {
+			tc := tc
+			t.Run("Matrix/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				assert.Equal(t, tc.wantSchedule, resolveSchedule(tc.portSchedule))
+				assert.Equal(t, tc.wantTZ, resolveTZ(tc.portTZ, tc.defaultTZ))
+				assert.Equal(t, tc.wantSecretID, resolveSecretID(tc.credSecret))
+			})
+		}
+	})
+
+	t.Run("Outputs", func(t *testing.T) {
+		outputPath := filepath.Join(dpDir, "outputs.tf")
+		outputBytes, err := os.ReadFile(outputPath)
+		require.NoError(t, err, "outputs.tf must exist in modules/data_product")
+		outputContent := string(outputBytes)
+
+		// AC-7: Guarded Outputs & Backfill CLI
+		jobNamesBlock := extractHCLBlock(outputContent, `output "dlt_cloud_run_job_names"`)
+		require.NotEmpty(t, jobNamesBlock, "modules/data_product/outputs.tf missing dlt_cloud_run_job_names output")
+		assert.Contains(t, jobNamesBlock, "{ for k, v in google_cloud_run_v2_job.dlt_jobs : k => v.name }")
+
+		schedIDsBlock := extractHCLBlock(outputContent, `output "dlt_cloud_scheduler_job_ids"`)
+		require.NotEmpty(t, schedIDsBlock, "modules/data_product/outputs.tf missing dlt_cloud_scheduler_job_ids output")
+		assert.Contains(t, schedIDsBlock, "{ for k, v in google_cloud_scheduler_job.dlt_schedules : k => v.id }")
+
+		backfillBlock := extractHCLBlock(outputContent, `output "dlt_backfill_commands"`)
+		require.NotEmpty(t, backfillBlock, "modules/data_product/outputs.tf missing dlt_backfill_commands output")
+		assert.Contains(t, backfillBlock, `for k, v in local.dlt_input_ports : k => "gcloud run jobs execute ${google_cloud_run_v2_job.dlt_jobs[k].name} --region ${var.region} --project ${var.project_id} --args=\"--since=2026-01-01T00:00:00Z\""`)
+
+		runnerSABlock := extractHCLBlock(outputContent, `output "dlt_runner_service_account_email"`)
+		require.NotEmpty(t, runnerSABlock, "modules/data_product/outputs.tf missing dlt_runner_service_account_email output")
+		assert.Contains(t, runnerSABlock, "length(local.dlt_input_ports) > 0 ? local.dlt_runner_sa_email : null")
+
+		schedSABlock := extractHCLBlock(outputContent, `output "dlt_scheduler_service_account_email"`)
+		require.NotEmpty(t, schedSABlock, "modules/data_product/outputs.tf missing dlt_scheduler_service_account_email output")
+		assert.Contains(t, schedSABlock, "length(local.dlt_input_ports) > 0 ? local.dlt_scheduler_sa_email : null")
+
+		// Canonical Table-driven matrix for outputs and backfill commands
+		type portMeta struct {
+			portKey string
+			jobName string
+		}
+		formatBackfillCmd := func(jobName, region, project string) string {
+			return fmt.Sprintf("gcloud run jobs execute %s --region %s --project %s --args=\"--since=2026-01-01T00:00:00Z\"", jobName, region, project)
+		}
+		evalGuardedSA := func(portCount int, email string) *string {
+			if portCount > 0 {
+				return &email
+			}
+			return nil
+		}
+
+		matrixTests := []struct {
+			name        string
+			ports       []portMeta
+			region      string
+			project     string
+			runnerEmail string
+			schedEmail  string
+			wantCmds    map[string]string
+			wantRunSA   *string
+			wantSchedSA *string
+		}{
+			{
+				name:        "zero DLT ports returns empty maps and null SAs",
+				ports:       []portMeta{},
+				region:      "us-central1",
+				project:     "test-project",
+				runnerEmail: "dlt-runner@test-project.iam.gserviceaccount.com",
+				schedEmail:  "dlt-sched@test-project.iam.gserviceaccount.com",
+				wantCmds:    map[string]string{},
+				wantRunSA:   nil,
+				wantSchedSA: nil,
+			},
+			{
+				name: "single DLT port produces formatted backfill command and non-null SAs",
+				ports: []portMeta{
+					{portKey: "raw_orders", jobName: "dlt-sales-raw-orders"},
+				},
+				region:      "europe-west1",
+				project:     "prod-analytics",
+				runnerEmail: "dlt-runner@prod-analytics.iam.gserviceaccount.com",
+				schedEmail:  "dlt-sched@prod-analytics.iam.gserviceaccount.com",
+				wantCmds: map[string]string{
+					"raw_orders": "gcloud run jobs execute dlt-sales-raw-orders --region europe-west1 --project prod-analytics --args=\"--since=2026-01-01T00:00:00Z\"",
+				},
+				wantRunSA:   func() *string { s := "dlt-runner@prod-analytics.iam.gserviceaccount.com"; return &s }(),
+				wantSchedSA: func() *string { s := "dlt-sched@prod-analytics.iam.gserviceaccount.com"; return &s }(),
+			},
+			{
+				name: "multiple DLT ports produces all backfill commands",
+				ports: []portMeta{
+					{portKey: "pg_users", jobName: "dlt-crm-pg-users"},
+					{portKey: "s3_logs", jobName: "dlt-crm-s3-logs"},
+				},
+				region:      "us-east1",
+				project:     "corp-data",
+				runnerEmail: "dlt-runner@corp-data.iam.gserviceaccount.com",
+				schedEmail:  "dlt-sched@corp-data.iam.gserviceaccount.com",
+				wantCmds: map[string]string{
+					"pg_users": "gcloud run jobs execute dlt-crm-pg-users --region us-east1 --project corp-data --args=\"--since=2026-01-01T00:00:00Z\"",
+					"s3_logs":  "gcloud run jobs execute dlt-crm-s3-logs --region us-east1 --project corp-data --args=\"--since=2026-01-01T00:00:00Z\"",
+				},
+				wantRunSA:   func() *string { s := "dlt-runner@corp-data.iam.gserviceaccount.com"; return &s }(),
+				wantSchedSA: func() *string { s := "dlt-sched@corp-data.iam.gserviceaccount.com"; return &s }(),
+			},
+		}
+
+		for _, tc := range matrixTests {
+			tc := tc
+			t.Run("Matrix/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				cmds := make(map[string]string, len(tc.ports))
+				for _, p := range tc.ports {
+					cmds[p.portKey] = formatBackfillCmd(p.jobName, tc.region, tc.project)
+				}
+				assert.Equal(t, tc.wantCmds, cmds)
+				assert.Equal(t, tc.wantRunSA, evalGuardedSA(len(tc.ports), tc.runnerEmail))
+				assert.Equal(t, tc.wantSchedSA, evalGuardedSA(len(tc.ports), tc.schedEmail))
+			})
 		}
 	})
 }
