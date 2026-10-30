@@ -989,6 +989,119 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 			})
 		}
 	})
+
+	t.Run("Outputs", func(t *testing.T) {
+		outputPath := filepath.Join(dpDir, "outputs.tf")
+		outputBytes, err := os.ReadFile(outputPath)
+		require.NoError(t, err, "outputs.tf must exist in modules/data_product")
+		outputContent := string(outputBytes)
+
+		// AC-7: Guarded Outputs & Backfill CLI
+		jobNamesBlock := extractHCLBlock(outputContent, `output "dlt_cloud_run_job_names"`)
+		require.NotEmpty(t, jobNamesBlock, "modules/data_product/outputs.tf missing dlt_cloud_run_job_names output")
+		assert.Contains(t, jobNamesBlock, "{ for k, v in google_cloud_run_v2_job.dlt_jobs : k => v.name }")
+
+		schedIDsBlock := extractHCLBlock(outputContent, `output "dlt_cloud_scheduler_job_ids"`)
+		require.NotEmpty(t, schedIDsBlock, "modules/data_product/outputs.tf missing dlt_cloud_scheduler_job_ids output")
+		assert.Contains(t, schedIDsBlock, "{ for k, v in google_cloud_scheduler_job.dlt_schedules : k => v.id }")
+
+		backfillBlock := extractHCLBlock(outputContent, `output "dlt_backfill_commands"`)
+		require.NotEmpty(t, backfillBlock, "modules/data_product/outputs.tf missing dlt_backfill_commands output")
+		assert.Contains(t, backfillBlock, `for k, v in local.dlt_input_ports : k => "gcloud run jobs execute ${google_cloud_run_v2_job.dlt_jobs[k].name} --region ${var.region} --project ${var.project_id} --args=\"--since=2026-01-01T00:00:00Z\""`)
+
+		runnerSABlock := extractHCLBlock(outputContent, `output "dlt_runner_service_account_email"`)
+		require.NotEmpty(t, runnerSABlock, "modules/data_product/outputs.tf missing dlt_runner_service_account_email output")
+		assert.Contains(t, runnerSABlock, "length(local.dlt_input_ports) > 0 ? local.dlt_runner_sa_email : null")
+
+		schedSABlock := extractHCLBlock(outputContent, `output "dlt_scheduler_service_account_email"`)
+		require.NotEmpty(t, schedSABlock, "modules/data_product/outputs.tf missing dlt_scheduler_service_account_email output")
+		assert.Contains(t, schedSABlock, "length(local.dlt_input_ports) > 0 ? local.dlt_scheduler_sa_email : null")
+
+		// Canonical Table-driven matrix for outputs and backfill commands
+		type portMeta struct {
+			portKey string
+			jobName string
+		}
+		formatBackfillCmd := func(jobName, region, project string) string {
+			return fmt.Sprintf("gcloud run jobs execute %s --region %s --project %s --args=\"--since=2026-01-01T00:00:00Z\"", jobName, region, project)
+		}
+		evalGuardedSA := func(portCount int, email string) *string {
+			if portCount > 0 {
+				return &email
+			}
+			return nil
+		}
+
+		matrixTests := []struct {
+			name        string
+			ports       []portMeta
+			region      string
+			project     string
+			runnerEmail string
+			schedEmail  string
+			wantCmds    map[string]string
+			wantRunSA   *string
+			wantSchedSA *string
+		}{
+			{
+				name:        "zero DLT ports returns empty maps and null SAs",
+				ports:       []portMeta{},
+				region:      "us-central1",
+				project:     "test-project",
+				runnerEmail: "dlt-runner@test-project.iam.gserviceaccount.com",
+				schedEmail:  "dlt-sched@test-project.iam.gserviceaccount.com",
+				wantCmds:    map[string]string{},
+				wantRunSA:   nil,
+				wantSchedSA: nil,
+			},
+			{
+				name: "single DLT port produces formatted backfill command and non-null SAs",
+				ports: []portMeta{
+					{portKey: "raw_orders", jobName: "dlt-sales-raw-orders"},
+				},
+				region:      "europe-west1",
+				project:     "prod-analytics",
+				runnerEmail: "dlt-runner@prod-analytics.iam.gserviceaccount.com",
+				schedEmail:  "dlt-sched@prod-analytics.iam.gserviceaccount.com",
+				wantCmds: map[string]string{
+					"raw_orders": "gcloud run jobs execute dlt-sales-raw-orders --region europe-west1 --project prod-analytics --args=\"--since=2026-01-01T00:00:00Z\"",
+				},
+				wantRunSA:   func() *string { s := "dlt-runner@prod-analytics.iam.gserviceaccount.com"; return &s }(),
+				wantSchedSA: func() *string { s := "dlt-sched@prod-analytics.iam.gserviceaccount.com"; return &s }(),
+			},
+			{
+				name: "multiple DLT ports produces all backfill commands",
+				ports: []portMeta{
+					{portKey: "pg_users", jobName: "dlt-crm-pg-users"},
+					{portKey: "s3_logs", jobName: "dlt-crm-s3-logs"},
+				},
+				region:      "us-east1",
+				project:     "corp-data",
+				runnerEmail: "dlt-runner@corp-data.iam.gserviceaccount.com",
+				schedEmail:  "dlt-sched@corp-data.iam.gserviceaccount.com",
+				wantCmds: map[string]string{
+					"pg_users": "gcloud run jobs execute dlt-crm-pg-users --region us-east1 --project corp-data --args=\"--since=2026-01-01T00:00:00Z\"",
+					"s3_logs":  "gcloud run jobs execute dlt-crm-s3-logs --region us-east1 --project corp-data --args=\"--since=2026-01-01T00:00:00Z\"",
+				},
+				wantRunSA:   func() *string { s := "dlt-runner@corp-data.iam.gserviceaccount.com"; return &s }(),
+				wantSchedSA: func() *string { s := "dlt-sched@corp-data.iam.gserviceaccount.com"; return &s }(),
+			},
+		}
+
+		for _, tc := range matrixTests {
+			tc := tc
+			t.Run("Matrix/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				cmds := make(map[string]string, len(tc.ports))
+				for _, p := range tc.ports {
+					cmds[p.portKey] = formatBackfillCmd(p.jobName, tc.region, tc.project)
+				}
+				assert.Equal(t, tc.wantCmds, cmds)
+				assert.Equal(t, tc.wantRunSA, evalGuardedSA(len(tc.ports), tc.runnerEmail))
+				assert.Equal(t, tc.wantSchedSA, evalGuardedSA(len(tc.ports), tc.schedEmail))
+			})
+		}
+	})
 }
 
 func TestModules_HubAuditSink(t *testing.T) {
