@@ -4061,6 +4061,9 @@ func TestModules_ControlPlaneModuleVariablesAndEnv(t *testing.T) {
 				// Must explicitly route 100% traffic to LATEST revision to prevent sticky failed Cloud Deploy revisions
 				assert.Contains(t, resChunk, `type    = "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"`)
 				assert.Contains(t, resChunk, `percent = 100`)
+
+				// Must NOT set reserved Cloud Run environment variable PORT in env blocks
+				assert.NotRegexp(t, regexp.MustCompile(`name\s*=\s*"PORT"`), resChunk, "%s in %s must not set reserved Cloud Run env var PORT", svc.resourceName, svc.moduleName)
 			})
 		}
 	})

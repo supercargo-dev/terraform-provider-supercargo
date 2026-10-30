@@ -1096,11 +1096,6 @@ resource "google_cloud_run_v2_service" "mcp" {
       }
 
       env {
-        name  = "PORT"
-        value = "8085"
-      }
-
-      env {
         name  = "HUB_URL"
         value = google_cloud_run_v2_service.hub.uri
       }
@@ -1241,11 +1236,6 @@ resource "google_cloud_run_v2_service" "console" {
           cpu    = "1"
           memory = "512Mi"
         }
-      }
-
-      env {
-        name  = "PORT"
-        value = "8088"
       }
 
       env {
