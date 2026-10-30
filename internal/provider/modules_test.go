@@ -1903,7 +1903,7 @@ func TestModules_HubDataformIntegration(t *testing.T) {
 		if !strings.Contains(subChunk, "google_service_account.events_invoker.email") {
 			t.Errorf("dataform_events_push subscription must use google_service_account.events_invoker.email for oidc_token")
 		}
-		if !strings.Contains(subChunk, "var.oidc_audience != \"\" ? var.oidc_audience : google_cloud_run_v2_service.hub.uri") {
+		if !strings.Contains(subChunk, "var.oidc_audience != \"\" ? trimspace(split(\",\", var.oidc_audience)[0]) : google_cloud_run_v2_service.hub.uri") {
 			t.Errorf("dataform_events_push subscription oidc audience must fallback to google_cloud_run_v2_service.hub.uri")
 		}
 		if !strings.Contains(subChunk, "google_pubsub_topic.dataform_events_dlq[0].id") {
@@ -2496,7 +2496,7 @@ func TestModules_HubMCPCompanionService(t *testing.T) {
 		if !strings.Contains(mcpChunk, `name  = "HUB_OIDC_AUDIENCE"`) {
 			t.Errorf("modules/hub/main.tf missing HUB_OIDC_AUDIENCE env var for mcp service")
 		}
-		if !strings.Contains(mcpChunk, `var.oidc_audience != "" ? var.oidc_audience : google_cloud_run_v2_service.hub.uri`) {
+		if !strings.Contains(mcpChunk, `var.oidc_audience != "" ? trimspace(split(",", var.oidc_audience)[0]) : google_cloud_run_v2_service.hub.uri`) {
 			t.Errorf("modules/hub/main.tf missing fallback to hub URI for HUB_OIDC_AUDIENCE")
 		}
 	})
@@ -2843,7 +2843,7 @@ func TestModules_HubEventsPushAudience(t *testing.T) {
 	if !strings.Contains(subChunk, "google_service_account.events_invoker.email") {
 		t.Errorf("events_push subscription must use google_service_account.events_invoker.email for oidc_token")
 	}
-	if !strings.Contains(subChunk, "var.oidc_audience != \"\" ? var.oidc_audience : google_cloud_run_v2_service.hub.uri") {
+	if !strings.Contains(subChunk, "var.oidc_audience != \"\" ? trimspace(split(\",\", var.oidc_audience)[0]) : google_cloud_run_v2_service.hub.uri") {
 		t.Errorf("events_push subscription oidc audience must fallback to google_cloud_run_v2_service.hub.uri when var.oidc_audience is empty")
 	}
 }
