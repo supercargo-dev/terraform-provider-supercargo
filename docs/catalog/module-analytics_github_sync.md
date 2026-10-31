@@ -45,6 +45,7 @@ module "analytics_github_sync" {
 | `max_retries` | `number` | `1` | no | Number of retries for failed tasks. |
 | `memory_limit` | `string` | `"1Gi"` | no | Memory limit for the Cloud Run container. |
 | `org` | `string` | *required* | no | GitHub organization name for repository discovery and ingestion. |
+| `paused` | `bool` | `false` | no | Whether the Cloud Scheduler job is paused. |
 | `project_id` | `string` | *required* | no | The Google Cloud project ID where resources will be provisioned. |
 | `region` | `string` | `"europe-west1"` | no | The Google Cloud region for the Cloud Run Job and Cloud Scheduler. |
 | `schedule` | `string` | `"0 * * * *"` | no | Cron schedule expression for Cloud Scheduler execution. |

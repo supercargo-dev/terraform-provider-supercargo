@@ -120,6 +120,7 @@ resource "google_cloud_scheduler_job" "sync_schedule" {
   description      = "Scheduled trigger for Analytics GitHub Sync Cloud Run Job"
   schedule         = var.schedule
   time_zone        = var.time_zone
+  paused           = var.paused
   region           = var.region
   project          = var.project_id
   attempt_deadline = var.scheduler_attempt_deadline
