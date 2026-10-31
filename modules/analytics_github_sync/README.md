@@ -59,6 +59,7 @@ module "analytics_github_sync" {
 | `time_zone` | Timezone for Cloud Scheduler | `string` | `"Etc/UTC"` | no |
 | `scheduler_job_name` | Name of the Cloud Scheduler job | `string` | `null` | no |
 | `scheduler_attempt_deadline` | Attempt deadline for Cloud Scheduler | `string` | `"320s"` | no |
+| `paused` | Whether the Cloud Scheduler job is paused | `bool` | `false` | no |
 | `deletion_protection` | Protect Cloud Run Job from deletion | `bool` | `false` | no |
 | `cpu_limit` | CPU limit for the job container | `string` | `"1"` | no |
 | `memory_limit` | Memory limit for the job container | `string` | `"1Gi"` | no |

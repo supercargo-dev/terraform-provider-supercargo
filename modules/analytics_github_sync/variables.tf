@@ -102,6 +102,12 @@ variable "scheduler_attempt_deadline" {
   default     = "320s"
 }
 
+variable "paused" {
+  description = "Whether the Cloud Scheduler job is paused."
+  type        = bool
+  default     = false
+}
+
 variable "deletion_protection" {
   description = "Whether to protect the Cloud Run Job from deletion."
   type        = bool

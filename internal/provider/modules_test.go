@@ -3556,6 +3556,7 @@ func TestModules_AnalyticsGitHubSync(t *testing.T) {
 					`oauth_token {`,
 					`local.scheduler_sa_email`,
 					`"https://www.googleapis.com/auth/cloud-platform"`,
+					`paused           = var.paused`,
 				},
 			},
 			{
@@ -3610,6 +3611,7 @@ func TestModules_AnalyticsGitHubSync(t *testing.T) {
 			{name: "time_zone", varType: "string", defaultVal: `"Etc/UTC"`},
 			{name: "scheduler_job_name", varType: "string", defaultVal: "null"},
 			{name: "scheduler_attempt_deadline", varType: "string", defaultVal: `"320s"`},
+			{name: "paused", varType: "bool", defaultVal: "false"},
 			{name: "deletion_protection", varType: "bool", defaultVal: "false"},
 			{name: "cpu_limit", varType: "string", defaultVal: `"1"`},
 			{name: "memory_limit", varType: "string", defaultVal: `"1Gi"`},
