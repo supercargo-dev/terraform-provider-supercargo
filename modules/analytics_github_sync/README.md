@@ -9,7 +9,7 @@ This module provisions:
 - **Deterministic Service Accounts**: Evaluates service account emails deterministically via `locals` (`${account_id}@${project_id}.iam.gserviceaccount.com`) to avoid Terraform plan-time cycle/dependency issues.
 - **Cloud Scheduler (`google_cloud_scheduler_job.sync_schedule`)**: Triggers the Cloud Run Admin API (`:run` endpoint) via POST with an OAuth token possessing the `https://www.googleapis.com/auth/cloud-platform` scope.
 - **Cloud Run Job Invoker IAM (`google_cloud_run_v2_job_iam_member.scheduler_invoker`)**: Grants `roles/run.invoker` strictly to the Cloud Scheduler service account.
-- **BigQuery IAM (`google_project_iam_member`)**: Grants `roles/bigquery.dataEditor` and `roles/bigquery.jobUser` to the sync service account.
+- **BigQuery IAM**: Grants `roles/bigquery.dataEditor` scoped strictly to the target dataset via `google_bigquery_dataset_iam_member.sync_job_bq_editor`, while `roles/bigquery.jobUser` is granted at the project level via `google_project_iam_member.sync_job_bq_user` for query job execution.
 - **Secret Manager IAM (`google_secret_manager_secret_iam_member`)**: Grants `roles/secretmanager.secretAccessor` for the GitHub token secret to the sync service account.
 - **Environment & Secrets Injection**: Injects `SUPERCARGO_VAULT_URL`, `SUPERCARGO_VAULT_AUDIENCE`, `SUPERCARGO_HUB_URL`, `SUPERCARGO_HUB_AUDIENCE`, `GOOGLE_CLOUD_PROJECT`, `DESTINATION__BIGQUERY__LOCATION`, `GITHUB_TOKEN`, and `SUPERCARGO_CREDENTIALS_SECRET` (via `secret_key_ref`).
 - **Lifecycle Decoupling**: Configures `lifecycle { ignore_changes = [template[0].template[0].containers[0].image, client, client_version] }` so CI/CD image promotions do not trigger drift or rollbacks during Terraform applies.

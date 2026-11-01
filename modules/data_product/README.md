@@ -87,7 +87,9 @@ gcloud run jobs execute <job-name> \
 | `hub_address` | The address of the Hub service | `string` | n/a | yes |
 | `kms_address` | The address of the KMS (Vault) service | `string` | n/a | yes |
 | `master_key_uri` | The URI of the Master Key in GCP KMS | `string` | n/a | yes |
-| `contracts` | Map of contracts to register and provision | `map(object)` | `{}` | no |
+| `contracts` | Map of contracts to register and provision. Each contract object defines: `{ version = string, schema_json = string, commit_sha = string, content_hash = string }`. Standardized to `schema_json` (legacy `schema` removed in BC-7). | `map(object)` | `{}` | no |
+| `hub_oidc_audience` | The OIDC audience for the Hub service (Internal OIDC). Replaces legacy `hub_iap_client_id` removed in BC-7. | `string` | `""` | no |
+| `vault_oidc_audience` | The OIDC audience for the Vault service (Internal OIDC). Replaces legacy `vault_iap_client_id` removed in BC-7. | `string` | `""` | no |
 | `log_level` | Log level for the service | `string` | `"info"` | no |
 | `container_memory` | The memory limit for the container | `string` | `"512Mi"` | no |
 | `container_cpu` | The CPU limit for the container | `string` | `"1"` | no |
@@ -112,6 +114,11 @@ gcloud run jobs execute <job-name> \
 | `dlq_alert_threshold` | Threshold count of undelivered messages in DLQ to trigger alert | `number` | `0` | no |
 | `dlq_unacked_message_age_seconds` | Threshold age (seconds) of oldest unacknowledged DLQ message | `number` | `300` | no |
 | `dlq_runbook_url` | Runbook URL for DLQ incident remediation | `string` | `"https://docs.supercargo.dev/operations/runbooks/dlq-remediation"` | no |
+
+### BC-7 Breaking Changes & Upgrades
+
+- **`contracts.*.schema_json` Property**: Starting in BC-7, the `contracts` map requires `schema_json` (the serialized BigQuery schema JSON string) instead of the deprecated `schema` attribute. This matches the contract outputs from `data.supercargo_data_product.this.contracts` and provides unambiguous schema definitions.
+- **Decommissioned Backend IAP**: The legacy `hub_iap_client_id` and `vault_iap_client_id` variables have been removed. Service-to-service calls to Hub and Vault use Google Cloud IAM OIDC tokens authenticated via `hub_oidc_audience` and `vault_oidc_audience`.
 
 ## Outputs
 
