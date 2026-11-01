@@ -196,7 +196,6 @@ func startMockHubServer(t *testing.T) (*mockHubServer, *ProviderData, string) {
 	providerData := &ProviderData{
 		HubAddress: addr,
 		HubClient:  client,
-		Cache:      &sync.Map{},
 	}
 
 	return mockSrv, providerData, addr

@@ -3,11 +3,15 @@ package hub
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -163,13 +167,14 @@ func (f *Factory) GetClientWithTLS(ctx context.Context, address string, token st
 			var err error
 			ts, err = idtoken.NewTokenSource(ctx, resolvedAudience)
 			if err != nil {
-				return nil, fmt.Errorf("failed to create OIDC token source for %s: %w", resolvedAudience, err)
+				return nil, RedactBearerToken(fmt.Errorf("failed to create OIDC token source for %s: %w", resolvedAudience, err))
 			}
 		}
 
 		creds := NewOIDCCredentials(ts)
+		tlsConfig := buildTLSConfig(x509.SystemCertPool)
 		dialOpts = append(dialOpts,
-			grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(nil, "")),
+			grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
 			grpc.WithPerRPCCredentials(creds),
 		)
 	}
@@ -190,7 +195,7 @@ func (f *Factory) GetClientWithTLS(ctx context.Context, address string, token st
 
 	conn, err := grpc.NewClient(cleanAddress, dialOpts...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial hub at %s: %w", cleanAddress, err)
+		return nil, RedactBearerToken(fmt.Errorf("failed to dial hub at %s: %w", cleanAddress, err))
 	}
 
 	client := &Client{
@@ -238,4 +243,98 @@ func (f *Factory) Close() error {
 		return errors.Join(errs...)
 	}
 	return nil
+}
+
+func buildTLSConfig(systemPoolFn func() (*x509.CertPool, error)) *tls.Config {
+	var systemPoolFailed bool
+	rootCAs, err := systemPoolFn()
+	if err != nil || rootCAs == nil {
+		rootCAs = x509.NewCertPool()
+		systemPoolFailed = true
+	}
+
+	seenPaths := make(map[string]struct{})
+	caFiles := make([]string, 0, 4)
+
+	addFile := func(path string) {
+		cleanPath := filepath.Clean(strings.TrimSpace(path))
+		if cleanPath == "" || cleanPath == "." {
+			return
+		}
+		if _, seen := seenPaths[cleanPath]; !seen {
+			seenPaths[cleanPath] = struct{}{}
+			caFiles = append(caFiles, cleanPath)
+		}
+	}
+
+	if certFile := os.Getenv("SSL_CERT_FILE"); certFile != "" {
+		addFile(certFile)
+	}
+	if curlBundle := os.Getenv("CURL_CA_BUNDLE"); curlBundle != "" {
+		addFile(curlBundle)
+	}
+	if certDir := os.Getenv("SSL_CERT_DIR"); certDir != "" {
+		for _, dir := range filepath.SplitList(certDir) {
+			cleanDir := filepath.Clean(strings.TrimSpace(dir))
+			if cleanDir == "" || cleanDir == "." {
+				continue
+			}
+			if entries, err := os.ReadDir(cleanDir); err == nil {
+				for _, entry := range entries {
+					if entry.IsDir() {
+						continue
+					}
+					name := entry.Name()
+					if strings.HasSuffix(name, ".crt") || strings.HasSuffix(name, ".pem") {
+						addFile(filepath.Join(cleanDir, name))
+					}
+				}
+			}
+		}
+	}
+
+	var certsAdded int
+	for _, caFile := range caFiles {
+		data, err := os.ReadFile(caFile)
+		if err == nil && len(data) > 0 {
+			if rootCAs.AppendCertsFromPEM(data) {
+				certsAdded++
+			}
+		}
+	}
+
+	// Empty CertPool blackhole prevention:
+	// If SystemCertPool failed and no valid certificates were added from the environment,
+	// setting RootCAs to an empty pool would cause all TLS handshakes to fail.
+	// Falling back to nil allows standard Go fallback resolution.
+	if systemPoolFailed && certsAdded == 0 {
+		rootCAs = nil
+	}
+
+	return &tls.Config{
+		RootCAs:            rootCAs,
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: false,
+	}
+}
+
+var bearerRegex = regexp.MustCompile(`(?i)Bearer\s+[A-Za-z0-9\-._~+/]+=*`)
+
+// RedactBearerToken redacts sensitive bearer tokens from error messages and appends
+// a Darwin Seatbelt TLS diagnostic hint if a certificate/handshake issue is detected.
+func RedactBearerToken(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	msg = bearerRegex.ReplaceAllString(msg, "Bearer [REDACTED]")
+
+	lower := strings.ToLower(msg)
+	if strings.Contains(lower, "x509") || strings.Contains(lower, "certificate") || strings.Contains(lower, "handshake") {
+		const darwinHint = "In restricted Darwin Seatbelt environments, export custom root CA bundles via SSL_CERT_FILE or CURL_CA_BUNDLE"
+		if !strings.Contains(msg, darwinHint) {
+			msg = fmt.Sprintf("%s. %s", msg, darwinHint)
+		}
+	}
+	return errors.New(msg)
 }

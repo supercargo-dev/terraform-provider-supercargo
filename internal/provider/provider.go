@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
@@ -37,7 +36,6 @@ type SupercargoProviderModel struct {
 type ProviderData struct {
 	HubAddress string
 	HubClient  *hub.Client
-	Cache      *sync.Map
 }
 
 func (p *SupercargoProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -85,7 +83,6 @@ func (p *SupercargoProvider) Configure(ctx context.Context, req provider.Configu
 		providerData := &ProviderData{
 			HubAddress: "unknown",
 			HubClient:  nil,
-			Cache:      &sync.Map{},
 		}
 		resp.DataSourceData = providerData
 		resp.ResourceData = providerData
@@ -106,7 +103,7 @@ func (p *SupercargoProvider) Configure(ctx context.Context, req provider.Configu
 
 	client, err := p.factory.GetClientWithTLS(ctx, hubAddress, data.Token.ValueString(), data.Audience.ValueString(), useTLS)
 	if err != nil {
-		detail := fmt.Sprintf("failed to dial hub at %s: %s\n\nHint: Remote Hub connections default to TLS (use_tls = true). If connecting to a plaintext internal or test Hub, explicitly set use_tls = false in provider \"supercargo\".", hubAddress, err)
+		detail := fmt.Sprintf("failed to dial hub at %s: %s\n\nHint: Remote Hub connections default to TLS (use_tls = true). If connecting to a plaintext internal or test Hub, explicitly set use_tls = false in provider \"supercargo\".\n\nHint: In restricted Darwin Seatbelt environments, export custom root CA bundles via SSL_CERT_FILE or CURL_CA_BUNDLE.", hubAddress, err)
 		resp.Diagnostics.AddError(
 			"Error Creating Hub Client",
 			detail,
@@ -117,7 +114,6 @@ func (p *SupercargoProvider) Configure(ctx context.Context, req provider.Configu
 	providerData := &ProviderData{
 		HubAddress: hubAddress,
 		HubClient:  client,
-		Cache:      &sync.Map{},
 	}
 
 	resp.DataSourceData = providerData

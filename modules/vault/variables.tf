@@ -50,24 +50,6 @@ variable "oidc_audience" {
   default     = ""
 }
 
-variable "iap_enabled" {
-  description = "Whether to enable IAP for the service"
-  type        = bool
-  default     = false
-}
-
-variable "iap_client_id" {
-  description = "The OAuth 2.0 Client ID for IAP (manually created)"
-  type        = string
-  default     = ""
-}
-
-variable "iap_allowed_members" {
-  description = "List of members to grant IAP access to"
-  type        = list(string)
-  default     = []
-}
-
 variable "authorized_invokers" {
   description = "List of IAM members authorized to invoke the vault directly"
   type        = list(string)

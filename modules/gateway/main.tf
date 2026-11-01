@@ -105,14 +105,6 @@ resource "google_cloud_run_v2_service" "gateway" {
         value = "gcp-kms://${var.master_key_uri}"
       }
       env {
-        name  = "HUB_IAP_CLIENT_ID"
-        value = var.hub_iap_client_id
-      }
-      env {
-        name  = "VAULT_IAP_CLIENT_ID"
-        value = var.vault_iap_client_id
-      }
-      env {
         name  = "HUB_OIDC_AUDIENCE"
         value = var.hub_oidc_audience
       }

@@ -24,7 +24,7 @@ locals {
       length(split(":", k)) > 1 ? element(split(":", k), length(split(":", k)) - 1) : k
       ) => {
       id     = c.id
-      schema = c.schema
+      schema = c.schema_json
     }
   }
 }
@@ -52,8 +52,6 @@ module "gateway" {
   hub_address                         = var.hub_address
   kms_address                         = var.kms_address
   master_key_uri                      = var.master_key_uri
-  hub_iap_client_id                   = var.hub_iap_client_id
-  vault_iap_client_id                 = var.vault_iap_client_id
   hub_oidc_audience                   = var.hub_oidc_audience
   vault_oidc_audience                 = var.vault_oidc_audience
   bigquery_dataset_id                 = var.bigquery_dataset_id

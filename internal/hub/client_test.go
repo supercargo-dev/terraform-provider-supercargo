@@ -1,14 +1,25 @@
 package hub
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
+	"encoding/pem"
+	"errors"
 	"fmt"
+	"math/big"
 	"net"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -435,4 +446,128 @@ func TestFactory_GetClient_CacheKeyIsolation(t *testing.T) {
 	count := len(factory.clients)
 	factory.mu.Unlock()
 	assert.Equal(t, 4, count, "factory map should have exactly 4 clients (audience-a, audience-b, tls-false, tls-true)")
+}
+
+func generateTestCertPEM(t *testing.T) []byte {
+	t.Helper()
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			Organization: []string{"Supercargo Test CA"},
+		},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+	}
+
+	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	require.NoError(t, err)
+
+	var buf bytes.Buffer
+	err = pem.Encode(&buf, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+	require.NoError(t, err)
+	return buf.Bytes()
+}
+
+func TestBuildTLSConfig_SystemPoolSuccessNoEnv(t *testing.T) {
+	// Must run serially when env vars might be touched
+	mockPool := x509.NewCertPool()
+	systemPoolFn := func() (*x509.CertPool, error) {
+		return mockPool, nil
+	}
+
+	cfg := buildTLSConfig(systemPoolFn)
+	require.NotNil(t, cfg)
+	assert.Equal(t, uint16(tls.VersionTLS12), cfg.MinVersion)
+	assert.False(t, cfg.InsecureSkipVerify)
+	assert.Same(t, mockPool, cfg.RootCAs)
+}
+
+func TestBuildTLSConfig_SSLCertFile(t *testing.T) {
+	certPEM := generateTestCertPEM(t)
+	certFile := filepath.Join(t.TempDir(), "custom-ca.crt")
+	require.NoError(t, os.WriteFile(certFile, certPEM, 0644))
+
+	t.Setenv("SSL_CERT_FILE", certFile)
+	t.Setenv("CURL_CA_BUNDLE", "")
+	t.Setenv("SSL_CERT_DIR", "")
+
+	mockPool := x509.NewCertPool()
+	systemPoolFn := func() (*x509.CertPool, error) {
+		return mockPool, nil
+	}
+
+	cfg := buildTLSConfig(systemPoolFn)
+	require.NotNil(t, cfg)
+	assert.NotNil(t, cfg.RootCAs)
+	assert.Equal(t, uint16(tls.VersionTLS12), cfg.MinVersion)
+	assert.False(t, cfg.InsecureSkipVerify)
+}
+
+func TestBuildTLSConfig_CURLCABundle(t *testing.T) {
+	certPEM := generateTestCertPEM(t)
+	bundleFile := filepath.Join(t.TempDir(), "curl-ca.crt")
+	require.NoError(t, os.WriteFile(bundleFile, certPEM, 0644))
+
+	t.Setenv("SSL_CERT_FILE", "")
+	t.Setenv("CURL_CA_BUNDLE", bundleFile)
+	t.Setenv("SSL_CERT_DIR", "")
+
+	mockPool := x509.NewCertPool()
+	systemPoolFn := func() (*x509.CertPool, error) {
+		return mockPool, nil
+	}
+
+	cfg := buildTLSConfig(systemPoolFn)
+	require.NotNil(t, cfg)
+	assert.NotNil(t, cfg.RootCAs)
+}
+
+func TestBuildTLSConfig_SSLCertDir(t *testing.T) {
+	certPEM := generateTestCertPEM(t)
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "ca1.crt"), certPEM, 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "ca2.pem"), certPEM, 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "ignored.txt"), []byte("not a cert"), 0644))
+
+	t.Setenv("SSL_CERT_FILE", "")
+	t.Setenv("CURL_CA_BUNDLE", "")
+	t.Setenv("SSL_CERT_DIR", dir)
+
+	mockPool := x509.NewCertPool()
+	systemPoolFn := func() (*x509.CertPool, error) {
+		return mockPool, nil
+	}
+
+	cfg := buildTLSConfig(systemPoolFn)
+	require.NotNil(t, cfg)
+	assert.NotNil(t, cfg.RootCAs)
+}
+
+func TestBuildTLSConfig_FallbackNilWhenSystemPoolFailsAndNoEnv(t *testing.T) {
+	t.Setenv("SSL_CERT_FILE", "")
+	t.Setenv("CURL_CA_BUNDLE", "")
+	t.Setenv("SSL_CERT_DIR", "")
+
+	systemPoolFn := func() (*x509.CertPool, error) {
+		return nil, errors.New("system keychain unavailable")
+	}
+
+	cfg := buildTLSConfig(systemPoolFn)
+	require.NotNil(t, cfg)
+	assert.Nil(t, cfg.RootCAs, "should fallback to nil so Go default fallback works")
+}
+
+func TestRedactBearerToken_AndDiagnosticHint(t *testing.T) {
+	rawErr := errors.New("rpc error: code = Unavailable desc = connection failed to hub: Bearer secret-token-12345: x509: certificate signed by unknown authority")
+	sanitized := RedactBearerToken(rawErr)
+	require.NotNil(t, sanitized)
+	assert.NotContains(t, sanitized.Error(), "secret-token-12345")
+	assert.Contains(t, sanitized.Error(), "Bearer [REDACTED]")
+	assert.Contains(t, sanitized.Error(), "In restricted Darwin Seatbelt environments, export custom root CA bundles via SSL_CERT_FILE or CURL_CA_BUNDLE")
 }

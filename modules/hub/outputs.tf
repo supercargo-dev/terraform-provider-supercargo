@@ -13,11 +13,6 @@ output "deployment_project_id" {
   value       = var.project_id
 }
 
-output "iap_client_id" {
-  description = "The OAuth 2.0 Client ID for IAP"
-  value       = var.iap_client_id
-}
-
 output "contract_changed_topic_id" {
   description = "Pub/Sub topic ID for contract changed events"
   value       = google_pubsub_topic.contract_changed.id

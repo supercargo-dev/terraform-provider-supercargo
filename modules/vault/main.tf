@@ -7,7 +7,6 @@ resource "google_project_service" "vault_apis" {
     "cloudkms.googleapis.com",
     "secretmanager.googleapis.com",
     "pubsub.googleapis.com",
-    "iap.googleapis.com",
     "monitoring.googleapis.com",
     "logging.googleapis.com",
   ])
@@ -167,9 +166,6 @@ resource "google_cloud_run_v2_service" "vault" {
   # Production logic: Internal-only ingress (or controlled via variable)
   ingress = var.ingress_type
 
-  # Enable Direct IAP (Preview feature)
-  iap_enabled = var.iap_enabled
-
   custom_audiences = var.custom_audiences
 
   deletion_protection = false
@@ -316,26 +312,6 @@ resource "google_cloud_run_v2_service_iam_member" "gateway_invoker" {
   member   = "serviceAccount:${var.gateway_service_account_email}"
 }
 
-// Explicitly create the IAP Service Agent to avoid "member does not exist" errors
-resource "google_project_service_identity" "iap_sa" {
-  count    = var.iap_enabled ? 1 : 0
-  provider = google-beta
-  project  = var.project_id
-  service  = "iap.googleapis.com"
-
-  depends_on = [time_sleep.wait_for_vault_apis]
-}
-
-# Grant the IAP Service Agent permission to invoke the Cloud Run service
-resource "google_cloud_run_v2_service_iam_member" "iap_invoker" {
-  count    = var.iap_enabled ? 1 : 0
-  project  = var.project_id
-  location = var.region
-  name     = google_cloud_run_v2_service.vault.name
-  role     = "roles/run.invoker"
-  member   = "serviceAccount:${google_project_service_identity.iap_sa[0].email}"
-}
-
 resource "google_cloud_run_v2_service_iam_member" "additional_invokers" {
   for_each = toset(var.authorized_invokers)
   project  = var.project_id
@@ -345,13 +321,3 @@ resource "google_cloud_run_v2_service_iam_member" "additional_invokers" {
   member   = each.value
 }
 
-# Grant authorized users access via IAP
-resource "google_iap_web_cloud_run_service_iam_member" "iap_accessor" {
-  provider               = google-beta
-  for_each               = var.iap_enabled ? toset(var.iap_allowed_members) : []
-  project                = var.project_id
-  cloud_run_service_name = google_cloud_run_v2_service.vault.name
-  location               = var.region
-  role                   = "roles/iap.httpsResourceAccessor"
-  member                 = each.value
-}

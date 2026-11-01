@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	dschema "github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -149,6 +150,10 @@ func TestSupercargoDataProductDataSource_Schema(t *testing.T) {
 
 	assert.NotNil(t, resp.Schema.Attributes["contracts"])
 	assert.True(t, resp.Schema.Attributes["contracts"].IsComputed())
+	contractsAttr, ok := resp.Schema.Attributes["contracts"].(dschema.MapNestedAttribute)
+	require.True(t, ok)
+	assert.NotNil(t, contractsAttr.NestedObject.Attributes["schema_json"], "contracts must expose schema_json attribute")
+	assert.Nil(t, contractsAttr.NestedObject.Attributes["schema"], "contracts must no longer expose legacy schema attribute")
 
 	assert.NotNil(t, resp.Schema.Attributes["sla"])
 	assert.True(t, resp.Schema.Attributes["sla"].IsComputed())
@@ -382,6 +387,7 @@ func TestSupercargoDataProductDataSource_Read_HubSuccess(t *testing.T) {
 	require.Contains(t, contracts, "urn:supercargo:hub:contract:hub-contract-1")
 	assert.Equal(t, "urn:supercargo:hub:contract:hub-contract-1", contracts["urn:supercargo:hub:contract:hub-contract-1"].ID.ValueString())
 	assert.Equal(t, "hash123456", contracts["urn:supercargo:hub:contract:hub-contract-1"].ContentHash.ValueString())
+	assert.NotEmpty(t, contracts["urn:supercargo:hub:contract:hub-contract-1"].SchemaJSON.ValueString())
 }
 
 func TestSupercargoDataProductDataSource_Read_Fallback(t *testing.T) {
@@ -433,6 +439,7 @@ func TestSupercargoDataProductDataSource_Read_Fallback(t *testing.T) {
 		resp.Diagnostics.Append(state.Contracts.ElementsAs(ctx, &contracts, false)...)
 		require.False(t, resp.Diagnostics.HasError())
 		require.Contains(t, contracts, "urn:supercargo:hub:contract:order-events")
+		assert.NotEmpty(t, contracts["urn:supercargo:hub:contract:order-events"].SchemaJSON.ValueString())
 	})
 
 	t.Run("Hub client nil falls back to local manifest loading", func(t *testing.T) {
