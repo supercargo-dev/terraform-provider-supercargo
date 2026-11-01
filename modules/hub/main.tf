@@ -11,7 +11,6 @@ resource "google_project_service" "hub_apis" {
     "firestore.googleapis.com",
     "datastore.googleapis.com",
     "iam.googleapis.com",
-    "iap.googleapis.com", // Added IAP API
     "iamcredentials.googleapis.com",
     "eventarc.googleapis.com",
     "datalineage.googleapis.com",
@@ -55,36 +54,6 @@ resource "google_project_iam_member" "hub_dataplex_data_products_admin" {
   role       = "roles/dataplex.dataProductsAdmin"
   member     = "serviceAccount:${google_service_account.hub_runtime.email}"
   depends_on = [google_project_service.hub_apis]
-}
-
-// Explicitly create the IAP Service Agent to avoid "member does not exist" errors
-resource "google_project_service_identity" "iap_sa" {
-  count    = var.iap_enabled ? 1 : 0
-  provider = google-beta
-  project  = var.project_id
-  service  = "iap.googleapis.com"
-
-  depends_on = [google_project_service.hub_apis]
-}
-
-resource "google_cloud_run_v2_service_iam_member" "iap_invoker" {
-  count    = var.iap_enabled ? 1 : 0
-  project  = var.project_id
-  location = var.region
-  name     = google_cloud_run_v2_service.hub.name
-  role     = "roles/run.invoker"
-  member   = "serviceAccount:${google_project_service_identity.iap_sa[0].email}"
-}
-
-# Grant authorized users access via IAP
-resource "google_iap_web_cloud_run_service_iam_member" "iap_accessor" {
-  provider               = google-beta
-  for_each               = var.iap_enabled ? toset(var.iap_allowed_members) : []
-  project                = var.project_id
-  cloud_run_service_name = google_cloud_run_v2_service.hub.name
-  location               = var.region
-  role                   = "roles/iap.httpsResourceAccessor"
-  member                 = each.value
 }
 
 # Grant Gateway Service Account access to invoke Hub (IAM auth)
@@ -317,9 +286,6 @@ resource "google_cloud_run_v2_service" "hub" {
   # Security Note: Default is INGRESS_TRAFFIC_ALL for initial development.
   # Phased rollout to INGRESS_TRAFFIC_INTERNAL_ONLY or INGRESS_TRAFFIC_INTERNAL_AND_GCLB.
   ingress = var.ingress_type
-
-  # Enable Direct IAP (Preview feature)
-  iap_enabled = var.iap_enabled
 
   custom_audiences = var.custom_audiences
 

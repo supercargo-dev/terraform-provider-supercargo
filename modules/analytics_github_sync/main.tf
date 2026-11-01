@@ -140,10 +140,11 @@ resource "google_cloud_scheduler_job" "sync_schedule" {
   ]
 }
 
-resource "google_project_iam_member" "sync_job_bq_editor" {
-  project = var.project_id
-  role    = "roles/bigquery.dataEditor"
-  member  = "serviceAccount:${local.sa_email}"
+resource "google_bigquery_dataset_iam_member" "sync_job_bq_editor" {
+  project    = var.project_id
+  dataset_id = var.dataset
+  role       = "roles/bigquery.dataEditor"
+  member     = "serviceAccount:${local.sa_email}"
 
   depends_on = [
     google_service_account.sync_sa,

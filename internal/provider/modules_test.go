@@ -1,4 +1,4 @@
-package provider
+package provider_test
 
 import (
 	"crypto/md5"
@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hclparse"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -4117,3 +4120,309 @@ func TestModules_ControlPlaneModuleVariablesAndEnv(t *testing.T) {
 		}
 	})
 }
+
+func parseHCLFileAST(t *testing.T, parser *hclparse.Parser, path string) (*hcl.File, *hclsyntax.Body) {
+	t.Helper()
+	file, diags := parser.ParseHCLFile(path)
+	require.False(t, diags.HasErrors(), "HCL parse errors in %s: %s", path, diags.Error())
+	require.NotNil(t, file)
+	syntaxBody, ok := file.Body.(*hclsyntax.Body)
+	require.True(t, ok, "expected *hclsyntax.Body for %s", path)
+	return file, syntaxBody
+}
+
+func getExprSource(file *hcl.File, expr hclsyntax.Expression) string {
+	if expr == nil {
+		return ""
+	}
+	srcRange := expr.Range()
+	return strings.TrimSpace(string(file.Bytes[srcRange.Start.Byte:srcRange.End.Byte]))
+}
+
+func TestModules_BC7_Hardening_AST(t *testing.T) {
+	t.Parallel()
+	modulesDir := "../../modules"
+
+	t.Run("AC4_BackendServiceIAPDecommissioned", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			moduleName        string
+			prohibitedVars    []string
+			prohibitedOutputs []string
+		}{
+			{
+				moduleName:        "hub",
+				prohibitedVars:    []string{"iap_enabled", "iap_client_id", "iap_allowed_members"},
+				prohibitedOutputs: []string{"iap_client_id"},
+			},
+			{
+				moduleName:        "vault",
+				prohibitedVars:    []string{"iap_enabled", "iap_client_id", "iap_allowed_members"},
+				prohibitedOutputs: []string{"iap_client_id"},
+			},
+			{
+				moduleName:        "gateway",
+				prohibitedVars:    []string{"hub_iap_client_id", "vault_iap_client_id"},
+				prohibitedOutputs: nil,
+			},
+			{
+				moduleName:        "data_product",
+				prohibitedVars:    []string{"hub_iap_client_id", "vault_iap_client_id"},
+				prohibitedOutputs: nil,
+			},
+		}
+
+		for _, tt := range tests {
+			tt := tt
+			t.Run(tt.moduleName+"/variables", func(t *testing.T) {
+				t.Parallel()
+				parser := hclparse.NewParser()
+				varPath := filepath.Join(modulesDir, tt.moduleName, "variables.tf")
+				_, syntaxBody := parseHCLFileAST(t, parser, varPath)
+
+				foundVars := make(map[string]bool)
+				for _, block := range syntaxBody.Blocks {
+					if block.Type == "variable" && len(block.Labels) > 0 {
+						foundVars[block.Labels[0]] = true
+					}
+				}
+
+				for _, prohibited := range tt.prohibitedVars {
+					if foundVars[prohibited] {
+						t.Errorf("An argument named %q is not expected here. Remediation Hint: Backend service-to-service IAP has been decommissioned on Cloud Run. Replace legacy IAP parameters with native Google IAM OIDC authentication", prohibited)
+					}
+				}
+			})
+
+			if len(tt.prohibitedOutputs) > 0 {
+				t.Run(tt.moduleName+"/outputs", func(t *testing.T) {
+					t.Parallel()
+					parser := hclparse.NewParser()
+					outPath := filepath.Join(modulesDir, tt.moduleName, "outputs.tf")
+					_, syntaxBody := parseHCLFileAST(t, parser, outPath)
+
+					foundOutputs := make(map[string]bool)
+					for _, block := range syntaxBody.Blocks {
+						if block.Type == "output" && len(block.Labels) > 0 {
+							foundOutputs[block.Labels[0]] = true
+						}
+					}
+
+					for _, prohibited := range tt.prohibitedOutputs {
+						assert.False(t, foundOutputs[prohibited], "Module %s output %s must be decommissioned", tt.moduleName, prohibited)
+					}
+				})
+			}
+		}
+
+		t.Run("hub/main.tf/no_iap", func(t *testing.T) {
+			t.Parallel()
+			parser := hclparse.NewParser()
+			mainPath := filepath.Join(modulesDir, "hub", "main.tf")
+			file, syntaxBody := parseHCLFileAST(t, parser, mainPath)
+
+			for _, block := range syntaxBody.Blocks {
+				if block.Type == "resource" && len(block.Labels) == 2 {
+					resType, resName := block.Labels[0], block.Labels[1]
+					if resType == "google_cloud_run_v2_service" && resName == "hub" {
+						if _, hasIAP := block.Body.Attributes["iap_enabled"]; hasIAP {
+							t.Errorf("An argument named \"iap_enabled\" is not expected here. Remediation Hint: Backend service-to-service IAP has been decommissioned on Cloud Run. Replace legacy IAP parameters with native Google IAM OIDC authentication")
+						}
+					}
+					if resType == "google_project_service_identity" && resName == "iap_sa" {
+						t.Errorf("google_project_service_identity.iap_sa must be removed from hub/main.tf")
+					}
+					if resType == "google_cloud_run_v2_service_iam_member" && resName == "iap_invoker" {
+						t.Errorf("google_cloud_run_v2_service_iam_member.iap_invoker must be removed from hub/main.tf")
+					}
+					if resType == "google_iap_web_cloud_run_service_iam_member" && resName == "iap_accessor" {
+						t.Errorf("google_iap_web_cloud_run_service_iam_member.iap_accessor must be removed from hub/main.tf")
+					}
+					if resType == "google_project_service" && resName == "hub_apis" {
+						if forEachAttr, ok := block.Body.Attributes["for_each"]; ok {
+							exprSrc := getExprSource(file, forEachAttr.Expr)
+							assert.NotContains(t, exprSrc, "iap.googleapis.com", "hub_apis must not enable iap.googleapis.com")
+						}
+					}
+				}
+			}
+		})
+
+		t.Run("vault/main.tf/no_iap", func(t *testing.T) {
+			t.Parallel()
+			parser := hclparse.NewParser()
+			mainPath := filepath.Join(modulesDir, "vault", "main.tf")
+			file, syntaxBody := parseHCLFileAST(t, parser, mainPath)
+
+			for _, block := range syntaxBody.Blocks {
+				if block.Type == "resource" && len(block.Labels) == 2 {
+					resType, resName := block.Labels[0], block.Labels[1]
+					if resType == "google_cloud_run_v2_service" && resName == "vault" {
+						if _, hasIAP := block.Body.Attributes["iap_enabled"]; hasIAP {
+							t.Errorf("An argument named \"iap_enabled\" is not expected here. Remediation Hint: Backend service-to-service IAP has been decommissioned on Cloud Run. Replace legacy IAP parameters with native Google IAM OIDC authentication")
+						}
+					}
+					if resType == "google_project_service_identity" && resName == "iap_sa" {
+						t.Errorf("google_project_service_identity.iap_sa must be removed from vault/main.tf")
+					}
+					if resType == "google_cloud_run_v2_service_iam_member" && resName == "iap_invoker" {
+						t.Errorf("google_cloud_run_v2_service_iam_member.iap_invoker must be removed from vault/main.tf")
+					}
+					if resType == "google_iap_web_cloud_run_service_iam_member" && resName == "iap_accessor" {
+						t.Errorf("google_iap_web_cloud_run_service_iam_member.iap_accessor must be removed from vault/main.tf")
+					}
+					if resType == "google_project_service" && resName == "vault_apis" {
+						if forEachAttr, ok := block.Body.Attributes["for_each"]; ok {
+							exprSrc := getExprSource(file, forEachAttr.Expr)
+							assert.NotContains(t, exprSrc, "iap.googleapis.com", "vault_apis must not enable iap.googleapis.com")
+						}
+					}
+				}
+			}
+		})
+
+		t.Run("gateway/main.tf/no_iap_env", func(t *testing.T) {
+			t.Parallel()
+			parser := hclparse.NewParser()
+			mainPath := filepath.Join(modulesDir, "gateway", "main.tf")
+			file, syntaxBody := parseHCLFileAST(t, parser, mainPath)
+
+			for _, block := range syntaxBody.Blocks {
+				if block.Type == "resource" && len(block.Labels) == 2 && block.Labels[0] == "google_cloud_run_v2_service" && block.Labels[1] == "gateway" {
+					for _, templateBlock := range block.Body.Blocks {
+						if templateBlock.Type == "template" {
+							for _, containersBlock := range templateBlock.Body.Blocks {
+								if containersBlock.Type == "containers" {
+									for _, envBlock := range containersBlock.Body.Blocks {
+										if envBlock.Type == "env" {
+											if nameAttr, ok := envBlock.Body.Attributes["name"]; ok {
+												nameVal := getExprSource(file, nameAttr.Expr)
+												assert.NotEqual(t, `"HUB_IAP_CLIENT_ID"`, nameVal, "gateway must not inject HUB_IAP_CLIENT_ID")
+												assert.NotEqual(t, `"VAULT_IAP_CLIENT_ID"`, nameVal, "gateway must not inject VAULT_IAP_CLIENT_ID")
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		})
+
+		t.Run("data_product/main.tf/no_iap_passthrough", func(t *testing.T) {
+			t.Parallel()
+			parser := hclparse.NewParser()
+			mainPath := filepath.Join(modulesDir, "data_product", "main.tf")
+			_, syntaxBody := parseHCLFileAST(t, parser, mainPath)
+
+			for _, block := range syntaxBody.Blocks {
+				if block.Type == "module" && len(block.Labels) == 1 && block.Labels[0] == "gateway" {
+					if _, hasHubIAP := block.Body.Attributes["hub_iap_client_id"]; hasHubIAP {
+						t.Errorf("An argument named \"hub_iap_client_id\" is not expected here. Remediation Hint: Backend service-to-service IAP has been decommissioned on Cloud Run. Replace legacy IAP parameters with native Google IAM OIDC authentication")
+					}
+					if _, hasVaultIAP := block.Body.Attributes["vault_iap_client_id"]; hasVaultIAP {
+						t.Errorf("An argument named \"vault_iap_client_id\" is not expected here. Remediation Hint: Backend service-to-service IAP has been decommissioned on Cloud Run. Replace legacy IAP parameters with native Google IAM OIDC authentication")
+					}
+				}
+			}
+		})
+	})
+
+	t.Run("AC6_DataProductContractSchemaJSON", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		mainPath := filepath.Join(modulesDir, "data_product", "main.tf")
+		file, syntaxBody := parseHCLFileAST(t, parser, mainPath)
+
+		var gatewayContractsAttr *hclsyntax.Attribute
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "locals" {
+				if attr, ok := block.Body.Attributes["gateway_contracts"]; ok {
+					gatewayContractsAttr = attr
+					break
+				}
+			}
+		}
+		require.NotNil(t, gatewayContractsAttr, "gateway_contracts attribute must exist in locals")
+
+		exprSrc := getExprSource(file, gatewayContractsAttr.Expr)
+
+		// Check for forbidden legacy attribute access: c.schema
+		hasDeprecatedSchemaAccess := false
+		hclsyntax.Walk(gatewayContractsAttr.Expr, &astWalker{
+			onRelativeTraversal: func(node *hclsyntax.RelativeTraversalExpr) {
+				for _, tr := range node.Traversal {
+					if attrTr, ok := tr.(hcl.TraverseAttr); ok && attrTr.Name == "schema" {
+						hasDeprecatedSchemaAccess = true
+					}
+				}
+			},
+		})
+
+		if hasDeprecatedSchemaAccess {
+			t.Errorf("This object does not have an attribute named \"schema\". Did you mean \"schema_json\"?")
+		}
+
+		assert.Contains(t, exprSrc, "c.schema_json", "data_product gateway_contracts must map schema = c.schema_json")
+	})
+
+	t.Run("AC5_AnalyticsGitHubSyncBigQueryDatasetIAM", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		mainPath := filepath.Join(modulesDir, "analytics_github_sync", "main.tf")
+		file, syntaxBody := parseHCLFileAST(t, parser, mainPath)
+
+		var foundDatasetIAMBlock *hclsyntax.Block
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 {
+				resType, resName := block.Labels[0], block.Labels[1]
+				if resType == "google_project_iam_member" && resName == "sync_job_bq_editor" {
+					t.Errorf("google_project_iam_member.sync_job_bq_editor must be replaced with google_bigquery_dataset_iam_member")
+				}
+				if resType == "google_bigquery_dataset_iam_member" && resName == "sync_job_bq_editor" {
+					foundDatasetIAMBlock = block
+				}
+			}
+		}
+
+		require.NotNil(t, foundDatasetIAMBlock, "resource google_bigquery_dataset_iam_member.sync_job_bq_editor must exist")
+
+		projectAttr, ok := foundDatasetIAMBlock.Body.Attributes["project"]
+		require.True(t, ok, "project attribute must exist on google_bigquery_dataset_iam_member.sync_job_bq_editor")
+		assert.Equal(t, "var.project_id", getExprSource(file, projectAttr.Expr))
+
+		datasetAttr, ok := foundDatasetIAMBlock.Body.Attributes["dataset_id"]
+		require.True(t, ok, "dataset_id attribute must exist on google_bigquery_dataset_iam_member.sync_job_bq_editor")
+		assert.Equal(t, "var.dataset", getExprSource(file, datasetAttr.Expr))
+
+		roleAttr, ok := foundDatasetIAMBlock.Body.Attributes["role"]
+		require.True(t, ok, "role attribute must exist on google_bigquery_dataset_iam_member.sync_job_bq_editor")
+		assert.Equal(t, `"roles/bigquery.dataEditor"`, getExprSource(file, roleAttr.Expr))
+
+		memberAttr, ok := foundDatasetIAMBlock.Body.Attributes["member"]
+		require.True(t, ok, "member attribute must exist on google_bigquery_dataset_iam_member.sync_job_bq_editor")
+		assert.Equal(t, `"serviceAccount:${local.sa_email}"`, getExprSource(file, memberAttr.Expr))
+
+		dependsOnAttr, ok := foundDatasetIAMBlock.Body.Attributes["depends_on"]
+		require.True(t, ok, "depends_on attribute must exist on google_bigquery_dataset_iam_member.sync_job_bq_editor")
+		assert.Contains(t, getExprSource(file, dependsOnAttr.Expr), "google_service_account.sync_sa")
+	})
+}
+
+type astWalker struct {
+	onRelativeTraversal func(node *hclsyntax.RelativeTraversalExpr)
+}
+
+func (w *astWalker) Enter(node hclsyntax.Node) hcl.Diagnostics {
+	if rel, ok := node.(*hclsyntax.RelativeTraversalExpr); ok && w.onRelativeTraversal != nil {
+		w.onRelativeTraversal(rel)
+	}
+	return nil
+}
+
+func (w *astWalker) Exit(node hclsyntax.Node) hcl.Diagnostics {
+	return nil
+}
+

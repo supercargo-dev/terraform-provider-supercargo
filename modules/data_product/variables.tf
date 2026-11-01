@@ -92,18 +92,6 @@ variable "master_key_uri" {
   type        = string
 }
 
-variable "hub_iap_client_id" {
-  description = "The IAP Client ID for the Hub service"
-  type        = string
-  default     = ""
-}
-
-variable "vault_iap_client_id" {
-  description = "The IAP Client ID for the Vault service"
-  type        = string
-  default     = ""
-}
-
 variable "hub_oidc_audience" {
   description = "The OIDC audience for the Hub service (Internal OIDC)"
   type        = string

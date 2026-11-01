@@ -46,24 +46,6 @@ variable "create_gateway_invoker" {
   default     = false
 }
 
-variable "iap_enabled" {
-  description = "Whether to enable IAP for the service"
-  type        = bool
-  default     = false
-}
-
-variable "iap_client_id" {
-  description = "The OAuth 2.0 Client ID for IAP (manually created)"
-  type        = string
-  default     = ""
-}
-
-variable "iap_allowed_members" {
-  description = "List of members to grant IAP access to"
-  type        = list(string)
-  default     = []
-}
-
 variable "oidc_audience" {
   description = "The expected audience for OIDC tokens"
   type        = string
