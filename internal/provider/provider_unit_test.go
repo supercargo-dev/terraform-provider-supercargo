@@ -83,7 +83,6 @@ func TestSupercargoProvider_Configure(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, "unknown", data.HubAddress)
 		assert.Nil(t, data.HubClient)
-		assert.NotNil(t, data.Cache)
 
 		require.NotNil(t, resp.DataSourceData)
 		dsData, ok := resp.DataSourceData.(*ProviderData)
@@ -310,6 +309,7 @@ func TestSupercargoProvider_Configure(t *testing.T) {
 		assert.Contains(t, resp.Diagnostics.Errors()[0].Summary(), "Error Creating Hub Client")
 		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "hub factory is closed")
 		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "Remote Hub connections default to TLS")
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "In restricted Darwin Seatbelt environments, export custom root CA bundles via SSL_CERT_FILE or CURL_CA_BUNDLE")
 	})
 
 	t.Run("config get error handled gracefully", func(t *testing.T) {

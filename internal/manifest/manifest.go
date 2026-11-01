@@ -54,6 +54,30 @@ type bqFieldJSON struct {
 	Fields      []bqFieldJSON `json:"fields,omitempty"`
 }
 
+// ParseSLATier parses flexible SLA tier names into hubv1.SLATier enum.
+func ParseSLATier(tierStr string) (hubv1.SLATier, bool) {
+	s := strings.ToUpper(strings.TrimSpace(tierStr))
+	if val, ok := hubv1.SLATier_value[s]; ok {
+		return hubv1.SLATier(val), true
+	}
+	if val, ok := hubv1.SLATier_value["SLA_TIER_"+s]; ok {
+		return hubv1.SLATier(val), true
+	}
+
+	switch s {
+	case "GOLD", "TIER_1", "TIER1", "1", "MISSION_CRITICAL", "MISSION-CRITICAL":
+		return hubv1.SLATier_SLA_TIER_1_MISSION_CRITICAL, true
+	case "SILVER", "TIER_2", "TIER2", "2", "IMPORTANT":
+		return hubv1.SLATier_SLA_TIER_2_IMPORTANT, true
+	case "BRONZE", "TIER_3", "TIER3", "3", "BEST_EFFORT", "BEST-EFFORT":
+		return hubv1.SLATier_SLA_TIER_3_BEST_EFFORT, true
+	case "UNSPECIFIED", "0":
+		return hubv1.SLATier_SLA_TIER_UNSPECIFIED, true
+	default:
+		return hubv1.SLATier_SLA_TIER_UNSPECIFIED, false
+	}
+}
+
 // Load reads a YAML manifest file and unmarshals it into a protobuf message.
 func Load(path string) (*hubv1.ProductManifest, error) {
 	data, err := os.ReadFile(path)
@@ -62,9 +86,19 @@ func Load(path string) (*hubv1.ProductManifest, error) {
 	}
 
 	// 1. Unmarshal YAML to generic map
-	var raw any
+	var raw map[string]any
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal YAML: %w", err)
+	}
+
+	if slaRaw, ok := raw["sla"].(map[string]any); ok {
+		if tierVal, ok := slaRaw["tier"].(string); ok && tierVal != "" {
+			parsedTier, ok := ParseSLATier(tierVal)
+			if !ok {
+				return nil, fmt.Errorf("invalid SLA tier: '%s' is not a valid SLA tier. Valid values include: SLA_TIER_1_MISSION_CRITICAL (GOLD, TIER_1, MISSION_CRITICAL), SLA_TIER_2_IMPORTANT (SILVER, TIER_2, IMPORTANT), SLA_TIER_3_BEST_EFFORT (BRONZE, TIER_3, BEST_EFFORT)", tierVal)
+			}
+			slaRaw["tier"] = parsedTier.String()
+		}
 	}
 
 	// 2. Marshal to JSON

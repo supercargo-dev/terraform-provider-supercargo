@@ -2,9 +2,7 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -16,8 +14,6 @@ import (
 	"github.com/supercargo-dev/terraform-provider-supercargo/internal/manifest"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/encoding/protojson"
-	"gopkg.in/yaml.v3"
 )
 
 var _ datasource.DataSource = &supercargoDataProductDataSource{}
@@ -55,7 +51,7 @@ type supercargoSLAModel struct {
 
 type supercargoContractModel struct {
 	ID          types.String `tfsdk:"id"`
-	Schema      types.String `tfsdk:"schema"`
+	SchemaJSON  types.String `tfsdk:"schema_json"`
 	Version     types.String `tfsdk:"version"`
 	ContentHash types.String `tfsdk:"content_hash"`
 	CommitSha   types.String `tfsdk:"commit_sha"`
@@ -63,7 +59,7 @@ type supercargoContractModel struct {
 
 var contractAttrTypes = map[string]attr.Type{
 	"id":           types.StringType,
-	"schema":       types.StringType,
+	"schema_json":  types.StringType,
 	"version":      types.StringType,
 	"content_hash": types.StringType,
 	"commit_sha":   types.StringType,
@@ -130,7 +126,7 @@ func (d *supercargoDataProductDataSource) Schema(ctx context.Context, req dataso
 							MarkdownDescription: "Contract URN.",
 							Computed:            true,
 						},
-						"schema": schema.StringAttribute{
+						"schema_json": schema.StringAttribute{
 							MarkdownDescription: "BigQuery JSON schema.",
 							Computed:            true,
 						},
@@ -214,41 +210,14 @@ func (d *supercargoDataProductDataSource) Read(ctx context.Context, req datasour
 	manifestPath := ""
 	if hasManifest {
 		manifestPath = data.ManifestFile.ValueString()
-		manifestBytes, err := os.ReadFile(manifestPath)
+		var err error
+		localManifest, err = manifest.Load(manifestPath)
 		if err != nil {
-			resp.Diagnostics.AddError("Error Loading Manifest", fmt.Sprintf("Failed to read manifest file %q: %s", manifestPath, err))
-			return
-		}
-		var rawYaml map[string]any
-		if err := yaml.Unmarshal(manifestBytes, &rawYaml); err != nil {
-			resp.Diagnostics.AddError("Error Loading Manifest", fmt.Sprintf("Failed to parse YAML from %q: %s", manifestPath, err))
-			return
-		}
-
-		if slaRaw, ok := rawYaml["sla"].(map[string]any); ok {
-			if tierVal, ok := slaRaw["tier"].(string); ok && tierVal != "" {
-				parsedTier, ok := parseSLATier(tierVal)
-				if !ok {
-					resp.Diagnostics.AddError(
-						"Invalid SLA Tier",
-						fmt.Sprintf("'%s' is not a valid SLA tier. Valid values include: SLA_TIER_1_MISSION_CRITICAL (GOLD, TIER_1, MISSION_CRITICAL), SLA_TIER_2_IMPORTANT (SILVER, TIER_2, IMPORTANT), SLA_TIER_3_BEST_EFFORT (BRONZE, TIER_3, BEST_EFFORT)", tierVal),
-					)
-					return
-				}
-				slaRaw["tier"] = parsedTier.String()
+			if strings.Contains(strings.ToLower(err.Error()), "invalid sla tier") {
+				resp.Diagnostics.AddError("Invalid SLA Tier", err.Error())
+				return
 			}
-		}
-
-		jsonBytes, err := json.Marshal(rawYaml)
-		if err != nil {
-			resp.Diagnostics.AddError("Error Loading Manifest", fmt.Sprintf("Failed to convert YAML to JSON: %s", err))
-			return
-		}
-
-		localManifest = &hubv1.ProductManifest{}
-		unmarshaler := protojson.UnmarshalOptions{DiscardUnknown: true}
-		if err := unmarshaler.Unmarshal(jsonBytes, localManifest); err != nil {
-			resp.Diagnostics.AddError("Error Loading Manifest", fmt.Sprintf("Failed to unmarshal JSON to Proto: %s", err))
+			resp.Diagnostics.AddError("Error Loading Manifest", fmt.Sprintf("Failed to load manifest file %q: %s", manifestPath, err))
 			return
 		}
 
@@ -347,7 +316,7 @@ func (d *supercargoDataProductDataSource) Read(ctx context.Context, req datasour
 			}
 			contractsMap[c.Meta.Urn] = supercargoContractModel{
 				ID:          types.StringValue(c.Meta.Urn),
-				Schema:      types.StringValue(schemaJSON),
+				SchemaJSON:  types.StringValue(schemaJSON),
 				Version:     types.StringValue(c.Meta.Version),
 				ContentHash: types.StringValue(c.Meta.ContentHash),
 				CommitSha:   types.StringValue(c.Meta.CommitSha),
@@ -362,7 +331,7 @@ func (d *supercargoDataProductDataSource) Read(ctx context.Context, req datasour
 			for k, rc := range resolved {
 				contractsMap[k] = supercargoContractModel{
 					ID:          types.StringValue(rc.URN),
-					Schema:      types.StringValue(rc.SchemaJSON),
+					SchemaJSON:  types.StringValue(rc.SchemaJSON),
 					Version:     types.StringValue(rc.Version),
 					ContentHash: types.StringValue(rc.ContentHash),
 					CommitSha:   types.StringValue(rc.CommitSha),
@@ -475,28 +444,6 @@ func stringOrNull(s string) types.String {
 	return types.StringValue(s)
 }
 
-func parseSLATier(tierStr string) (hubv1.SLATier, bool) {
-	s := strings.ToUpper(strings.TrimSpace(tierStr))
-	if val, ok := hubv1.SLATier_value[s]; ok {
-		return hubv1.SLATier(val), true
-	}
-	if val, ok := hubv1.SLATier_value["SLA_TIER_"+s]; ok {
-		return hubv1.SLATier(val), true
-	}
-
-	switch s {
-	case "GOLD", "TIER_1", "TIER1", "1", "MISSION_CRITICAL", "MISSION-CRITICAL":
-		return hubv1.SLATier_SLA_TIER_1_MISSION_CRITICAL, true
-	case "SILVER", "TIER_2", "TIER2", "2", "IMPORTANT":
-		return hubv1.SLATier_SLA_TIER_2_IMPORTANT, true
-	case "BRONZE", "TIER_3", "TIER3", "3", "BEST_EFFORT", "BEST-EFFORT":
-		return hubv1.SLATier_SLA_TIER_3_BEST_EFFORT, true
-	case "UNSPECIFIED", "0":
-		return hubv1.SLATier_SLA_TIER_UNSPECIFIED, true
-	default:
-		return hubv1.SLATier_SLA_TIER_UNSPECIFIED, false
-	}
-}
 
 func calculateServiceIdentities(ctx context.Context, targetProject, productUrn string) (types.Map, diag.Diagnostics) {
 	if targetProject == "" || productUrn == "" {
