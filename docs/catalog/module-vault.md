@@ -42,9 +42,6 @@ module "vault" {
 | `custom_audiences` | `list(string)` | `[]` | no | List of custom audiences to accept for OIDC |
 | `force_deploy_trigger` | `string` | `"static"` | no | A value that, when changed, triggers a new Cloud Run revision (e.g. git SHA or image digest). Use 'latest' or a fixed value for idempotency. |
 | `gateway_service_account_email` | `string` | *required* | no | The service account email of the Ingestion Gateway |
-| `iap_allowed_members` | `list(string)` | `[]` | no | List of members to grant IAP access to |
-| `iap_client_id` | `string` | `""` | no | The OAuth 2.0 Client ID for IAP (manually created) |
-| `iap_enabled` | `bool` | `false` | no | Whether to enable IAP for the service |
 | `image` | `string` | *required* | no | The container image to deploy |
 | `ingress_type` | `string` | `"INGRESS_TRAFFIC_INTERNAL_ONLY"` | no | The ingress type for the Cloud Run service |
 | `key_rotation_period` | `string` | `"2592000s"` | no | The rotation period for the Cloud KMS master key (e.g. '2592000s' for 30 days). |
@@ -63,7 +60,6 @@ module "vault" {
 
 | Output | Sensitive | Description |
 | :--- | :--- | :--- |
-| `iap_client_id` | no | - |
 | `master_key_id` | no | - |
 | `service_account_email` | no | - |
 | `service_name` | no | - |

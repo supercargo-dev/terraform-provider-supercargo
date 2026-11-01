@@ -66,7 +66,6 @@ module "gateway" {
 | `force_deploy_trigger` | `string` | `"static"` | no | A value that, when changed, triggers a new Cloud Run revision (e.g. git SHA or image digest). Use 'latest' or a fixed value for idempotency. |
 | `gateway_audience` | `string` | `""` | no | The expected audience for OIDC tokens (e.g. the service URL) |
 | `hub_address` | `string` | *required* | no | The address of the Hub service |
-| `hub_iap_client_id` | `string` | `""` | no | The IAP Client ID for the Hub service |
 | `hub_oidc_audience` | `string` | `""` | no | The OIDC audience for the Hub service (Internal OIDC) |
 | `image` | `string` | *required* | no | The container image for The Guardian service |
 | `ingress_type` | `string` | `"INGRESS_TRAFFIC_ALL"` | no | The type of ingress traffic allowed (INGRESS_TRAFFIC_ALL or INGRESS_TRAFFIC_INTERNAL_ONLY or INGRESS_TRAFFIC_INTERNAL_AND_GCLB) |
@@ -86,7 +85,6 @@ module "gateway" {
 | `region` | `string` | *required* | no | The GCP region |
 | `service_account_id` | `string` | `""` | no | Optional custom service account ID for the Gateway. If unset, defaults to 'gateway-<product_id>' with optional name_suffix. |
 | `vault_address` | `string` | `""` | no | The address of the Vault service |
-| `vault_iap_client_id` | `string` | `""` | no | The IAP Client ID for the Vault service |
 | `vault_oidc_audience` | `string` | `""` | no | The OIDC audience for the Vault service (Internal OIDC) |
 
 ## Module Outputs

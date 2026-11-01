@@ -70,9 +70,6 @@ module "hub" {
 | `health_history_table_id` | `string` | `"asset_health_history"` | no | BigQuery table ID for asset health transition history |
 | `hub_image_tag` | `string` | `""` | no | The image tag for the hub service (Git SHA). Optional for local infra updates. |
 | `iam_domain` | `string` | `"example.com"` | no | The domain for IAM groups and users |
-| `iap_allowed_members` | `list(string)` | `[]` | no | List of members to grant IAP access to |
-| `iap_client_id` | `string` | `""` | no | The OAuth 2.0 Client ID for IAP (manually created) |
-| `iap_enabled` | `bool` | `false` | no | Whether to enable IAP for the service |
 | `image_project_id` | `string` | *required* | no | Project ID where the Artifact Registry resides |
 | `ingress_type` | `string` | `"INGRESS_TRAFFIC_ALL"` | no | The type of ingress traffic allowed (INGRESS_TRAFFIC_ALL or INGRESS_TRAFFIC_INTERNAL_ONLY or INGRESS_TRAFFIC_INTERNAL_AND_GCLB) |
 | `max_instances` | `number` | `3` | no | The maximum number of instances for the Hub service |
@@ -118,7 +115,6 @@ module "hub" {
 | `health_events_topic_id` | no | The Pub/Sub topic ID for asset health transition events |
 | `health_events_topic_name` | no | The Pub/Sub topic name for asset health transition events |
 | `hub_service_account_email` | no | The service account email of the Hub runtime service |
-| `iap_client_id` | no | The OAuth 2.0 Client ID for IAP |
 | `mcp_service_account_email` | no | The service account email of the Supercargo MCP companion service |
 | `mcp_service_name` | no | The name of the Supercargo MCP companion Cloud Run service |
 | `mcp_service_url` | no | The URI of the Supercargo MCP companion Cloud Run service |

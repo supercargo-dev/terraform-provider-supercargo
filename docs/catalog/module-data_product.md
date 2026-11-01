@@ -76,7 +76,6 @@ module "data_product" {
 | `force_deploy_trigger` | `string` | `"static"` | no | A value that, when changed, triggers a new Cloud Run revision (e.g. git SHA or image digest). Use 'latest' or a fixed value for idempotency. |
 | `gateway_audience` | `string` | `""` | no | - |
 | `hub_address` | `string` | *required* | no | The address of the Hub service |
-| `hub_iap_client_id` | `string` | `""` | no | The IAP Client ID for the Hub service |
 | `hub_oidc_audience` | `string` | `""` | no | The OIDC audience for the Hub service (Internal OIDC) |
 | `image` | `string` | *required* | no | The container image for The Guardian service |
 | `kms_address` | `string` | *required* | no | The address of the KMS (Vault) service |
@@ -93,7 +92,6 @@ module "data_product" {
 | `pubsub_minimum_backoff` | `string` | `"30s"` | no | The minimum backoff duration for retries. |
 | `region` | `string` | *required* | no | The GCP region |
 | `service_account_id` | `string` | `""` | no | Optional custom service account ID for the Gateway. If unset, defaults to 'gateway-<product_id>' with optional name_suffix. |
-| `vault_iap_client_id` | `string` | `""` | no | The IAP Client ID for the Vault service |
 | `vault_oidc_audience` | `string` | `""` | no | The OIDC audience for the Vault service (Internal OIDC) |
 
 ## Module Outputs

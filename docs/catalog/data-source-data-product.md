@@ -18,7 +18,7 @@ Retrieves metadata, BigQuery physical configuration, service identities, SLA, an
 | `contracts.*.commit_sha` | `string` | no | no | yes | no | Git commit SHA of the contract. |
 | `contracts.*.content_hash` | `string` | no | no | yes | no | SHA256 content hash of the contract. |
 | `contracts.*.id` | `string` | no | no | yes | no | Contract URN. |
-| `contracts.*.schema` | `string` | no | no | yes | no | BigQuery JSON schema. |
+| `contracts.*.schema_json` | `string` | no | no | yes | no | BigQuery JSON schema. |
 | `contracts.*.version` | `string` | no | no | yes | no | Contract semantic version. |
 | `id` | `string` | no | yes | yes | no | The URN of the Data Product. Optional if manifest_file is provided. |
 | `location` | `string` | no | no | yes | no | BigQuery dataset location resolved from the Data Product output ports. |
