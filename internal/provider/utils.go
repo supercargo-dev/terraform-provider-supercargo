@@ -164,4 +164,3 @@ func protoToSchemaJSON(fields []*hubv1.Field) (string, error) {
 	}
 	return string(bytes), nil
 }
-

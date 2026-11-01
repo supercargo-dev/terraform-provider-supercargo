@@ -338,4 +338,3 @@ func RedactBearerToken(err error) error {
 	}
 	return errors.New(msg)
 }
-

@@ -444,7 +444,6 @@ func stringOrNull(s string) types.String {
 	return types.StringValue(s)
 }
 
-
 func calculateServiceIdentities(ctx context.Context, targetProject, productUrn string) (types.Map, diag.Diagnostics) {
 	if targetProject == "" || productUrn == "" {
 		return types.MapNull(types.StringType), nil

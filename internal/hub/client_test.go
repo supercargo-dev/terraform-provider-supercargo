@@ -571,4 +571,3 @@ func TestRedactBearerToken_AndDiagnosticHint(t *testing.T) {
 	assert.Contains(t, sanitized.Error(), "Bearer [REDACTED]")
 	assert.Contains(t, sanitized.Error(), "In restricted Darwin Seatbelt environments, export custom root CA bundles via SSL_CERT_FILE or CURL_CA_BUNDLE")
 }
-

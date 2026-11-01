@@ -4425,4 +4425,3 @@ func (w *astWalker) Enter(node hclsyntax.Node) hcl.Diagnostics {
 func (w *astWalker) Exit(node hclsyntax.Node) hcl.Diagnostics {
 	return nil
 }
-
