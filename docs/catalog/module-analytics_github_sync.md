@@ -52,6 +52,7 @@ module "analytics_github_sync" {
 | `scheduler_attempt_deadline` | `string` | `"320s"` | no | The deadline for Cloud Scheduler job attempts. |
 | `scheduler_job_name` | `string` | `null` | no | Name of the Cloud Scheduler job. Defaults to <job_name>-schedule if empty. |
 | `scheduler_service_account_id` | `string` | `"analytics-github-sync-sched-sa"` | no | Custom account ID for the Cloud Scheduler service account. |
+| `schedules` | `map(string)` | `{}` | no | Optional map of cron schedules overriding defaults per contract (repositories, issues, pulls, workflow_runs, billing). |
 | `service_account_id` | `string` | `"analytics-github-sync-sa"` | no | Custom account ID for the Cloud Run Job service account. |
 | `time_zone` | `string` | `"Etc/UTC"` | no | Time zone for the Cloud Scheduler job. |
 | `timeout` | `string` | `"600s"` | no | Execution timeout for the Cloud Run job. |
@@ -63,10 +64,13 @@ module "analytics_github_sync" {
 
 | Output | Sensitive | Description |
 | :--- | :--- | :--- |
-| `job_id` | no | The full resource ID of the provisioned Cloud Run v2 Job. |
-| `job_name` | no | The name of the provisioned Cloud Run v2 Job. |
-| `scheduler_job_name` | no | The name of the Cloud Scheduler job triggering ingestion. |
-| `service_account_email` | no | Deterministic service account email running the ingestion Cloud Run Job. |
+| `job_id` | no | Primary Cloud Run v2 Job resource ID (deprecated: use job_ids). |
+| `job_ids` | no | Map of contract names to provisioned Cloud Run v2 Job resource IDs. |
+| `job_name` | no | Primary Cloud Run v2 Job name (deprecated: use job_names). |
+| `job_names` | no | Map of contract names to provisioned Cloud Run v2 Job names. |
+| `scheduler_job_name` | no | Primary Cloud Scheduler job name (deprecated: use scheduler_job_names). |
+| `scheduler_job_names` | no | Map of contract names to provisioned Cloud Scheduler job names. |
+| `service_account_email` | no | Deterministic service account email running the ingestion Cloud Run Jobs. |
 
 ## Implementation
 - Source Code: `modules/analytics_github_sync`
