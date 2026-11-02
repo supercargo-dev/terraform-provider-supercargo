@@ -137,3 +137,10 @@ variable "max_retries" {
   type        = number
   default     = 1
 }
+
+variable "schedules" {
+  description = "Optional map of cron schedules overriding defaults per contract (repositories, issues, pulls, workflow_runs, billing)."
+  type        = map(string)
+  default     = {}
+}
+
