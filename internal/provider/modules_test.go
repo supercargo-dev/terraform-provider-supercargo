@@ -3453,21 +3453,33 @@ func TestModules_AnalyticsGitHubSync(t *testing.T) {
 
 	t.Run("CloudRunJob", func(t *testing.T) {
 		content := readAnalyticsGitHubSyncModuleFile(t, "main.tf")
-		jobBlock := extractHCLBlock(content, `resource "google_cloud_run_v2_job" "sync_job"`)
-		require.NotEmpty(t, jobBlock, "google_cloud_run_v2_job.sync_job must exist")
+		jobBlock := extractHCLBlock(content, `resource "google_cloud_run_v2_job" "sync_jobs"`)
+		require.NotEmpty(t, jobBlock, "google_cloud_run_v2_job.sync_jobs must exist")
 
 		tests := []struct {
 			name     string
 			snippets []string
 		}{
 			{
-				name: "job resource definition",
+				name: "job resource definition and for_each",
 				snippets: []string{
-					`resource "google_cloud_run_v2_job" "sync_job"`,
-					`var.job_name`,
+					`resource "google_cloud_run_v2_job" "sync_jobs"`,
+					`for_each            = local.contracts`,
+					`name                = "${var.job_name}-${each.value.job_suffix}"`,
 					`var.region`,
 					`var.project_id`,
 					`var.deletion_protection`,
+				},
+			},
+			{
+				name: "contracts local definition",
+				snippets: []string{
+					`contracts = {`,
+					`repositories  = { job_suffix = "repositories", resource = "labeled_repositories", schedule = "0 1 * * *" }`,
+					`issues        = { job_suffix = "issues", resource = "issues", schedule = "0 2 * * *" }`,
+					`pulls         = { job_suffix = "pulls", resource = "pulls", schedule = "0 3 * * *" }`,
+					`workflow_runs = { job_suffix = "workflow-runs", resource = "workflow_runs", schedule = "0 4 * * *" }`,
+					`billing       = { job_suffix = "billing", resource = "org_metered_usage", schedule = "0 5 * * *" }`,
 				},
 			},
 			{
@@ -3506,7 +3518,7 @@ func TestModules_AnalyticsGitHubSync(t *testing.T) {
 				},
 			},
 			{
-				name: "container args compatibility",
+				name: "container args per-contract resources",
 				snippets: []string{
 					`"--destination"`,
 					`"bigquery"`,
@@ -3516,6 +3528,8 @@ func TestModules_AnalyticsGitHubSync(t *testing.T) {
 					`var.org`,
 					`"--topic"`,
 					`var.topic`,
+					`"--resources"`,
+					`each.value.resource`,
 				},
 			},
 			{
@@ -3523,6 +3537,16 @@ func TestModules_AnalyticsGitHubSync(t *testing.T) {
 				snippets: []string{
 					`service_account = local.sa_email`,
 					`google_service_account.sync_sa`,
+				},
+			},
+			{
+				name: "declarative moved blocks",
+				snippets: []string{
+					`moved {`,
+					`from = google_cloud_run_v2_job.sync_job`,
+					`to   = google_cloud_run_v2_job.sync_jobs["repositories"]`,
+					`from = google_cloud_scheduler_job.sync_schedule`,
+					`to   = google_cloud_scheduler_job.sync_schedules["repositories"]`,
 				},
 			},
 		}
@@ -3544,18 +3568,23 @@ func TestModules_AnalyticsGitHubSync(t *testing.T) {
 			snippets []string
 		}{
 			{
-				name: "scheduler invoker IAM binding",
+				name: "scheduler invoker IAM binding per contract",
 				snippets: []string{
 					`resource "google_cloud_run_v2_job_iam_member" "scheduler_invoker"`,
+					`for_each = local.contracts`,
+					`name     = google_cloud_run_v2_job.sync_jobs[each.key].name`,
 					`"roles/run.invoker"`,
 					`"serviceAccount:${local.scheduler_sa_email}"`,
 				},
 			},
 			{
-				name: "cloud scheduler job definition",
+				name: "cloud scheduler job definition per contract",
 				snippets: []string{
-					`resource "google_cloud_scheduler_job" "sync_schedule"`,
-					`https://${var.region}-run.googleapis.com/v2/projects/${var.project_id}/locations/${var.region}/jobs/${google_cloud_run_v2_job.sync_job.name}:run`,
+					`resource "google_cloud_scheduler_job" "sync_schedules"`,
+					`for_each         = local.contracts`,
+					`name             = "${var.job_name}-${each.value.job_suffix}-schedule"`,
+					`schedule         = try(var.schedules[each.key], each.value.schedule)`,
+					`https://${var.region}-run.googleapis.com/v2/projects/${var.project_id}/locations/${var.region}/jobs/${google_cloud_run_v2_job.sync_jobs[each.key].name}:run`,
 					`oauth_token {`,
 					`local.scheduler_sa_email`,
 					`"https://www.googleapis.com/auth/cloud-platform"`,
@@ -3623,6 +3652,8 @@ func TestModules_AnalyticsGitHubSync(t *testing.T) {
 			// 2 new optional variables for Hub telemetry / health reporting
 			{name: "hub_url", varType: "string", defaultVal: `""`},
 			{name: "hub_audience", varType: "string", defaultVal: `""`},
+			// Optional per-contract schedules override
+			{name: "schedules", varType: "map(string)", defaultVal: "{}"},
 		}
 
 		for _, ev := range expectedVars {
@@ -3646,14 +3677,28 @@ func TestModules_AnalyticsGitHubSync(t *testing.T) {
 				name: "job_name output",
 				snippets: []string{
 					`output "job_name"`,
-					`google_cloud_run_v2_job.sync_job.name`,
+					`google_cloud_run_v2_job.sync_jobs["repositories"].name`,
 				},
 			},
 			{
 				name: "job_id output",
 				snippets: []string{
 					`output "job_id"`,
-					`google_cloud_run_v2_job.sync_job.id`,
+					`google_cloud_run_v2_job.sync_jobs["repositories"].id`,
+				},
+			},
+			{
+				name: "job_names output",
+				snippets: []string{
+					`output "job_names"`,
+					`{ for k, v in google_cloud_run_v2_job.sync_jobs : k => v.name }`,
+				},
+			},
+			{
+				name: "job_ids output",
+				snippets: []string{
+					`output "job_ids"`,
+					`{ for k, v in google_cloud_run_v2_job.sync_jobs : k => v.id }`,
 				},
 			},
 			{
@@ -3667,7 +3712,14 @@ func TestModules_AnalyticsGitHubSync(t *testing.T) {
 				name: "scheduler_job_name output",
 				snippets: []string{
 					`output "scheduler_job_name"`,
-					`google_cloud_scheduler_job.sync_schedule.name`,
+					`google_cloud_scheduler_job.sync_schedules["repositories"].name`,
+				},
+			},
+			{
+				name: "scheduler_job_names output",
+				snippets: []string{
+					`output "scheduler_job_names"`,
+					`{ for k, v in google_cloud_scheduler_job.sync_schedules : k => v.name }`,
 				},
 			},
 		}
@@ -3701,6 +3753,8 @@ func TestModules_AnalyticsGitHubSync(t *testing.T) {
 		assert.Contains(t, content, "`hub_url`")
 		assert.Contains(t, content, "`hub_audience`")
 		assert.Contains(t, content, "`SUPERCARGO_CREDENTIALS_SECRET`")
+		assert.Contains(t, content, "`job_names`")
+		assert.Contains(t, content, "`scheduler_job_names`")
 	})
 }
 

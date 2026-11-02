@@ -1,6 +1,14 @@
 locals {
   sa_email           = "${var.service_account_id != null && var.service_account_id != "" ? var.service_account_id : "analytics-github-sync-sa"}@${var.project_id}.iam.gserviceaccount.com"
   scheduler_sa_email = "${var.scheduler_service_account_id != null && var.scheduler_service_account_id != "" ? var.scheduler_service_account_id : "analytics-github-sync-sched-sa"}@${var.project_id}.iam.gserviceaccount.com"
+
+  contracts = {
+    repositories  = { job_suffix = "repositories", resource = "labeled_repositories", schedule = "0 1 * * *" }
+    issues        = { job_suffix = "issues", resource = "issues", schedule = "0 2 * * *" }
+    pulls         = { job_suffix = "pulls", resource = "pulls", schedule = "0 3 * * *" }
+    workflow_runs = { job_suffix = "workflow-runs", resource = "workflow_runs", schedule = "0 4 * * *" }
+    billing       = { job_suffix = "billing", resource = "org_metered_usage", schedule = "0 5 * * *" }
+  }
 }
 
 resource "google_service_account" "sync_sa" {
@@ -15,8 +23,9 @@ resource "google_service_account" "scheduler_sa" {
   project      = var.project_id
 }
 
-resource "google_cloud_run_v2_job" "sync_job" {
-  name                = var.job_name
+resource "google_cloud_run_v2_job" "sync_jobs" {
+  for_each            = local.contracts
+  name                = "${var.job_name}-${each.value.job_suffix}"
   location            = var.region
   project             = var.project_id
   deletion_protection = var.deletion_protection
@@ -33,7 +42,8 @@ resource "google_cloud_run_v2_job" "sync_job" {
           "--destination", "bigquery",
           "--dataset", var.dataset,
           "--org", var.org,
-          "--topic", var.topic
+          "--topic", var.topic,
+          "--resources", each.value.resource
         ]
 
         env {
@@ -103,22 +113,24 @@ resource "google_cloud_run_v2_job" "sync_job" {
 }
 
 resource "google_cloud_run_v2_job_iam_member" "scheduler_invoker" {
+  for_each = local.contracts
   project  = var.project_id
   location = var.region
-  name     = google_cloud_run_v2_job.sync_job.name
+  name     = google_cloud_run_v2_job.sync_jobs[each.key].name
   role     = "roles/run.invoker"
   member   = "serviceAccount:${local.scheduler_sa_email}"
 
   depends_on = [
     google_service_account.scheduler_sa,
-    google_cloud_run_v2_job.sync_job,
+    google_cloud_run_v2_job.sync_jobs,
   ]
 }
 
-resource "google_cloud_scheduler_job" "sync_schedule" {
-  name             = var.scheduler_job_name != null && var.scheduler_job_name != "" ? var.scheduler_job_name : "${var.job_name}-schedule"
-  description      = "Scheduled trigger for Analytics GitHub Sync Cloud Run Job"
-  schedule         = var.schedule
+resource "google_cloud_scheduler_job" "sync_schedules" {
+  for_each         = local.contracts
+  name             = "${var.job_name}-${each.value.job_suffix}-schedule"
+  description      = "Scheduled trigger for Analytics GitHub Sync (${each.key}) Cloud Run Job"
+  schedule         = try(var.schedules[each.key], each.value.schedule)
   time_zone        = var.time_zone
   paused           = var.paused
   region           = var.region
@@ -127,7 +139,7 @@ resource "google_cloud_scheduler_job" "sync_schedule" {
 
   http_target {
     http_method = "POST"
-    uri         = "https://${var.region}-run.googleapis.com/v2/projects/${var.project_id}/locations/${var.region}/jobs/${google_cloud_run_v2_job.sync_job.name}:run"
+    uri         = "https://${var.region}-run.googleapis.com/v2/projects/${var.project_id}/locations/${var.region}/jobs/${google_cloud_run_v2_job.sync_jobs[each.key].name}:run"
 
     oauth_token {
       service_account_email = local.scheduler_sa_email
@@ -138,6 +150,16 @@ resource "google_cloud_scheduler_job" "sync_schedule" {
   depends_on = [
     google_cloud_run_v2_job_iam_member.scheduler_invoker,
   ]
+}
+
+moved {
+  from = google_cloud_run_v2_job.sync_job
+  to   = google_cloud_run_v2_job.sync_jobs["repositories"]
+}
+
+moved {
+  from = google_cloud_scheduler_job.sync_schedule
+  to   = google_cloud_scheduler_job.sync_schedules["repositories"]
 }
 
 resource "google_bigquery_dataset_iam_member" "sync_job_bq_editor" {
