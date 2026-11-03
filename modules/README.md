@@ -19,6 +19,7 @@
 - `analytics_github_sync/`: Provisions Cloud Run v2 Job and Cloud Scheduler trigger for autonomous topic-based GitHub ingestion into BigQuery.
 - `docs_portal/`: Provisions Cloud Run v2 documentation portal fronted by GCLB with Identity-Aware Proxy (IAP) and HTTP-to-HTTPS redirect.
 - `data_product/`: Provisions an end-to-end Data Product with declarative Pub/Sub streaming and DLT batch ingestion.
+- `analytics_runner/`: Provisions Cloud Run v2 Job and Cloud Scheduler trigger for autonomous transformation pipelines (dbt, SQLMesh) in BigQuery.
 
 ## BC-7 Breaking Change & Migration Guide
 
