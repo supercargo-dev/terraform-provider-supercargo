@@ -280,8 +280,28 @@ variable "console_iap_enabled" {
 }
 
 variable "console_iap_audience" {
-  description = "Expected IAP JWT audience for the Console companion service"
+  description = "Expected IAP JWT audience for the Console companion service (defaults to /projects/<project_number>/locations/<region>/services/console[-<name_suffix>] when Direct IAP is enabled)"
   type        = string
   default     = ""
 }
+
+variable "console_iap_allowed_members" {
+  description = "List of IAM members (e.g. domain:..., user:..., group:...) granted roles/iap.httpsResourceAccessor on the Console companion service when Direct IAP is enabled"
+  type        = list(string)
+  default     = []
+  validation {
+    condition = alltrue([
+      for m in var.console_iap_allowed_members :
+      startswith(m, "user:") || startswith(m, "domain:") || startswith(m, "group:") || startswith(m, "serviceAccount:")
+    ])
+    error_message = "Each member in console_iap_allowed_members must be a valid IAM principal string starting with 'user:', 'domain:', 'group:', or 'serviceAccount:'."
+  }
+}
+
+variable "console_telemetry_identity_salt" {
+  description = "Identity salt for console operational telemetry hashing (defaults to project/environment scoped salt when empty)"
+  type        = string
+  default     = ""
+}
+
 

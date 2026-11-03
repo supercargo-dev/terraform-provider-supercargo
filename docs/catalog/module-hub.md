@@ -49,10 +49,12 @@ module "hub" {
 | `catalog_dataset_id` | `string` | `"supercargo_catalog"` | no | BigQuery dataset ID for asset catalog and health history |
 | `console_allowed_invokers` | `list(string)` | `[]` | no | List of IAM members authorized to invoke the Console companion service |
 | `console_enabled` | `bool` | `false` | no | Whether to deploy the Supercargo Console companion Cloud Run service |
-| `console_iap_audience` | `string` | `""` | no | Expected IAP JWT audience for the Console companion service |
+| `console_iap_allowed_members` | `list(string)` | `[]` | no | List of IAM members (e.g. domain:..., user:..., group:...) granted roles/iap.httpsResourceAccessor on the Console companion service when Direct IAP is enabled |
+| `console_iap_audience` | `string` | `""` | no | Expected IAP JWT audience for the Console companion service (defaults to /projects/<project_number>/locations/<region>/services/console[-<name_suffix>] when Direct IAP is enabled) |
 | `console_iap_enabled` | `bool` | `false` | no | Whether to enable Direct IAP for the Console companion service |
 | `console_image_tag` | `string` | `""` | no | The image tag for the supercargo-console service (Git SHA). Optional for local infra updates. |
 | `console_max_instances` | `number` | `3` | no | The maximum number of instances for the Console companion service |
+| `console_telemetry_identity_salt` | `string` | `""` | no | Identity salt for console operational telemetry hashing (defaults to project/environment scoped salt when empty) |
 | `control_plane_topic` | `string` | *required* | no | The Pub/Sub topic ID for the control plane ingestion |
 | `create_gateway_invoker` | `bool` | `false` | no | Whether to create the IAM binding for the Gateway service account |
 | `current_health_view_id` | `string` | `"asset_current_health"` | no | BigQuery view ID for latest asset health analytical projection |

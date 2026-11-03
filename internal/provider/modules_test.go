@@ -4479,3 +4479,180 @@ func (w *astWalker) Enter(node hclsyntax.Node) hcl.Diagnostics {
 func (w *astWalker) Exit(node hclsyntax.Node) hcl.Diagnostics {
 	return nil
 }
+
+func TestModules_Console_DirectIAP_AST(t *testing.T) {
+	t.Parallel()
+	modulesDir := "../../modules"
+
+	t.Run("variables_console_iap_allowed_members", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		varPath := filepath.Join(modulesDir, "hub", "variables.tf")
+		file, syntaxBody := parseHCLFileAST(t, parser, varPath)
+
+		var varBlock *hclsyntax.Block
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "variable" && len(block.Labels) > 0 && block.Labels[0] == "console_iap_allowed_members" {
+				varBlock = block
+				break
+			}
+		}
+		require.NotNil(t, varBlock, "variable \"console_iap_allowed_members\" must be defined in modules/hub/variables.tf")
+
+		typeAttr, hasType := varBlock.Body.Attributes["type"]
+		require.True(t, hasType, "console_iap_allowed_members must specify type")
+		assert.Equal(t, "list(string)", getExprSource(file, typeAttr.Expr))
+
+		defaultAttr, hasDefault := varBlock.Body.Attributes["default"]
+		require.True(t, hasDefault, "console_iap_allowed_members must specify default")
+		assert.Equal(t, "[]", getExprSource(file, defaultAttr.Expr))
+
+		var validationBlock *hclsyntax.Block
+		for _, b := range varBlock.Body.Blocks {
+			if b.Type == "validation" {
+				validationBlock = b
+				break
+			}
+		}
+		require.NotNil(t, validationBlock, "console_iap_allowed_members must specify validation block")
+		condAttr, hasCond := validationBlock.Body.Attributes["condition"]
+		require.True(t, hasCond, "validation block must have condition attribute")
+		condSrc := getExprSource(file, condAttr.Expr)
+		assert.Contains(t, condSrc, "startswith(m, \"user:\")")
+		assert.Contains(t, condSrc, "startswith(m, \"domain:\")")
+		assert.Contains(t, condSrc, "startswith(m, \"group:\")")
+		assert.Contains(t, condSrc, "startswith(m, \"serviceAccount:\")")
+	})
+
+	t.Run("main_console_iap_audience_local_and_env", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		mainPath := filepath.Join(modulesDir, "hub", "main.tf")
+		file, syntaxBody := parseHCLFileAST(t, parser, mainPath)
+
+		var localConsoleIAPAudienceAttr *hclsyntax.Attribute
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "locals" {
+				if attr, ok := block.Body.Attributes["console_iap_audience"]; ok {
+					localConsoleIAPAudienceAttr = attr
+					break
+				}
+			}
+		}
+		require.NotNil(t, localConsoleIAPAudienceAttr, "local.console_iap_audience must be defined in modules/hub/main.tf")
+		exprSrc := getExprSource(file, localConsoleIAPAudienceAttr.Expr)
+		expectedAudienceExpr := `var.console_iap_audience != "" ? var.console_iap_audience : (var.console_iap_enabled ? "/projects/${var.project_number}/locations/${var.region}/services/console${var.name_suffix != "" ? "-${var.name_suffix}" : ""}" : "")`
+		assert.Equal(t, expectedAudienceExpr, exprSrc)
+
+		// Check google_cloud_run_v2_service.console env IAP_AUDIENCE
+		var consoleServiceBlock *hclsyntax.Block
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 && block.Labels[0] == "google_cloud_run_v2_service" && block.Labels[1] == "console" {
+				consoleServiceBlock = block
+				break
+			}
+		}
+		require.NotNil(t, consoleServiceBlock, "google_cloud_run_v2_service.console must exist in modules/hub/main.tf")
+
+		var foundIAPAudienceEnv bool
+		var foundTelemetryMasterSaltEnv bool
+		for _, templateBlock := range consoleServiceBlock.Body.Blocks {
+			if templateBlock.Type == "template" {
+				for _, containersBlock := range templateBlock.Body.Blocks {
+					if containersBlock.Type == "containers" {
+						for _, envBlock := range containersBlock.Body.Blocks {
+							if envBlock.Type == "env" {
+								if nameAttr, ok := envBlock.Body.Attributes["name"]; ok {
+									envName := getExprSource(file, nameAttr.Expr)
+									if envName == `"IAP_AUDIENCE"` {
+										valAttr, hasVal := envBlock.Body.Attributes["value"]
+										require.True(t, hasVal, "IAP_AUDIENCE env block must have value")
+										assert.Equal(t, "local.console_iap_audience", getExprSource(file, valAttr.Expr))
+										foundIAPAudienceEnv = true
+									}
+									if envName == `"TELEMETRY_MASTER_SALT"` {
+										valAttr, hasVal := envBlock.Body.Attributes["value"]
+										require.True(t, hasVal, "TELEMETRY_MASTER_SALT env block must have value")
+										assert.Equal(t, "local.console_telemetry_identity_salt", getExprSource(file, valAttr.Expr))
+										foundTelemetryMasterSaltEnv = true
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		assert.True(t, foundIAPAudienceEnv, "google_cloud_run_v2_service.console must wire IAP_AUDIENCE to local.console_iap_audience")
+		assert.True(t, foundTelemetryMasterSaltEnv, "google_cloud_run_v2_service.console must wire TELEMETRY_MASTER_SALT to local.console_telemetry_identity_salt")
+	})
+
+	t.Run("main_console_iap_service_agent_invoker_resource", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		mainPath := filepath.Join(modulesDir, "hub", "main.tf")
+		file, syntaxBody := parseHCLFileAST(t, parser, mainPath)
+
+		var invokerBlock *hclsyntax.Block
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 &&
+				block.Labels[0] == "google_cloud_run_v2_service_iam_member" &&
+				block.Labels[1] == "console_iap_service_agent_invoker" {
+				invokerBlock = block
+				break
+			}
+		}
+		require.NotNil(t, invokerBlock, "resource google_cloud_run_v2_service_iam_member.console_iap_service_agent_invoker must be declared in modules/hub/main.tf")
+
+		countAttr, hasCount := invokerBlock.Body.Attributes["count"]
+		require.True(t, hasCount, "console_iap_service_agent_invoker must define count")
+		assert.Equal(t, "var.console_enabled && var.console_iap_enabled ? 1 : 0", getExprSource(file, countAttr.Expr))
+
+		roleAttr, hasRole := invokerBlock.Body.Attributes["role"]
+		require.True(t, hasRole, "console_iap_service_agent_invoker must define role")
+		assert.Equal(t, `"roles/run.invoker"`, getExprSource(file, roleAttr.Expr))
+
+		memberAttr, hasMember := invokerBlock.Body.Attributes["member"]
+		require.True(t, hasMember, "console_iap_service_agent_invoker must define member")
+		assert.Equal(t, `"serviceAccount:service-${var.project_number}@gcp-sa-iap.iam.gserviceaccount.com"`, getExprSource(file, memberAttr.Expr))
+
+		nameAttr, hasName := invokerBlock.Body.Attributes["name"]
+		require.True(t, hasName, "console_iap_service_agent_invoker must define name")
+		assert.Equal(t, "google_cloud_run_v2_service.console[0].name", getExprSource(file, nameAttr.Expr))
+	})
+
+	t.Run("main_console_iap_accessors_resource", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		mainPath := filepath.Join(modulesDir, "hub", "main.tf")
+		file, syntaxBody := parseHCLFileAST(t, parser, mainPath)
+
+		var accessorBlock *hclsyntax.Block
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 &&
+				block.Labels[0] == "google_iap_web_cloud_run_service_iam_member" &&
+				block.Labels[1] == "console_iap_accessors" {
+				accessorBlock = block
+				break
+			}
+		}
+		require.NotNil(t, accessorBlock, "resource google_iap_web_cloud_run_service_iam_member.console_iap_accessors must be declared in modules/hub/main.tf")
+
+		forEachAttr, hasForEach := accessorBlock.Body.Attributes["for_each"]
+		require.True(t, hasForEach, "console_iap_accessors must define for_each")
+		assert.Equal(t, "var.console_enabled && var.console_iap_enabled ? toset(var.console_iap_allowed_members) : toset([])", getExprSource(file, forEachAttr.Expr))
+
+		roleAttr, hasRole := accessorBlock.Body.Attributes["role"]
+		require.True(t, hasRole, "console_iap_accessors must define role")
+		assert.Equal(t, `"roles/iap.httpsResourceAccessor"`, getExprSource(file, roleAttr.Expr))
+
+		memberAttr, hasMember := accessorBlock.Body.Attributes["member"]
+		require.True(t, hasMember, "console_iap_accessors must define member")
+		assert.Equal(t, "each.value", getExprSource(file, memberAttr.Expr))
+
+		svcNameAttr, hasSvcName := accessorBlock.Body.Attributes["cloud_run_service_name"]
+		require.True(t, hasSvcName, "console_iap_accessors must define cloud_run_service_name")
+		assert.Equal(t, "google_cloud_run_v2_service.console[0].name", getExprSource(file, svcNameAttr.Expr))
+	})
+}
+
