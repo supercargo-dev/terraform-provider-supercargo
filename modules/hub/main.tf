@@ -1,7 +1,10 @@
 locals {
-  bq_location                  = var.bigquery_location != "" ? var.bigquery_location : var.region
-  default_dataform_sink_filter = "resource.type = \"dataform.googleapis.com/Repository\" AND (jsonPayload.terminalState:* OR protoPayload.@type = \"type.googleapis.com/google.cloud.dataform.v1alpha2.WorkflowInvocation\" OR jsonPayload.@type = \"type.googleapis.com/google.cloud.dataform.logging.v1.WorkflowInvocationCompletionLogEntry\" OR jsonPayload.@type = \"type.googleapis.com/google.cloud.dataform.v1alpha2.WorkflowInvocationCompletionLogEntry\")"
+  bq_location                     = var.bigquery_location != "" ? var.bigquery_location : var.region
+  default_dataform_sink_filter    = "resource.type = \"dataform.googleapis.com/Repository\" AND (jsonPayload.terminalState:* OR protoPayload.@type = \"type.googleapis.com/google.cloud.dataform.v1alpha2.WorkflowInvocation\" OR jsonPayload.@type = \"type.googleapis.com/google.cloud.dataform.logging.v1.WorkflowInvocationCompletionLogEntry\" OR jsonPayload.@type = \"type.googleapis.com/google.cloud.dataform.v1alpha2.WorkflowInvocationCompletionLogEntry\")"
+  console_iap_audience            = var.console_iap_audience != "" ? var.console_iap_audience : (var.console_iap_enabled ? "/projects/${var.project_number}/locations/${var.region}/services/console${var.name_suffix != "" ? "-${var.name_suffix}" : ""}" : "")
+  console_telemetry_identity_salt = var.console_telemetry_identity_salt != "" ? var.console_telemetry_identity_salt : "supercargo-${var.project_id}-${var.environment}-telemetry-salt"
 }
+
 
 
 resource "google_project_service" "hub_apis" {
@@ -1236,7 +1239,12 @@ resource "google_cloud_run_v2_service" "console" {
 
       env {
         name  = "IAP_AUDIENCE"
-        value = var.console_iap_audience
+        value = local.console_iap_audience
+      }
+
+      env {
+        name  = "TELEMETRY_MASTER_SALT"
+        value = local.console_telemetry_identity_salt
       }
 
       env {
@@ -1289,6 +1297,27 @@ resource "google_cloud_run_v2_service_iam_member" "console_invokers" {
   role     = "roles/run.invoker"
   member   = each.value
 }
+
+# When Direct IAP is enabled on the Console companion service, the Cloud Run IAP service agent must have roles/run.invoker
+resource "google_cloud_run_v2_service_iam_member" "console_iap_service_agent_invoker" {
+  count    = var.console_enabled && var.console_iap_enabled ? 1 : 0
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.console[0].name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:service-${var.project_number}@gcp-sa-iap.iam.gserviceaccount.com"
+}
+
+# Grant roles/iap.httpsResourceAccessor to authorized members when Direct IAP is enabled
+resource "google_iap_web_cloud_run_service_iam_member" "console_iap_accessors" {
+  for_each               = var.console_enabled && var.console_iap_enabled ? toset(var.console_iap_allowed_members) : toset([])
+  project                = var.project_id
+  location               = var.region
+  cloud_run_service_name = google_cloud_run_v2_service.console[0].name
+  role                   = "roles/iap.httpsResourceAccessor"
+  member                 = each.value
+}
+
 
 # ----------------------------------------------------------------------------------------------------------------------
 # DATAFORM CLOUD LOGGING SINK & EVENT INGESTION INFRASTRUCTURE
