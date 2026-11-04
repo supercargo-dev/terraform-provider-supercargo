@@ -4655,3 +4655,246 @@ func TestModules_Console_DirectIAP_AST(t *testing.T) {
 		assert.Equal(t, "google_cloud_run_v2_service.console[0].name", getExprSource(file, svcNameAttr.Expr))
 	})
 }
+
+func findAnalyticsRunnerModuleDir(t *testing.T) string {
+	t.Helper()
+	moduleDir := filepath.Clean(filepath.Join("..", "..", "modules", "analytics_runner"))
+	abs, err := filepath.Abs(moduleDir)
+	require.NoError(t, err)
+	return abs
+}
+
+func readAnalyticsRunnerModuleFile(t *testing.T, filename string) string {
+	t.Helper()
+	moduleDir := findAnalyticsRunnerModuleDir(t)
+	fullPath := filepath.Join(moduleDir, filename)
+	data, err := os.ReadFile(fullPath)
+	require.NoError(t, err, "failed to read module file %s at %s", filename, fullPath)
+	return string(data)
+}
+
+func TestModules_AnalyticsRunner(t *testing.T) {
+	moduleDir := findAnalyticsRunnerModuleDir(t)
+	parser := hclparse.NewParser()
+
+	t.Run("FilesExist", func(t *testing.T) {
+		expectedFiles := []string{
+			"main.tf",
+			"variables.tf",
+			"outputs.tf",
+			"versions.tf",
+			"README.md",
+		}
+
+		for _, file := range expectedFiles {
+			t.Run(file, func(t *testing.T) {
+				path := filepath.Join(moduleDir, file)
+				f, err := os.Stat(path)
+				require.NoError(t, err, "file %s should exist in module", file)
+				assert.False(t, f.IsDir(), "file %s should not be a directory", file)
+			})
+		}
+	})
+
+	t.Run("DeterministicLocalsAndFallbacks", func(t *testing.T) {
+		content := readAnalyticsRunnerModuleFile(t, "main.tf")
+
+		assert.Contains(t, content, "locals {")
+		assert.Contains(t, content, "runner_sa_email")
+		assert.Contains(t, content, "scheduler_sa_email")
+
+		deriveRunnerSAEmail := func(saID, jobName, projectID string) string {
+			id := fmt.Sprintf("%s-sa", jobName)
+			if saID != "" {
+				id = saID
+			}
+			return fmt.Sprintf("%s@%s.iam.gserviceaccount.com", id, projectID)
+		}
+		deriveSchedSAEmail := func(schedID, jobName, projectID string) string {
+			id := fmt.Sprintf("%s-sched-sa", jobName)
+			if schedID != "" {
+				id = schedID
+			}
+			return fmt.Sprintf("%s@%s.iam.gserviceaccount.com", id, projectID)
+		}
+
+		tests := []struct {
+			name           string
+			customRunnerID string
+			customSchedID  string
+			jobName        string
+			projectID      string
+			wantRunnerSA   string
+			wantSchedSA    string
+		}{
+			{
+				name:           "default sa derivation uses job_name prefix",
+				customRunnerID: "",
+				customSchedID:  "",
+				jobName:        "analytics-runner",
+				projectID:      "test-proj",
+				wantRunnerSA:   "analytics-runner-sa@test-proj.iam.gserviceaccount.com",
+				wantSchedSA:    "analytics-runner-sched-sa@test-proj.iam.gserviceaccount.com",
+			},
+			{
+				name:           "custom sa overrides default derivation",
+				customRunnerID: "my-runner-sa",
+				customSchedID:  "my-sched-sa",
+				jobName:        "analytics-runner",
+				projectID:      "test-proj",
+				wantRunnerSA:   "my-runner-sa@test-proj.iam.gserviceaccount.com",
+				wantSchedSA:    "my-sched-sa@test-proj.iam.gserviceaccount.com",
+			},
+		}
+
+		for _, tt := range tests {
+			tt := tt
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+				assert.Equal(t, tt.wantRunnerSA, deriveRunnerSAEmail(tt.customRunnerID, tt.jobName, tt.projectID))
+				assert.Equal(t, tt.wantSchedSA, deriveSchedSAEmail(tt.customSchedID, tt.jobName, tt.projectID))
+			})
+		}
+	})
+
+	t.Run("AST_Variables", func(t *testing.T) {
+		varPath := filepath.Join(moduleDir, "variables.tf")
+		file, syntaxBody := parseHCLFileAST(t, parser, varPath)
+
+		vars := make(map[string]*hclsyntax.Block)
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "variable" && len(block.Labels) == 1 {
+				vars[block.Labels[0]] = block
+			}
+		}
+
+		expectedVars := []struct {
+			name        string
+			hasDefault  bool
+			defaultExpr string
+		}{
+			{name: "project_id", hasDefault: false},
+			{name: "region", hasDefault: false},
+			{name: "job_name", hasDefault: true, defaultExpr: `"analytics-runner"`},
+			{name: "container_image", hasDefault: false},
+			{name: "service_account_id", hasDefault: true, defaultExpr: "null"},
+			{name: "scheduler_service_account_id", hasDefault: true, defaultExpr: "null"},
+			{name: "schedule", hasDefault: true, defaultExpr: `"0 6 * * *"`},
+			{name: "time_zone", hasDefault: true, defaultExpr: `"Etc/UTC"`},
+			{name: "engine", hasDefault: true, defaultExpr: `"dbt"`},
+			{name: "dialect", hasDefault: true, defaultExpr: `"bigquery"`},
+			{name: "target_datasets", hasDefault: true, defaultExpr: "[]"},
+			{name: "input_datasets", hasDefault: true, defaultExpr: "[]"},
+			{name: "cpu_limit", hasDefault: true, defaultExpr: `"2"`},
+			{name: "memory_limit", hasDefault: true, defaultExpr: `"4Gi"`},
+			{name: "timeout", hasDefault: true, defaultExpr: `"1800s"`},
+			{name: "max_retries", hasDefault: true, defaultExpr: "1"},
+			{name: "paused", hasDefault: true, defaultExpr: "false"},
+			{name: "deletion_protection", hasDefault: true, defaultExpr: "false"},
+		}
+
+		for _, ev := range expectedVars {
+			block, exists := vars[ev.name]
+			require.True(t, exists, "variable %s must exist in variables.tf", ev.name)
+			if ev.hasDefault {
+				defAttr, ok := block.Body.Attributes["default"]
+				require.True(t, ok, "variable %s must have a default attribute", ev.name)
+				assert.Equal(t, ev.defaultExpr, getExprSource(file, defAttr.Expr))
+			}
+		}
+	})
+
+	t.Run("AST_MainResources", func(t *testing.T) {
+		mainPath := filepath.Join(moduleDir, "main.tf")
+		file, syntaxBody := parseHCLFileAST(t, parser, mainPath)
+
+		resources := make(map[string]*hclsyntax.Block)
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 {
+				resources[block.Labels[0]+"."+block.Labels[1]] = block
+			}
+		}
+
+		// 1. Service Accounts
+		runnerSA, exists := resources["google_service_account.runner_sa"]
+		require.True(t, exists, "google_service_account.runner_sa must exist")
+		assert.Contains(t, getExprSource(file, runnerSA.Body.Attributes["account_id"].Expr), "var.service_account_id")
+
+		schedSA, exists := resources["google_service_account.scheduler_sa"]
+		require.True(t, exists, "google_service_account.scheduler_sa must exist")
+		assert.Contains(t, getExprSource(file, schedSA.Body.Attributes["account_id"].Expr), "var.scheduler_service_account_id")
+
+		// 2. Cloud Run Job
+		runJob, exists := resources["google_cloud_run_v2_job.analytics_runner"]
+		require.True(t, exists, "google_cloud_run_v2_job.analytics_runner must exist")
+		assert.Equal(t, "var.job_name", getExprSource(file, runJob.Body.Attributes["name"].Expr))
+		assert.Equal(t, "var.region", getExprSource(file, runJob.Body.Attributes["location"].Expr))
+		assert.Equal(t, "var.project_id", getExprSource(file, runJob.Body.Attributes["project"].Expr))
+		assert.Equal(t, "var.deletion_protection", getExprSource(file, runJob.Body.Attributes["deletion_protection"].Expr))
+
+		// 3. Cloud Scheduler Job
+		schedJob, exists := resources["google_cloud_scheduler_job.runner_schedule"]
+		require.True(t, exists, "google_cloud_scheduler_job.runner_schedule must exist")
+		assert.Equal(t, `"${var.job_name}-schedule"`, getExprSource(file, schedJob.Body.Attributes["name"].Expr))
+		assert.Equal(t, "var.project_id", getExprSource(file, schedJob.Body.Attributes["project"].Expr))
+		assert.Equal(t, "var.region", getExprSource(file, schedJob.Body.Attributes["region"].Expr))
+		assert.Equal(t, "var.schedule", getExprSource(file, schedJob.Body.Attributes["schedule"].Expr))
+		assert.Equal(t, "var.time_zone", getExprSource(file, schedJob.Body.Attributes["time_zone"].Expr))
+		assert.Equal(t, "var.paused", getExprSource(file, schedJob.Body.Attributes["paused"].Expr))
+
+		// 4. IAM Bindings
+		invokerIAM, exists := resources["google_cloud_run_v2_job_iam_member.scheduler_invoker"]
+		require.True(t, exists, "google_cloud_run_v2_job_iam_member.scheduler_invoker must exist")
+		assert.Equal(t, `"roles/run.invoker"`, getExprSource(file, invokerIAM.Body.Attributes["role"].Expr))
+		assert.Equal(t, `"serviceAccount:${local.scheduler_sa_email}"`, getExprSource(file, invokerIAM.Body.Attributes["member"].Expr))
+
+		jobUserIAM, exists := resources["google_project_iam_member.job_user"]
+		require.True(t, exists, "google_project_iam_member.job_user must exist")
+		assert.Equal(t, `"roles/bigquery.jobUser"`, getExprSource(file, jobUserIAM.Body.Attributes["role"].Expr))
+		assert.Equal(t, `"serviceAccount:${local.runner_sa_email}"`, getExprSource(file, jobUserIAM.Body.Attributes["member"].Expr))
+
+		targetIAM, exists := resources["google_bigquery_dataset_iam_member.target_data_editor"]
+		require.True(t, exists, "google_bigquery_dataset_iam_member.target_data_editor must exist")
+		assert.Equal(t, `"roles/bigquery.dataEditor"`, getExprSource(file, targetIAM.Body.Attributes["role"].Expr))
+		assert.Equal(t, `"serviceAccount:${local.runner_sa_email}"`, getExprSource(file, targetIAM.Body.Attributes["member"].Expr))
+
+		inputIAM, exists := resources["google_bigquery_dataset_iam_member.input_data_viewer"]
+		require.True(t, exists, "google_bigquery_dataset_iam_member.input_data_viewer must exist")
+		assert.Equal(t, `"roles/bigquery.dataViewer"`, getExprSource(file, inputIAM.Body.Attributes["role"].Expr))
+		assert.Equal(t, `"serviceAccount:${local.runner_sa_email}"`, getExprSource(file, inputIAM.Body.Attributes["member"].Expr))
+	})
+
+	t.Run("AST_Outputs", func(t *testing.T) {
+		outPath := filepath.Join(moduleDir, "outputs.tf")
+		file, syntaxBody := parseHCLFileAST(t, parser, outPath)
+
+		outputs := make(map[string]*hclsyntax.Block)
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "output" && len(block.Labels) == 1 {
+				outputs[block.Labels[0]] = block
+			}
+		}
+
+		expectedOutputs := map[string]string{
+			"job_name":                        "google_cloud_run_v2_job.analytics_runner.name",
+			"job_id":                          "google_cloud_run_v2_job.analytics_runner.id",
+			"runner_service_account_email":    "local.runner_sa_email",
+			"scheduler_service_account_email": "local.scheduler_sa_email",
+		}
+
+		for name, expectedExpr := range expectedOutputs {
+			block, exists := outputs[name]
+			require.True(t, exists, "output %s must exist in outputs.tf", name)
+			valAttr, ok := block.Body.Attributes["value"]
+			require.True(t, ok, "output %s must have value attribute", name)
+			assert.Equal(t, expectedExpr, getExprSource(file, valAttr.Expr))
+		}
+	})
+
+	t.Run("AST_Versions", func(t *testing.T) {
+		versionsPath := filepath.Join(moduleDir, "versions.tf")
+		file, syntaxBody := parseHCLFileAST(t, parser, versionsPath)
+		assert.NotNil(t, file)
+		assert.NotEmpty(t, syntaxBody.Blocks)
+	})
+}
