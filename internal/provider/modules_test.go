@@ -6242,4 +6242,180 @@ func TestModules_ControlPlaneMonitoring(t *testing.T) {
 		auditSubVal := getExprSource(hubOutFile, hubOutputs["audit_subscription_name"].Body.Attributes["value"].Expr)
 		assert.Equal(t, `var.enable_audit_sink ? google_pubsub_subscription.outbox_audit_bq[0].name : ""`, auditSubVal)
 	})
+
+	t.Run("SLOsAndBurnRateAlerts", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		slosPath := filepath.Join(modulesDir, "monitoring_control_plane", "slos.tf")
+		outPath := filepath.Join(modulesDir, "monitoring_control_plane", "outputs.tf")
+
+		sloFile, sloBody := parseHCLFileAST(t, parser, slosPath)
+		outFile, outBody := parseHCLFileAST(t, parser, outPath)
+
+		// 1. Assert Custom Services
+		services := make(map[string]*hclsyntax.Block)
+		slos := make(map[string]*hclsyntax.Block)
+		alerts := make(map[string]*hclsyntax.Block)
+		for _, block := range sloBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 {
+				switch block.Labels[0] {
+				case "google_monitoring_custom_service":
+					services[block.Labels[1]] = block
+				case "google_monitoring_slo":
+					slos[block.Labels[1]] = block
+				case "google_monitoring_alert_policy":
+					alerts[block.Labels[1]] = block
+				}
+			}
+		}
+
+		require.Contains(t, services, "hub", "slos.tf missing google_monitoring_custom_service.hub")
+		require.Contains(t, services, "vault", "slos.tf missing google_monitoring_custom_service.vault")
+
+		hubSvc := services["hub"]
+		assert.Equal(t, "var.enable_slos && var.hub_service_name != \"\" && var.hub_service_name != null ? 1 : 0", getExprSource(sloFile, hubSvc.Body.Attributes["count"].Expr))
+		assert.Equal(t, "local.hub_custom_service_id", getExprSource(sloFile, hubSvc.Body.Attributes["service_id"].Expr))
+
+		vaultSvc := services["vault"]
+		assert.Equal(t, "var.enable_slos && var.vault_service_name != \"\" && var.vault_service_name != null ? 1 : 0", getExprSource(sloFile, vaultSvc.Body.Attributes["count"].Expr))
+		assert.Equal(t, "local.vault_custom_service_id", getExprSource(sloFile, vaultSvc.Body.Attributes["service_id"].Expr))
+
+		// 2. Assert SLO Definitions
+		expectedSLOs := []struct {
+			name        string
+			serviceExpr string
+			sloID       string
+			goal        string
+			period      string
+			dependsOn   string
+		}{
+			{
+				name:        "hub_availability",
+				serviceExpr: "local.hub_custom_service_id",
+				sloID:       `"hub-availability"`,
+				goal:        "0.999",
+				period:      "30",
+				dependsOn:   "google_monitoring_custom_service.hub",
+			},
+			{
+				name:        "hub_latency",
+				serviceExpr: "local.hub_custom_service_id",
+				sloID:       `"hub-latency"`,
+				goal:        "0.99",
+				period:      "30",
+				dependsOn:   "google_monitoring_custom_service.hub",
+			},
+			{
+				name:        "vault_availability",
+				serviceExpr: "local.vault_custom_service_id",
+				sloID:       `"vault-availability"`,
+				goal:        "0.9995",
+				period:      "30",
+				dependsOn:   "google_monitoring_custom_service.vault",
+			},
+			{
+				name:        "vault_latency",
+				serviceExpr: "local.vault_custom_service_id",
+				sloID:       `"vault-latency"`,
+				goal:        "0.99",
+				period:      "30",
+				dependsOn:   "google_monitoring_custom_service.vault",
+			},
+		}
+
+		for _, tc := range expectedSLOs {
+			slo, exists := slos[tc.name]
+			require.True(t, exists, "slos.tf missing google_monitoring_slo.%s", tc.name)
+			assert.Equal(t, tc.serviceExpr, getExprSource(sloFile, slo.Body.Attributes["service"].Expr))
+			assert.Equal(t, tc.sloID, getExprSource(sloFile, slo.Body.Attributes["slo_id"].Expr))
+			assert.Equal(t, tc.goal, getExprSource(sloFile, slo.Body.Attributes["goal"].Expr))
+			assert.Equal(t, tc.period, getExprSource(sloFile, slo.Body.Attributes["rolling_period_days"].Expr))
+
+			depAttr, hasDep := slo.Body.Attributes["depends_on"]
+			require.True(t, hasDep, "%s missing depends_on attribute", tc.name)
+			assert.Contains(t, getExprSource(sloFile, depAttr.Expr), tc.dependsOn)
+		}
+
+		// 3. Assert Plan-Time Determinism in Static SLO Resource IDs
+		sloFileContent := string(sloFile.Bytes)
+		assert.Contains(t, sloFileContent, "projects/${var.project_id}/services/${local.hub_custom_service_id}/serviceLevelObjectives")
+		assert.Contains(t, sloFileContent, "projects/${var.project_id}/services/${local.vault_custom_service_id}/serviceLevelObjectives")
+		assert.NotContains(t, sloFileContent, "google_monitoring_slo.hub_availability[0].id")
+		assert.NotContains(t, sloFileContent, "google_monitoring_slo.vault_availability[0].id")
+
+		// 4. Assert Burn-Rate Alert Policy
+		require.Contains(t, alerts, "slo_burn_rate", "slos.tf missing google_monitoring_alert_policy.slo_burn_rate")
+		burnAlert := alerts["slo_burn_rate"]
+
+		assert.Equal(t, "local.slo_alerts", getExprSource(sloFile, burnAlert.Body.Attributes["for_each"].Expr))
+		assert.Equal(t, `"OR"`, getExprSource(sloFile, burnAlert.Body.Attributes["combiner"].Expr))
+
+		// Check explicit depends_on on SLOs
+		depAttr, hasDep := burnAlert.Body.Attributes["depends_on"]
+		require.True(t, hasDep, "slo_burn_rate must define depends_on attribute")
+		depSrc := getExprSource(sloFile, depAttr.Expr)
+		assert.Contains(t, depSrc, "google_monitoring_slo.hub_availability")
+		assert.Contains(t, depSrc, "google_monitoring_slo.hub_latency")
+		assert.Contains(t, depSrc, "google_monitoring_slo.vault_availability")
+		assert.Contains(t, depSrc, "google_monitoring_slo.vault_latency")
+
+		// Check documentation block
+		var docBlock *hclsyntax.Block
+		for _, sub := range burnAlert.Body.Blocks {
+			if sub.Type == "documentation" {
+				docBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, docBlock, "slo_burn_rate must define documentation block")
+		contentSrc := getExprSource(sloFile, docBlock.Body.Attributes["content"].Expr)
+		assert.NotEmpty(t, contentSrc)
+		assert.LessOrEqual(t, len(contentSrc), 800, "Documentation for slo_burn_rate must be <= 800 characters")
+		assert.Contains(t, contentSrc, "gcloud", "Documentation for slo_burn_rate must include CLI triage command")
+
+		// Check condition filter
+		var condBlock *hclsyntax.Block
+		for _, sub := range burnAlert.Body.Blocks {
+			if sub.Type == "conditions" {
+				condBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, condBlock, "slo_burn_rate must define conditions block")
+		var threshBlock *hclsyntax.Block
+		for _, sub := range condBlock.Body.Blocks {
+			if sub.Type == "condition_threshold" {
+				threshBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, threshBlock, "slo_burn_rate must define condition_threshold block")
+		filterSrc := getExprSource(sloFile, threshBlock.Body.Attributes["filter"].Expr)
+		assert.Contains(t, filterSrc, "select_slo_burn_rate")
+
+		// 5. Assert outputs in outputs.tf
+		outputs := make(map[string]*hclsyntax.Block)
+		for _, block := range outBody.Blocks {
+			if block.Type == "output" && len(block.Labels) == 1 {
+				outputs[block.Labels[0]] = block
+			}
+		}
+
+		expectedOutputs := map[string]string{
+			"hub_custom_service_id":     `try(google_monitoring_custom_service.hub[0].service_id, "")`,
+			"vault_custom_service_id":   `try(google_monitoring_custom_service.vault[0].service_id, "")`,
+			"hub_availability_slo_id":   `try(google_monitoring_slo.hub_availability[0].id, "")`,
+			"hub_latency_slo_id":        `try(google_monitoring_slo.hub_latency[0].id, "")`,
+			"vault_availability_slo_id": `try(google_monitoring_slo.vault_availability[0].id, "")`,
+			"vault_latency_slo_id":      `try(google_monitoring_slo.vault_latency[0].id, "")`,
+		}
+
+		for name, expectedExpr := range expectedOutputs {
+			block, exists := outputs[name]
+			require.True(t, exists, "outputs.tf missing output %s", name)
+			valAttr, hasVal := block.Body.Attributes["value"]
+			require.True(t, hasVal)
+			assert.Equal(t, expectedExpr, getExprSource(outFile, valAttr.Expr))
+		}
+	})
 }

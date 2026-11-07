@@ -20,32 +20,32 @@ output "dashboard_governance_url" {
 
 output "hub_custom_service_id" {
   description = "Custom service ID for Supercargo Hub"
-  value       = ""
+  value       = try(google_monitoring_custom_service.hub[0].service_id, "")
 }
 
 output "vault_custom_service_id" {
   description = "Custom service ID for Supercargo Vault"
-  value       = ""
+  value       = try(google_monitoring_custom_service.vault[0].service_id, "")
 }
 
 output "hub_availability_slo_id" {
   description = "Resource ID of the Hub availability SLO"
-  value       = ""
+  value       = try(google_monitoring_slo.hub_availability[0].id, "")
 }
 
 output "hub_latency_slo_id" {
   description = "Resource ID of the Hub latency SLO"
-  value       = ""
+  value       = try(google_monitoring_slo.hub_latency[0].id, "")
 }
 
 output "vault_availability_slo_id" {
   description = "Resource ID of the Vault availability SLO"
-  value       = ""
+  value       = try(google_monitoring_slo.vault_availability[0].id, "")
 }
 
 output "vault_latency_slo_id" {
   description = "Resource ID of the Vault latency SLO"
-  value       = ""
+  value       = try(google_monitoring_slo.vault_latency[0].id, "")
 }
 
 output "all_alert_notification_channels" {
