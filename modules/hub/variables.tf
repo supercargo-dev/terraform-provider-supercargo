@@ -347,6 +347,10 @@ variable "sla_tier" {
   description = "SLA tier for the control plane (TIER_1, TIER_2, TIER_3)"
   type        = string
   default     = "TIER_1"
+  validation {
+    condition     = contains(["TIER_1", "TIER_2", "TIER_3"], var.sla_tier)
+    error_message = "The sla_tier variable must be one of: TIER_1, TIER_2, TIER_3."
+  }
 }
 
 

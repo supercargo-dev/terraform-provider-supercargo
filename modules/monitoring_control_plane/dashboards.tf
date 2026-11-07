@@ -608,7 +608,7 @@ resource "google_monitoring_dashboard" "governance_privacy" {
                 {
                   timeSeriesQuery = {
                     timeSeriesFilter = {
-                      filter = "resource.type=\"pubsub_subscription\" AND metric.type=\"pubsub.googleapis.com/subscription/oldest_unacked_message_age\" AND resource.labels.subscription_id=\"${var.outbox_audit_subscription_name}\""
+                      filter = "resource.type=\"pubsub_subscription\" AND metric.type=\"pubsub.googleapis.com/subscription/oldest_unacked_message_age\" AND resource.labels.subscription_id=\"${local.raw_core_subscriptions.outbox_audit_bq.name}\""
                       aggregation = {
                         alignmentPeriod  = "60s"
                         perSeriesAligner = "ALIGN_MAX"
@@ -798,7 +798,7 @@ resource "google_monitoring_dashboard" "governance_privacy" {
                 {
                   timeSeriesQuery = {
                     timeSeriesFilter = {
-                      filter = "resource.type=\"pubsub_subscription\" AND metric.type=\"pubsub.googleapis.com/subscription/oldest_unacked_message_age\" AND resource.labels.subscription_id=\"${var.dataform_events_push_subscription_name}\""
+                      filter = "resource.type=\"pubsub_subscription\" AND metric.type=\"pubsub.googleapis.com/subscription/oldest_unacked_message_age\" AND resource.labels.subscription_id=\"${local.raw_core_subscriptions.dataform_events_push.name}\""
                       aggregation = {
                         alignmentPeriod  = "60s"
                         perSeriesAligner = "ALIGN_MAX"
