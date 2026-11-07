@@ -225,6 +225,24 @@ variable "dataform_sink_filter" {
   default     = ""
 }
 
+variable "enable_job_monitoring_integration" {
+  description = "Whether to provision the Cloud Run Job logging sink, Pub/Sub topics, and Cloud Monitoring alert integration"
+  type        = bool
+  default     = false
+}
+
+variable "job_events_topic" {
+  description = "Base Pub/Sub topic name for Cloud Run Job execution and Cloud Monitoring alert events"
+  type        = string
+  default     = "supercargo-job-events"
+}
+
+variable "job_sink_filter" {
+  description = "Custom Cloud Logging sink filter expression for Cloud Run Job events (falls back to default job completion filter if empty)"
+  type        = string
+  default     = ""
+}
+
 variable "name_suffix" {
   description = "Optional deterministic suffix appended to resource names for environment/branch disambiguation. Defaults to empty."
   type        = string

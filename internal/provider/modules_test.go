@@ -1997,6 +1997,300 @@ func TestModules_HubDataformIntegration(t *testing.T) {
 	})
 }
 
+func TestModules_HubJobMonitoringIntegration(t *testing.T) {
+	modulesDir := "../../modules"
+	hubDir := filepath.Join(modulesDir, "hub")
+
+	t.Run("VariablesDefinedWithCorrectDefaults", func(t *testing.T) {
+		varPath := filepath.Join(hubDir, "variables.tf")
+		varBytes, err := os.ReadFile(varPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", varPath, err)
+		}
+		varContent := string(varBytes)
+
+		requiredVars := []struct {
+			name         string
+			varType      string
+			defaultValue string
+		}{
+			{name: "enable_job_monitoring_integration", varType: "bool", defaultValue: "false"},
+			{name: "job_events_topic", varType: "string", defaultValue: `"supercargo-job-events"`},
+			{name: "job_sink_filter", varType: "string", defaultValue: `""`},
+		}
+
+		for _, rv := range requiredVars {
+			if !strings.Contains(varContent, `variable "`+rv.name+`"`) {
+				t.Errorf("modules/hub/variables.tf missing variable %q", rv.name)
+				continue
+			}
+			chunk := extractHCLBlock(varContent, `variable "`+rv.name+`"`)
+			if !strings.Contains(chunk, rv.varType) {
+				t.Errorf("modules/hub/variables.tf variable %q missing type %s", rv.name, rv.varType)
+			}
+			if !strings.Contains(chunk, rv.defaultValue) {
+				t.Errorf("modules/hub/variables.tf variable %q missing default %s", rv.name, rv.defaultValue)
+			}
+		}
+	})
+
+	t.Run("PubSubTopicsAndDLQConfigured", func(t *testing.T) {
+		mainPath := filepath.Join(hubDir, "main.tf")
+		mainBytes, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		mainContent := string(mainBytes)
+
+		// Primary job events topic
+		if !strings.Contains(mainContent, `resource "google_pubsub_topic" "job_events"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_pubsub_topic\" \"job_events\"")
+		}
+		topicChunk := extractHCLBlock(mainContent, `resource "google_pubsub_topic" "job_events"`)
+		if !strings.Contains(topicChunk, "count") || !strings.Contains(topicChunk, "var.enable_job_monitoring_integration") {
+			t.Errorf("job_events topic missing count = var.enable_job_monitoring_integration guard")
+		}
+		if !strings.Contains(topicChunk, "name") || !strings.Contains(topicChunk, "var.job_events_topic") {
+			t.Errorf("job_events topic must use var.job_events_topic")
+		}
+		if !strings.Contains(topicChunk, "project") || !strings.Contains(topicChunk, "var.project_id") {
+			t.Errorf("job_events topic must specify project = var.project_id")
+		}
+
+		// Job events DLQ topic
+		if !strings.Contains(mainContent, `resource "google_pubsub_topic" "job_events_dlq"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_pubsub_topic\" \"job_events_dlq\"")
+		}
+		dlqChunk := extractHCLBlock(mainContent, `resource "google_pubsub_topic" "job_events_dlq"`)
+		if !strings.Contains(dlqChunk, "count") || !strings.Contains(dlqChunk, "var.enable_job_monitoring_integration") {
+			t.Errorf("job_events_dlq topic missing count = var.enable_job_monitoring_integration guard")
+		}
+		if !strings.Contains(dlqChunk, `"${var.job_events_topic}-dlq"`) {
+			t.Errorf("job_events_dlq topic must use name = \"${var.job_events_topic}-dlq\"")
+		}
+		if !strings.Contains(dlqChunk, "project") || !strings.Contains(dlqChunk, "var.project_id") {
+			t.Errorf("job_events_dlq topic must specify project = var.project_id")
+		}
+	})
+
+	t.Run("LoggingSinkAndIAMPublisherConfigured", func(t *testing.T) {
+		mainPath := filepath.Join(hubDir, "main.tf")
+		mainBytes, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		mainContent := string(mainBytes)
+
+		// Cloud Logging sink
+		if !strings.Contains(mainContent, `resource "google_logging_project_sink" "job_events"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_logging_project_sink\" \"job_events\"")
+		}
+		sinkChunk := extractHCLBlock(mainContent, `resource "google_logging_project_sink" "job_events"`)
+		if !strings.Contains(sinkChunk, "count") || !strings.Contains(sinkChunk, "var.enable_job_monitoring_integration") {
+			t.Errorf("job_events sink missing count = var.enable_job_monitoring_integration guard")
+		}
+		if !strings.Contains(sinkChunk, `"supercargo-job-events-sink${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
+			t.Errorf("job_events sink name must use \"supercargo-job-events-sink${var.name_suffix != \"\" ? \"-${var.name_suffix}\" : \"\"}\"")
+		}
+		if !strings.Contains(sinkChunk, `"pubsub.googleapis.com/${google_pubsub_topic.job_events[0].id}"`) {
+			t.Errorf("job_events sink destination must target google_pubsub_topic.job_events[0].id")
+		}
+		if !strings.Contains(sinkChunk, "unique_writer_identity = true") && !strings.Contains(sinkChunk, "unique_writer_identity= true") {
+			t.Errorf("job_events sink must set unique_writer_identity = true")
+		}
+		if !strings.Contains(sinkChunk, "var.job_sink_filter") {
+			t.Errorf("job_events sink must reference var.job_sink_filter")
+		}
+		if !strings.Contains(mainContent, `default_job_sink_filter`) ||
+			!strings.Contains(mainContent, `resource.type = \"cloud_run_job\"`) ||
+			!strings.Contains(mainContent, `run.googleapis.com%2Fjob-execution-result`) ||
+			!strings.Contains(mainContent, `Completed with status:`) {
+			t.Errorf("job_events sink filter must use default_job_sink_filter covering cloud_run_job execution logs")
+		}
+
+		// IAM Member for Cloud Logging Writer Identity -> Pub/Sub publisher
+		if !strings.Contains(mainContent, `resource "google_pubsub_topic_iam_member" "job_sink_publisher"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_pubsub_topic_iam_member\" \"job_sink_publisher\"")
+		}
+		iamChunk := extractHCLBlock(mainContent, `resource "google_pubsub_topic_iam_member" "job_sink_publisher"`)
+		if !strings.Contains(iamChunk, "count") || !strings.Contains(iamChunk, "var.enable_job_monitoring_integration") {
+			t.Errorf("job_sink_publisher missing count = var.enable_job_monitoring_integration guard")
+		}
+		if !strings.Contains(iamChunk, "google_pubsub_topic.job_events[0].name") {
+			t.Errorf("job_sink_publisher must bind to google_pubsub_topic.job_events[0].name")
+		}
+		if !strings.Contains(iamChunk, `"roles/pubsub.publisher"`) {
+			t.Errorf("job_sink_publisher must grant roles/pubsub.publisher")
+		}
+		if !strings.Contains(iamChunk, "google_logging_project_sink.job_events[0].writer_identity") {
+			t.Errorf("job_sink_publisher member must be google_logging_project_sink.job_events[0].writer_identity")
+		}
+	})
+
+	t.Run("MonitoringNotificationChannelAndPublisherConfigured", func(t *testing.T) {
+		mainPath := filepath.Join(hubDir, "main.tf")
+		mainBytes, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		mainContent := string(mainBytes)
+
+		// Notification channel
+		if !strings.Contains(mainContent, `resource "google_monitoring_notification_channel" "hub_events"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_monitoring_notification_channel\" \"hub_events\"")
+		}
+		ncChunk := extractHCLBlock(mainContent, `resource "google_monitoring_notification_channel" "hub_events"`)
+		if !strings.Contains(ncChunk, "count") || !strings.Contains(ncChunk, "var.enable_job_monitoring_integration") {
+			t.Errorf("hub_events notification channel missing count = var.enable_job_monitoring_integration guard")
+		}
+		if !strings.Contains(ncChunk, `"pubsub"`) || !strings.Contains(ncChunk, "type") {
+			t.Errorf("hub_events notification channel type must be pubsub")
+		}
+		if !strings.Contains(ncChunk, "google_pubsub_topic.job_events[0].id") {
+			t.Errorf("hub_events notification channel must reference google_pubsub_topic.job_events[0].id in labels")
+		}
+
+		// Cloud Monitoring Notification Service Account IAM publisher
+		if !strings.Contains(mainContent, `resource "google_pubsub_topic_iam_member" "monitoring_notification_publisher"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_pubsub_topic_iam_member\" \"monitoring_notification_publisher\"")
+		}
+		mnChunk := extractHCLBlock(mainContent, `resource "google_pubsub_topic_iam_member" "monitoring_notification_publisher"`)
+		if !strings.Contains(mnChunk, "count") || !strings.Contains(mnChunk, "var.enable_job_monitoring_integration") {
+			t.Errorf("monitoring_notification_publisher missing count = var.enable_job_monitoring_integration guard")
+		}
+		if !strings.Contains(mnChunk, "google_pubsub_topic.job_events[0].name") {
+			t.Errorf("monitoring_notification_publisher must bind to google_pubsub_topic.job_events[0].name")
+		}
+		if !strings.Contains(mnChunk, `"roles/pubsub.publisher"`) {
+			t.Errorf("monitoring_notification_publisher must grant roles/pubsub.publisher")
+		}
+		if !strings.Contains(mnChunk, "@gcp-sa-monitoring-notification.iam.gserviceaccount.com") {
+			t.Errorf("monitoring_notification_publisher member must bind gcp-sa-monitoring-notification service agent")
+		}
+	})
+
+	t.Run("PushSubscriptionWithOIDCAndDLQConfigured", func(t *testing.T) {
+		mainPath := filepath.Join(hubDir, "main.tf")
+		mainBytes, err := os.ReadFile(mainPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", mainPath, err)
+		}
+		mainContent := string(mainBytes)
+
+		if !strings.Contains(mainContent, `resource "google_pubsub_subscription" "job_events_push"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_pubsub_subscription\" \"job_events_push\"")
+		}
+		subChunk := extractHCLBlock(mainContent, `resource "google_pubsub_subscription" "job_events_push"`)
+		if !strings.Contains(subChunk, "count") || !strings.Contains(subChunk, "var.enable_job_monitoring_integration") {
+			t.Errorf("job_events_push subscription missing count = var.enable_job_monitoring_integration guard")
+		}
+		if !strings.Contains(subChunk, `"hub-job-events-push${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"`) {
+			t.Errorf("job_events_push subscription name must use \"hub-job-events-push${var.name_suffix != \"\" ? \"-${var.name_suffix}\" : \"\"}\"")
+		}
+		if !strings.Contains(subChunk, "google_pubsub_topic.job_events[0].name") {
+			t.Errorf("job_events_push subscription topic must use google_pubsub_topic.job_events[0].name")
+		}
+		if !strings.Contains(subChunk, "ack_deadline_seconds = 60") && !strings.Contains(subChunk, "ack_deadline_seconds= 60") {
+			t.Errorf("job_events_push subscription must configure ack_deadline_seconds = 60")
+		}
+		if !strings.Contains(subChunk, `"${google_cloud_run_v2_service.hub.uri}/v1/internal/monitoring-events"`) {
+			t.Errorf("job_events_push subscription must push to ${google_cloud_run_v2_service.hub.uri}/v1/internal/monitoring-events")
+		}
+		if !strings.Contains(subChunk, "google_service_account.events_invoker.email") {
+			t.Errorf("job_events_push subscription must use google_service_account.events_invoker.email for oidc_token")
+		}
+		if !strings.Contains(subChunk, "var.oidc_audience != \"\" ? trimspace(split(\",\", var.oidc_audience)[0]) : google_cloud_run_v2_service.hub.uri") {
+			t.Errorf("job_events_push subscription oidc audience must fallback to google_cloud_run_v2_service.hub.uri")
+		}
+		if !strings.Contains(subChunk, "google_pubsub_topic.job_events_dlq[0].id") {
+			t.Errorf("job_events_push subscription dead_letter_topic must reference google_pubsub_topic.job_events_dlq[0].id")
+		}
+		if !strings.Contains(subChunk, "max_delivery_attempts = 5") && !strings.Contains(subChunk, "max_delivery_attempts= 5") {
+			t.Errorf("job_events_push subscription must configure max_delivery_attempts = 5")
+		}
+		if !strings.Contains(subChunk, `ttl = ""`) {
+			t.Errorf("job_events_push subscription must configure permanent retention via expiration_policy ttl = \"\"")
+		}
+		if !strings.Contains(subChunk, "google_cloud_run_v2_service_iam_member.events_invoker_run") ||
+			!strings.Contains(subChunk, "google_service_account_iam_member.pubsub_events_invoker_token_creator") ||
+			!strings.Contains(subChunk, "google_pubsub_topic_iam_member.job_dlq_publisher") {
+			t.Errorf("job_events_push subscription must depend on events_invoker_run, pubsub_events_invoker_token_creator, and job_dlq_publisher")
+		}
+
+		// Pub/Sub Service Agent Publisher IAM on DLQ topic
+		if !strings.Contains(mainContent, `resource "google_pubsub_topic_iam_member" "job_dlq_publisher"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_pubsub_topic_iam_member\" \"job_dlq_publisher\"")
+		}
+		dlqPubIamChunk := extractHCLBlock(mainContent, `resource "google_pubsub_topic_iam_member" "job_dlq_publisher"`)
+		if !strings.Contains(dlqPubIamChunk, "google_pubsub_topic.job_events_dlq[0].name") {
+			t.Errorf("job_dlq_publisher must target job_events_dlq topic")
+		}
+		if !strings.Contains(dlqPubIamChunk, `"roles/pubsub.publisher"`) {
+			t.Errorf("job_dlq_publisher must grant roles/pubsub.publisher")
+		}
+		if !strings.Contains(dlqPubIamChunk, `@gcp-sa-pubsub.iam.gserviceaccount.com`) {
+			t.Errorf("job_dlq_publisher must bind Pub/Sub service agent")
+		}
+
+		// Pub/Sub Service Agent Subscriber IAM on Push subscription
+		if !strings.Contains(mainContent, `resource "google_pubsub_subscription_iam_member" "job_push_dlq_subscriber"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_pubsub_subscription_iam_member\" \"job_push_dlq_subscriber\"")
+		}
+		dlqSubIamChunk := extractHCLBlock(mainContent, `resource "google_pubsub_subscription_iam_member" "job_push_dlq_subscriber"`)
+		if !strings.Contains(dlqSubIamChunk, "google_pubsub_subscription.job_events_push[0].name") {
+			t.Errorf("job_push_dlq_subscriber must target job_events_push subscription")
+		}
+		if !strings.Contains(dlqSubIamChunk, `"roles/pubsub.subscriber"`) {
+			t.Errorf("job_push_dlq_subscriber must grant roles/pubsub.subscriber")
+		}
+		if !strings.Contains(dlqSubIamChunk, `@gcp-sa-pubsub.iam.gserviceaccount.com`) {
+			t.Errorf("job_push_dlq_subscriber must bind Pub/Sub service agent")
+		}
+
+		// DLQ inspection pull subscription
+		if !strings.Contains(mainContent, `resource "google_pubsub_subscription" "job_events_dlq_pull"`) {
+			t.Fatalf("modules/hub/main.tf missing resource \"google_pubsub_subscription\" \"job_events_dlq_pull\"")
+		}
+		dlqPullChunk := extractHCLBlock(mainContent, `resource "google_pubsub_subscription" "job_events_dlq_pull"`)
+		if !strings.Contains(dlqPullChunk, `"${var.job_events_topic}-dlq-sub"`) {
+			t.Errorf("job_events_dlq_pull must be named \"${var.job_events_topic}-dlq-sub\"")
+		}
+		if !strings.Contains(dlqPullChunk, "google_pubsub_topic.job_events_dlq[0].name") {
+			t.Errorf("job_events_dlq_pull must target job_events_dlq")
+		}
+	})
+
+	t.Run("ConditionalOutputsExported", func(t *testing.T) {
+		outputPath := filepath.Join(hubDir, "outputs.tf")
+		outputBytes, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", outputPath, err)
+		}
+		outputContent := string(outputBytes)
+
+		outputs := []struct {
+			name      string
+			condition string
+		}{
+			{name: "job_events_topic_name", condition: "var.enable_job_monitoring_integration ? google_pubsub_topic.job_events[0].name : null"},
+			{name: "job_events_topic_id", condition: "var.enable_job_monitoring_integration ? google_pubsub_topic.job_events[0].id : null"},
+			{name: "job_events_dlq_topic_name", condition: "var.enable_job_monitoring_integration ? google_pubsub_topic.job_events_dlq[0].name : null"},
+			{name: "job_events_subscription_name", condition: "var.enable_job_monitoring_integration ? google_pubsub_subscription.job_events_push[0].name : null"},
+			{name: "job_events_dlq_subscription_name", condition: "var.enable_job_monitoring_integration ? google_pubsub_subscription.job_events_dlq_pull[0].name : null"},
+			{name: "job_monitoring_notification_channel_id", condition: "var.enable_job_monitoring_integration ? google_monitoring_notification_channel.hub_events[0].id : null"},
+		}
+
+		for _, out := range outputs {
+			if !strings.Contains(outputContent, `output "`+out.name+`"`) {
+				t.Errorf("modules/hub/outputs.tf missing output %q", out.name)
+			}
+			if !strings.Contains(outputContent, out.condition) {
+				t.Errorf("modules/hub/outputs.tf output %q must use %q", out.name, out.condition)
+			}
+		}
+	})
+}
+
 func extractHCLBlock(content, header string) string {
 	idx := strings.Index(content, header)
 	if idx == -1 {
