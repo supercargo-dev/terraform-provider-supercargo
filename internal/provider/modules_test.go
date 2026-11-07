@@ -5885,4 +5885,3 @@ func TestModules_DataProductDashboardOutputForwarding(t *testing.T) {
 		assert.Equal(t, expectedExpr, getExprSource(outFile, valAttr.Expr))
 	}
 }
-
