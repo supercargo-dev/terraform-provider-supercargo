@@ -6611,13 +6611,13 @@ func TestModules_ControlPlaneMonitoring(t *testing.T) {
 
 	t.Run("ChildModulesVariableForwarding", func(t *testing.T) {
 		t.Parallel()
-		parser := hclparse.NewParser()
 		childModules := []string{"vault", "analytics_runner", "analytics_github_sync"}
 
 		for _, mod := range childModules {
 			mod := mod
 			t.Run(mod, func(t *testing.T) {
 				t.Parallel()
+				parser := hclparse.NewParser()
 				varPath := filepath.Join(modulesDir, mod, "variables.tf")
 				mainPath := filepath.Join(modulesDir, mod, "main.tf")
 
@@ -6656,6 +6656,157 @@ func TestModules_ControlPlaneMonitoring(t *testing.T) {
 					}
 				}
 			})
+		}
+	})
+
+	t.Run("TurnkeyPersonaDashboards", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		dashPath := filepath.Join(modulesDir, "monitoring_control_plane", "dashboards.tf")
+		outPath := filepath.Join(modulesDir, "monitoring_control_plane", "outputs.tf")
+
+		dashFile, dashBody := parseHCLFileAST(t, parser, dashPath)
+		outFile, outBody := parseHCLFileAST(t, parser, outPath)
+
+		dashboards := make(map[string]*hclsyntax.Block)
+		for _, block := range dashBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 && block.Labels[0] == "google_monitoring_dashboard" {
+				dashboards[block.Labels[1]] = block
+			}
+		}
+
+		require.Contains(t, dashboards, "control_plane_sre", "dashboards.tf missing google_monitoring_dashboard.control_plane_sre")
+		require.Contains(t, dashboards, "governance_privacy", "dashboards.tf missing google_monitoring_dashboard.governance_privacy")
+
+		// 1. Assert Control Plane SRE Dashboard
+		sreDash := dashboards["control_plane_sre"]
+		assert.Equal(t, "var.enable_dashboards ? 1 : 0", getExprSource(dashFile, sreDash.Body.Attributes["count"].Expr))
+		sreJsonAttr, hasSreJson := sreDash.Body.Attributes["dashboard_json"]
+		require.True(t, hasSreJson)
+		sreJson := getExprSource(dashFile, sreJsonAttr.Expr)
+		assert.True(t, strings.HasPrefix(sreJson, "jsonencode("))
+		assert.Contains(t, sreJson, `Supercargo - Control Plane & SRE Infrastructure (${var.environment})${local.name_suffix_display}`)
+		assert.Contains(t, sreJson, "mosaicLayout")
+
+		// Assert 6 SRE Sections
+		expectedSreSections := []string{
+			"Cloud Run Golden Signals",
+			"Container Resource Saturation",
+			"SLO Burn Rates",
+			"Pub/Sub & BigQuery Pipeline Health",
+			"Batch Ingestion Jobs & Cloud Schedulers",
+			"Meta-Telemetry Lakehouse Streaming Health",
+		}
+		for _, section := range expectedSreSections {
+			assert.Contains(t, sreJson, section, "control_plane_sre dashboard missing section %s", section)
+		}
+
+		// 2. Assert Governance & Privacy Dashboard
+		govDash := dashboards["governance_privacy"]
+		assert.Equal(t, "var.enable_dashboards ? 1 : 0", getExprSource(dashFile, govDash.Body.Attributes["count"].Expr))
+		govJsonAttr, hasGovJson := govDash.Body.Attributes["dashboard_json"]
+		require.True(t, hasGovJson)
+		govJson := getExprSource(dashFile, govJsonAttr.Expr)
+		assert.True(t, strings.HasPrefix(govJson, "jsonencode("))
+		assert.Contains(t, govJson, `Supercargo - Governance & Privacy Plane (${var.environment})${local.name_suffix_display}`)
+		assert.Contains(t, govJson, "mosaicLayout")
+
+		// Assert 5 Governance Sections
+		expectedGovSections := []string{
+			"Hub Contract Registry Operations",
+			"Firestore Outbox CDC & Metadata Shovel Delivery",
+			"Vault Cryptographic Operations & Security",
+			"Companion Service Interactions",
+			"Dataplex Taxonomy & Dataform Reconciliation State",
+		}
+		for _, section := range expectedGovSections {
+			assert.Contains(t, govJson, section, "governance_privacy dashboard missing section %s", section)
+		}
+
+		// 3. Assert Outputs in outputs.tf
+		outputs := make(map[string]*hclsyntax.Block)
+		for _, block := range outBody.Blocks {
+			if block.Type == "output" && len(block.Labels) == 1 {
+				outputs[block.Labels[0]] = block
+			}
+		}
+
+		expectedOutputs := map[string]string{
+			"dashboard_sre_id":         `try(google_monitoring_dashboard.control_plane_sre[0].id, "")`,
+			"dashboard_sre_url":        `length(google_monitoring_dashboard.control_plane_sre) > 0 ? "https://console.cloud.google.com/monitoring/dashboards/custom/${element(split("/", google_monitoring_dashboard.control_plane_sre[0].id), length(split("/", google_monitoring_dashboard.control_plane_sre[0].id)) - 1)}?project=${var.project_id}" : ""`,
+			"dashboard_governance_id":  `try(google_monitoring_dashboard.governance_privacy[0].id, "")`,
+			"dashboard_governance_url": `length(google_monitoring_dashboard.governance_privacy) > 0 ? "https://console.cloud.google.com/monitoring/dashboards/custom/${element(split("/", google_monitoring_dashboard.governance_privacy[0].id), length(split("/", google_monitoring_dashboard.governance_privacy[0].id)) - 1)}?project=${var.project_id}" : ""`,
+		}
+
+		for name, expectedExpr := range expectedOutputs {
+			block, exists := outputs[name]
+			require.True(t, exists, "outputs.tf missing output %s", name)
+			valAttr, hasVal := block.Body.Attributes["value"]
+			require.True(t, hasVal)
+			assert.Equal(t, expectedExpr, getExprSource(outFile, valAttr.Expr))
+		}
+	})
+
+	t.Run("DocumentationStringLength", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		tfFiles := []string{"main.tf", "slos.tf"}
+		totalAlertsChecked := 0
+
+		for _, tfFile := range tfFiles {
+			path := filepath.Join(modulesDir, "monitoring_control_plane", tfFile)
+			file, syntaxBody := parseHCLFileAST(t, parser, path)
+
+			for _, block := range syntaxBody.Blocks {
+				if block.Type == "resource" && len(block.Labels) == 2 && block.Labels[0] == "google_monitoring_alert_policy" {
+					policyName := block.Labels[1]
+					var docBlock *hclsyntax.Block
+					for _, sub := range block.Body.Blocks {
+						if sub.Type == "documentation" {
+							docBlock = sub
+							break
+						}
+					}
+					require.NotNil(t, docBlock, "%s in %s missing documentation block", policyName, tfFile)
+					contentAttr, hasContent := docBlock.Body.Attributes["content"]
+					require.True(t, hasContent, "%s in %s missing documentation.content", policyName, tfFile)
+					contentSrc := getExprSource(file, contentAttr.Expr)
+
+					assert.NotEmpty(t, contentSrc, "%s documentation content cannot be empty", policyName)
+					assert.LessOrEqual(t, len(contentSrc), 800, "%s in %s documentation content exceeds 800 characters limit (got %d)", policyName, tfFile, len(contentSrc))
+					assert.Contains(t, contentSrc, "gcloud", "%s in %s documentation must contain a copy-pasteable CLI command", policyName, tfFile)
+					totalAlertsChecked++
+				}
+			}
+		}
+
+		assert.GreaterOrEqual(t, totalAlertsChecked, 17, "expected at least 17 alert policies across main.tf and slos.tf")
+	})
+
+	t.Run("PlanTimeDeterminism", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		tfFiles := []string{"main.tf", "slos.tf", "dashboards.tf"}
+
+		for _, tfFile := range tfFiles {
+			path := filepath.Join(modulesDir, "monitoring_control_plane", tfFile)
+			file, syntaxBody := parseHCLFileAST(t, parser, path)
+
+			for _, block := range syntaxBody.Blocks {
+				if block.Type == "resource" {
+					resName := block.Labels[0] + "." + block.Labels[1]
+					if countAttr, hasCount := block.Body.Attributes["count"]; hasCount {
+						exprSrc := getExprSource(file, countAttr.Expr)
+						assert.False(t, strings.Contains(exprSrc, ".id") || strings.Contains(exprSrc, ".uri") || strings.Contains(exprSrc, ".email"),
+							"resource %s count attribute in %s must not reference dynamic resource attributes: %s", resName, tfFile, exprSrc)
+					}
+					if forEachAttr, hasForEach := block.Body.Attributes["for_each"]; hasForEach {
+						exprSrc := getExprSource(file, forEachAttr.Expr)
+						assert.False(t, strings.Contains(exprSrc, ".id") || strings.Contains(exprSrc, ".uri") || strings.Contains(exprSrc, ".email"),
+							"resource %s for_each attribute in %s must not reference dynamic resource attributes: %s", resName, tfFile, exprSrc)
+					}
+				}
+			}
 		}
 	})
 }

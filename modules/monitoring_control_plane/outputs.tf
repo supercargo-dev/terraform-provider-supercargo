@@ -1,21 +1,21 @@
 output "dashboard_sre_id" {
   description = "Resource ID of the Control Plane SRE Infrastructure dashboard"
-  value       = ""
+  value       = try(google_monitoring_dashboard.control_plane_sre[0].id, "")
 }
 
 output "dashboard_sre_url" {
   description = "Direct GCP Console URL for the Control Plane SRE Infrastructure dashboard"
-  value       = ""
+  value       = length(google_monitoring_dashboard.control_plane_sre) > 0 ? "https://console.cloud.google.com/monitoring/dashboards/custom/${element(split("/", google_monitoring_dashboard.control_plane_sre[0].id), length(split("/", google_monitoring_dashboard.control_plane_sre[0].id)) - 1)}?project=${var.project_id}" : ""
 }
 
 output "dashboard_governance_id" {
   description = "Resource ID of the Governance & Privacy Plane dashboard"
-  value       = ""
+  value       = try(google_monitoring_dashboard.governance_privacy[0].id, "")
 }
 
 output "dashboard_governance_url" {
   description = "Direct GCP Console URL for the Governance & Privacy Plane dashboard"
-  value       = ""
+  value       = length(google_monitoring_dashboard.governance_privacy) > 0 ? "https://console.cloud.google.com/monitoring/dashboards/custom/${element(split("/", google_monitoring_dashboard.governance_privacy[0].id), length(split("/", google_monitoring_dashboard.governance_privacy[0].id)) - 1)}?project=${var.project_id}" : ""
 }
 
 output "hub_custom_service_id" {
