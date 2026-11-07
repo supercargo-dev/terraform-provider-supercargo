@@ -39,6 +39,11 @@ module "hub" {
 
 | Variable | Type | Default | Sensitive | Description |
 | :--- | :--- | :--- | :--- | :--- |
+| `additional_sre_notification_channels` | `list(string)` | `[]` | no | Additional notification channels for SRE operations |
+| `alert_email_address` | `string` | `""` | no | Email address for alerts |
+| `alert_notification_channels` | `list(string)` | `[]` | no | List of existing notification channel IDs |
+| `alert_pagerduty_service_key` | `string` | (sensitive) | yes | PagerDuty service key for critical alerts |
+| `alert_slack_channel` | `string` | `""` | no | Slack notification channel name for alerts |
 | `audit_dataset_id` | `string` | `"supercargo_audit"` | no | The BigQuery dataset ID for storing raw and materialized audit outbox events |
 | `audit_table_id` | `string` | `"outbox_events"` | no | The BigQuery table ID for raw outbox events |
 | `audit_view_id` | `string` | `"outbox_events_view"` | no | The BigQuery view ID for canonical outbox events |
@@ -64,6 +69,7 @@ module "hub" {
 | `enable_audit_sink` | `bool` | `true` | no | Whether to provision the BigQuery audit sink and Pub/Sub subscription for outbox events |
 | `enable_dataform_integration` | `bool` | `false` | no | Whether to provision the Dataform Cloud Logging sink and Pub/Sub push subscription |
 | `enable_health_mesh` | `bool` | `true` | no | Whether to provision the Pub/Sub health events mesh, BigQuery catalog dataset, and streaming subscription |
+| `enable_monitoring` | `bool` | `false` | no | Whether to provision the Cloud Monitoring pack for the Hub control plane |
 | `environment` | `string` | *required* | no | The environment name (dev, staging, prod) |
 | `firestore_project_id` | `string` | *required* | no | Project ID where Firestore resides |
 | `force_deploy_trigger` | `string` | `"static"` | no | A value that, when changed, triggers a new Cloud Run revision (e.g. git SHA or image digest). Use 'latest' or a fixed value for idempotency. |
@@ -89,6 +95,7 @@ module "hub" {
 | `shovel_image_tag` | `string` | `""` | no | The image tag for the metadata_shovel service |
 | `shovel_max_instances` | `number` | `3` | no | The maximum number of instances for the metadata shovel service |
 | `shovel_oidc_audience` | `string` | `""` | no | The expected audience for metadata shovel OIDC tokens. Falls back to oidc_audience or supercargo-metadata-shovel-<env>. |
+| `sla_tier` | `string` | `"TIER_1"` | no | SLA tier for the control plane (TIER_1, TIER_2, TIER_3) |
 | `topic_routing` | `map(string)` | `{}` | no | A map of URN prefixes to Pub/Sub topic names for custom routing in the metadata shovel. |
 
 ## Module Outputs
@@ -99,6 +106,7 @@ module "hub" {
 | `asset_health_history_table_id` | no | The BigQuery table ID for asset health transition history |
 | `audit_dataset_id` | no | The BigQuery dataset ID for outbox audit events |
 | `audit_subscription_id` | no | The Pub/Sub subscription ID for the BigQuery audit sink |
+| `audit_subscription_name` | no | The Pub/Sub subscription name for the BigQuery audit sink (resolves #300) |
 | `audit_table_id` | no | The BigQuery raw table ID for outbox audit events |
 | `audit_view_id` | no | The BigQuery view ID for canonical outbox audit events |
 | `catalog_dataset_id` | no | The BigQuery dataset ID for asset catalog and health history |
@@ -107,6 +115,8 @@ module "hub" {
 | `console_service_url` | no | The URI of the Supercargo Console companion Cloud Run service |
 | `contract_changed_topic_id` | no | Pub/Sub topic ID for contract changed events |
 | `contract_deleted_topic_id` | no | Pub/Sub topic ID for contract deleted events |
+| `dashboard_governance_url` | no | Direct GCP Console URL to the Governance & Privacy Plane dashboard |
+| `dashboard_sre_url` | no | Direct GCP Console URL to the Control Plane SRE Infrastructure dashboard |
 | `dataform_events_dlq_subscription_name` | no | The Pub/Sub pull subscription name for inspecting Dataform dead-letter messages |
 | `dataform_events_dlq_topic_name` | no | The Pub/Sub dead-letter topic name for Dataform workflow execution events |
 | `dataform_events_subscription_name` | no | The Pub/Sub push subscription name for Dataform workflow execution events |
@@ -124,6 +134,7 @@ module "hub" {
 | `service_name` | no | The name of the Hub Cloud Run service |
 | `service_url` | no | The URI of the Hub Cloud Run service |
 | `shovel_service_account_email` | no | The service account email of the Metadata Shovel service |
+| `shovel_service_name` | no | The name of the Metadata Shovel Cloud Run service |
 
 ## Implementation
 - Source Code: `modules/hub`

@@ -34,10 +34,12 @@ module "analytics_github_sync" {
 
 | Variable | Type | Default | Sensitive | Description |
 | :--- | :--- | :--- | :--- | :--- |
+| `alert_notification_channels` | `list(string)` | `[]` | no | List of Cloud Monitoring notification channel IDs for alert routing |
 | `container_image` | `string` | *required* | no | Container image URI for the GitHub sync job. |
 | `cpu_limit` | `string` | `"1"` | no | CPU limit for the Cloud Run container. |
 | `dataset` | `string` | `"supercargo_github"` | no | Target BigQuery dataset name. |
 | `deletion_protection` | `bool` | `false` | no | Whether to protect the Cloud Run Job from deletion. |
+| `enable_monitoring` | `bool` | `true` | no | Whether to enable Cloud Monitoring alerts for Analytics GitHub Sync |
 | `github_token_secret_id` | `string` | *required* | no | Secret Manager secret ID containing the GitHub personal access token. |
 | `hub_audience` | `string` | `""` | no | Supercargo Hub OIDC audience for authentication. |
 | `hub_url` | `string` | `""` | no | Supercargo Hub service URL for runner asset health reporting. |
@@ -54,6 +56,7 @@ module "analytics_github_sync" {
 | `scheduler_service_account_id` | `string` | `"analytics-github-sync-sched-sa"` | no | Custom account ID for the Cloud Scheduler service account. |
 | `schedules` | `map(string)` | `{}` | no | Optional map of cron schedules overriding defaults per contract (repositories, issues, pulls, workflow_runs, billing). |
 | `service_account_id` | `string` | `"analytics-github-sync-sa"` | no | Custom account ID for the Cloud Run Job service account. |
+| `sla_tier` | `string` | `"TIER_1"` | no | The SLA tier (TIER_1, TIER_2, TIER_3) |
 | `time_zone` | `string` | `"Etc/UTC"` | no | Time zone for the Cloud Scheduler job. |
 | `timeout` | `string` | `"600s"` | no | Execution timeout for the Cloud Run job. |
 | `topic` | `string` | `"supercargo-analytics"` | no | GitHub topic for autonomous repository discovery. |

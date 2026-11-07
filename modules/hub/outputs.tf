@@ -143,4 +143,26 @@ output "dataform_events_dlq_subscription_name" {
   value       = var.enable_dataform_integration ? google_pubsub_subscription.dataform_events_dlq_pull[0].name : null
 }
 
+# --- Cloud Monitoring Pack Outputs ---
+
+output "shovel_service_name" {
+  description = "The name of the Metadata Shovel Cloud Run service"
+  value       = google_cloud_run_v2_service.shovel.name
+}
+
+output "audit_subscription_name" {
+  description = "The Pub/Sub subscription name for the BigQuery audit sink (resolves #300)"
+  value       = var.enable_audit_sink ? google_pubsub_subscription.outbox_audit_bq[0].name : ""
+}
+
+output "dashboard_sre_url" {
+  description = "Direct GCP Console URL to the Control Plane SRE Infrastructure dashboard"
+  value       = var.enable_monitoring && length(module.monitoring) > 0 ? module.monitoring[0].dashboard_sre_url : ""
+}
+
+output "dashboard_governance_url" {
+  description = "Direct GCP Console URL to the Governance & Privacy Plane dashboard"
+  value       = var.enable_monitoring && length(module.monitoring) > 0 ? module.monitoring[0].dashboard_governance_url : ""
+}
+
 

@@ -5885,3 +5885,928 @@ func TestModules_DataProductDashboardOutputForwarding(t *testing.T) {
 		assert.Equal(t, expectedExpr, getExprSource(outFile, valAttr.Expr))
 	}
 }
+
+func TestModules_ControlPlaneMonitoring(t *testing.T) {
+	t.Parallel()
+	modulesDir := "../../modules"
+
+	t.Run("CloudRunServiceAlerts", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		mainPath := filepath.Join(modulesDir, "monitoring_control_plane", "main.tf")
+		varPath := filepath.Join(modulesDir, "monitoring_control_plane", "variables.tf")
+		outPath := filepath.Join(modulesDir, "monitoring_control_plane", "outputs.tf")
+
+		file, syntaxBody := parseHCLFileAST(t, parser, mainPath)
+		varFile, varBody := parseHCLFileAST(t, parser, varPath)
+		outFile, outBody := parseHCLFileAST(t, parser, outPath)
+
+		// Assert variables in variables.tf
+		vars := make(map[string]*hclsyntax.Block)
+		for _, block := range varBody.Blocks {
+			if block.Type == "variable" && len(block.Labels) == 1 {
+				vars[block.Labels[0]] = block
+			}
+		}
+
+		expectedVars := []string{
+			"project_id", "environment", "name_suffix", "region",
+			"hub_service_name", "vault_service_name", "shovel_service_name",
+			"mcp_service_name", "console_service_name", "analytics_dashboard_service_name",
+			"github_runner_webhook_service_name",
+			"hub_max_instances", "vault_max_instances", "shovel_max_instances",
+			"mcp_max_instances", "console_max_instances", "analytics_dashboard_max_instances",
+			"github_runner_webhook_max_instances",
+			"shovel_trigger_name", "firestore_database_id", "kms_key_ring_name",
+			"kms_crypto_key_name", "outbox_audit_subscription_name", "health_events_subscription_name",
+			"events_push_subscription_name", "dataform_events_push_subscription_name",
+			"dataform_events_dlq_subscription_name",
+			"analytics_runner_job_name", "github_runner_job_name", "github_sync_job_names",
+			"scheduler_job_names", "telemetry_subscriptions", "telemetry_dlq_subscription_name",
+			"sla_tier", "enable_control_plane_alerts", "enable_slos", "enable_dashboards",
+			"alert_notification_channels", "additional_sre_notification_channels",
+			"alert_slack_channel", "alert_email_address", "alert_pagerduty_service_key",
+			"unacked_message_age_threshold_seconds",
+		}
+		for _, v := range expectedVars {
+			_, exists := vars[v]
+			assert.True(t, exists, "variables.tf missing variable %s", v)
+		}
+
+		// Assert alert_pagerduty_service_key is sensitive
+		if pdVar, exists := vars["alert_pagerduty_service_key"]; exists {
+			sensAttr, hasSens := pdVar.Body.Attributes["sensitive"]
+			require.True(t, hasSens, "alert_pagerduty_service_key must have sensitive attribute")
+			assert.Equal(t, "true", getExprSource(varFile, sensAttr.Expr))
+		}
+
+		// Assert notification channels in main.tf
+		channels := make(map[string]*hclsyntax.Block)
+		alerts := make(map[string]*hclsyntax.Block)
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 {
+				if block.Labels[0] == "google_monitoring_notification_channel" {
+					channels[block.Labels[1]] = block
+				} else if block.Labels[0] == "google_monitoring_alert_policy" {
+					alerts[block.Labels[1]] = block
+				}
+			}
+		}
+
+		require.Contains(t, channels, "slack", "main.tf missing google_monitoring_notification_channel.slack")
+		require.Contains(t, channels, "email", "main.tf missing google_monitoring_notification_channel.email")
+		require.Contains(t, channels, "pagerduty", "main.tf missing google_monitoring_notification_channel.pagerduty")
+
+		pdChan := channels["pagerduty"]
+		var hasSensLabels bool
+		for _, sub := range pdChan.Body.Blocks {
+			if sub.Type == "sensitive_labels" {
+				hasSensLabels = true
+				keyAttr, hasKey := sub.Body.Attributes["service_key"]
+				require.True(t, hasKey, "sensitive_labels must set service_key")
+				assert.Equal(t, "var.alert_pagerduty_service_key", getExprSource(file, keyAttr.Expr))
+			}
+		}
+		assert.True(t, hasSensLabels, "pagerduty channel must define sensitive_labels block")
+
+		// Assert Cloud Run Golden Signal Alert Policies
+		expectedAlerts := []struct {
+			name                 string
+			displayNamePrefix    string
+			expectedChannelsExpr string
+			filterContains       []string
+			aligner              string
+			duration             string
+			comparison           string
+		}{
+			{
+				name:                 "service_5xx_rate",
+				displayNamePrefix:    "[Tier 1] [INFRA] Cloud Run 5xx Errors",
+				expectedChannelsExpr: `each.value.tier == "Tier 1" ? local.all_alert_notification_channels : local.tier2_alert_notification_channels`,
+				filterContains:       []string{`metric.label.response_code_class = "5xx"`, `metric.type = "run.googleapis.com/request_count"`},
+				aligner:              `"ALIGN_RATE"`,
+				duration:             `"0s"`,
+				comparison:           `"COMPARISON_GT"`,
+			},
+			{
+				name:                 "service_auth_failures",
+				displayNamePrefix:    "[Tier 1] [INFRA] Cloud Run Invoker Auth 401/403",
+				expectedChannelsExpr: `each.value.tier == "Tier 1" ? local.all_alert_notification_channels : local.tier2_alert_notification_channels`,
+				filterContains:       []string{`response_code = one_of("401", "403")`, `metric.type = "run.googleapis.com/request_count"`},
+				aligner:              `"ALIGN_RATE"`,
+				duration:             `"0s"`,
+				comparison:           `"COMPARISON_GT"`,
+			},
+			{
+				name:                 "service_memory_utilization",
+				displayNamePrefix:    "[Tier 2] [INFRA] Cloud Run Memory Saturation >85%",
+				expectedChannelsExpr: `local.tier2_alert_notification_channels`,
+				filterContains:       []string{`metric.type = "run.googleapis.com/container/memory/utilizations"`},
+				aligner:              `"ALIGN_PERCENTILE_99"`,
+				duration:             `"300s"`,
+				comparison:           `"COMPARISON_GT"`,
+			},
+			{
+				name:                 "service_cpu_utilization",
+				displayNamePrefix:    "[Tier 2] [INFRA] Cloud Run CPU Saturation >85%",
+				expectedChannelsExpr: `local.tier2_alert_notification_channels`,
+				filterContains:       []string{`metric.type = "run.googleapis.com/container/cpu/utilizations"`},
+				aligner:              `"ALIGN_PERCENTILE_99"`,
+				duration:             `"300s"`,
+				comparison:           `"COMPARISON_GT"`,
+			},
+			{
+				name:                 "service_instance_saturation",
+				displayNamePrefix:    "[Tier 2] [INFRA] Cloud Run Instance Saturation",
+				expectedChannelsExpr: `local.tier2_alert_notification_channels`,
+				filterContains:       []string{`metric.type = "run.googleapis.com/container/instance_count"`, `metric.label.state = "active"`},
+				aligner:              `"ALIGN_MAX"`,
+				duration:             `"180s"`,
+				comparison:           `"COMPARISON_GTE"`,
+			},
+		}
+
+		for _, tc := range expectedAlerts {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				alert, exists := alerts[tc.name]
+				require.True(t, exists, "google_monitoring_alert_policy.%s must exist in main.tf", tc.name)
+
+				// for_each guard
+				forEachAttr, hasForEach := alert.Body.Attributes["for_each"]
+				require.True(t, hasForEach, "%s must have for_each attribute", tc.name)
+				assert.Equal(t, "var.enable_control_plane_alerts ? local.control_plane_services : {}", getExprSource(file, forEachAttr.Expr))
+
+				// Combiner
+				combAttr, hasComb := alert.Body.Attributes["combiner"]
+				require.True(t, hasComb)
+				assert.Equal(t, `"OR"`, getExprSource(file, combAttr.Expr))
+
+				// Display Name
+				nameAttr, hasName := alert.Body.Attributes["display_name"]
+				require.True(t, hasName)
+				assert.Contains(t, getExprSource(file, nameAttr.Expr), tc.displayNamePrefix)
+
+				// Notification channels
+				chanAttr, hasChan := alert.Body.Attributes["notification_channels"]
+				require.True(t, hasChan)
+				assert.Equal(t, tc.expectedChannelsExpr, getExprSource(file, chanAttr.Expr))
+
+				// Auto close strategy
+				var stratBlock *hclsyntax.Block
+				for _, sub := range alert.Body.Blocks {
+					if sub.Type == "alert_strategy" {
+						stratBlock = sub
+						break
+					}
+				}
+				require.NotNil(t, stratBlock, "%s must define alert_strategy block", tc.name)
+				autoCloseAttr, hasAutoClose := stratBlock.Body.Attributes["auto_close"]
+				require.True(t, hasAutoClose)
+				assert.Equal(t, `"604800s"`, getExprSource(file, autoCloseAttr.Expr))
+
+				// Documentation block
+				var docBlock *hclsyntax.Block
+				for _, sub := range alert.Body.Blocks {
+					if sub.Type == "documentation" {
+						docBlock = sub
+						break
+					}
+				}
+				require.NotNil(t, docBlock, "%s must define documentation block", tc.name)
+				contentAttr, hasContent := docBlock.Body.Attributes["content"]
+				require.True(t, hasContent)
+				contentSrc := getExprSource(file, contentAttr.Expr)
+				assert.NotEmpty(t, contentSrc)
+				assert.LessOrEqual(t, len(contentSrc), 800, "Documentation for %s must be <= 800 characters", tc.name)
+				assert.Contains(t, contentSrc, "gcloud", "Documentation for %s must include CLI triage command", tc.name)
+
+				// Conditions block
+				var condBlock *hclsyntax.Block
+				for _, sub := range alert.Body.Blocks {
+					if sub.Type == "conditions" {
+						condBlock = sub
+						break
+					}
+				}
+				require.NotNil(t, condBlock, "%s must define conditions block", tc.name)
+				var threshBlock *hclsyntax.Block
+				for _, sub := range condBlock.Body.Blocks {
+					if sub.Type == "condition_threshold" {
+						threshBlock = sub
+						break
+					}
+				}
+				require.NotNil(t, threshBlock, "%s must define condition_threshold block", tc.name)
+
+				filterAttr, hasFilter := threshBlock.Body.Attributes["filter"]
+				require.True(t, hasFilter)
+				filterSrc := strings.ReplaceAll(getExprSource(file, filterAttr.Expr), `\"`, `"`)
+				for _, fc := range tc.filterContains {
+					assert.Contains(t, filterSrc, fc, "%s filter missing %s", tc.name, fc)
+				}
+
+				durAttr, hasDur := threshBlock.Body.Attributes["duration"]
+				require.True(t, hasDur)
+				assert.Equal(t, tc.duration, getExprSource(file, durAttr.Expr))
+
+				compAttr, hasComp := threshBlock.Body.Attributes["comparison"]
+				require.True(t, hasComp)
+				assert.Equal(t, tc.comparison, getExprSource(file, compAttr.Expr))
+
+				var aggBlock *hclsyntax.Block
+				for _, sub := range threshBlock.Body.Blocks {
+					if sub.Type == "aggregations" {
+						aggBlock = sub
+						break
+					}
+				}
+				require.NotNil(t, aggBlock, "%s must define aggregations block", tc.name)
+				alignerAttr, hasAligner := aggBlock.Body.Attributes["per_series_aligner"]
+				require.True(t, hasAligner)
+				assert.Equal(t, tc.aligner, getExprSource(file, alignerAttr.Expr))
+			})
+		}
+
+		// Assert outputs in outputs.tf
+		outputs := make(map[string]*hclsyntax.Block)
+		for _, block := range outBody.Blocks {
+			if block.Type == "output" && len(block.Labels) == 1 {
+				outputs[block.Labels[0]] = block
+			}
+		}
+
+		require.Contains(t, outputs, "all_alert_notification_channels")
+		require.Contains(t, outputs, "tier2_alert_notification_channels")
+		require.Contains(t, outputs, "unacked_message_age_threshold_seconds")
+
+		allChanVal := getExprSource(outFile, outputs["all_alert_notification_channels"].Body.Attributes["value"].Expr)
+		assert.Equal(t, "local.all_alert_notification_channels", allChanVal)
+
+		tier2ChanVal := getExprSource(outFile, outputs["tier2_alert_notification_channels"].Body.Attributes["value"].Expr)
+		assert.Equal(t, "local.tier2_alert_notification_channels", tier2ChanVal)
+
+		unackedAgeVal := getExprSource(outFile, outputs["unacked_message_age_threshold_seconds"].Body.Attributes["value"].Expr)
+		assert.Equal(t, "local.unacked_age_seconds", unackedAgeVal)
+	})
+
+	t.Run("ModuleVariableForwarding", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		hubVarPath := filepath.Join(modulesDir, "hub", "variables.tf")
+		hubMainPath := filepath.Join(modulesDir, "hub", "main.tf")
+		hubOutPath := filepath.Join(modulesDir, "hub", "outputs.tf")
+
+		_, hubVarBody := parseHCLFileAST(t, parser, hubVarPath)
+		hubMainFile, hubMainBody := parseHCLFileAST(t, parser, hubMainPath)
+		hubOutFile, hubOutBody := parseHCLFileAST(t, parser, hubOutPath)
+
+		// Assert variables in modules/hub/variables.tf
+		hubVars := make(map[string]*hclsyntax.Block)
+		for _, block := range hubVarBody.Blocks {
+			if block.Type == "variable" && len(block.Labels) == 1 {
+				hubVars[block.Labels[0]] = block
+			}
+		}
+
+		expectedHubVars := []string{
+			"enable_monitoring",
+			"alert_slack_channel",
+			"alert_email_address",
+			"alert_pagerduty_service_key",
+			"alert_notification_channels",
+			"additional_sre_notification_channels",
+			"sla_tier",
+		}
+		for _, v := range expectedHubVars {
+			assert.Contains(t, hubVars, v, "modules/hub/variables.tf missing variable %s", v)
+		}
+
+		// Assert module "monitoring" in modules/hub/main.tf
+		var monModule *hclsyntax.Block
+		for _, block := range hubMainBody.Blocks {
+			if block.Type == "module" && len(block.Labels) == 1 && block.Labels[0] == "monitoring" {
+				monModule = block
+				break
+			}
+		}
+		require.NotNil(t, monModule, "modules/hub/main.tf missing module \"monitoring\"")
+
+		countAttr, hasCount := monModule.Body.Attributes["count"]
+		require.True(t, hasCount, "module \"monitoring\" must define count attribute")
+		assert.Equal(t, "var.enable_monitoring ? 1 : 0", getExprSource(hubMainFile, countAttr.Expr))
+
+		sourceAttr, hasSource := monModule.Body.Attributes["source"]
+		require.True(t, hasSource, "module \"monitoring\" must define source attribute")
+		assert.Equal(t, `"../monitoring_control_plane"`, getExprSource(hubMainFile, sourceAttr.Expr))
+
+		// Check forwarded variables
+		expectedAttrs := map[string]string{
+			"project_id":                  "var.project_id",
+			"environment":                 "var.environment",
+			"name_suffix":                 "var.name_suffix",
+			"region":                      "var.region",
+			"hub_service_name":            "google_cloud_run_v2_service.hub.name",
+			"shovel_service_name":         "google_cloud_run_v2_service.shovel.name",
+			"hub_max_instances":           "var.max_instances",
+			"shovel_max_instances":        "var.shovel_max_instances",
+			"shovel_trigger_name":         "google_eventarc_trigger.outbox_trigger.name",
+			"firestore_database_id":       "google_firestore_database.database.name",
+			"sla_tier":                    "var.sla_tier",
+			"alert_slack_channel":         "var.alert_slack_channel",
+			"alert_email_address":         "var.alert_email_address",
+			"alert_pagerduty_service_key": "var.alert_pagerduty_service_key",
+		}
+		for attrName, expectedExpr := range expectedAttrs {
+			attr, hasAttr := monModule.Body.Attributes[attrName]
+			require.True(t, hasAttr, "module \"monitoring\" missing attribute %s", attrName)
+			assert.Equal(t, expectedExpr, getExprSource(hubMainFile, attr.Expr))
+		}
+
+		// Assert outputs in modules/hub/outputs.tf
+		hubOutputs := make(map[string]*hclsyntax.Block)
+		for _, block := range hubOutBody.Blocks {
+			if block.Type == "output" && len(block.Labels) == 1 {
+				hubOutputs[block.Labels[0]] = block
+			}
+		}
+
+		require.Contains(t, hubOutputs, "shovel_service_name", "modules/hub/outputs.tf missing output shovel_service_name")
+		require.Contains(t, hubOutputs, "audit_subscription_name", "modules/hub/outputs.tf missing output audit_subscription_name (Issue #300)")
+		require.Contains(t, hubOutputs, "dashboard_sre_url", "modules/hub/outputs.tf missing output dashboard_sre_url")
+		require.Contains(t, hubOutputs, "dashboard_governance_url", "modules/hub/outputs.tf missing output dashboard_governance_url")
+
+		shovelVal := getExprSource(hubOutFile, hubOutputs["shovel_service_name"].Body.Attributes["value"].Expr)
+		assert.Equal(t, "google_cloud_run_v2_service.shovel.name", shovelVal)
+
+		auditSubVal := getExprSource(hubOutFile, hubOutputs["audit_subscription_name"].Body.Attributes["value"].Expr)
+		assert.Equal(t, `var.enable_audit_sink ? google_pubsub_subscription.outbox_audit_bq[0].name : ""`, auditSubVal)
+	})
+
+	t.Run("SLOsAndBurnRateAlerts", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		slosPath := filepath.Join(modulesDir, "monitoring_control_plane", "slos.tf")
+		outPath := filepath.Join(modulesDir, "monitoring_control_plane", "outputs.tf")
+
+		sloFile, sloBody := parseHCLFileAST(t, parser, slosPath)
+		outFile, outBody := parseHCLFileAST(t, parser, outPath)
+
+		// 1. Assert Custom Services
+		services := make(map[string]*hclsyntax.Block)
+		slos := make(map[string]*hclsyntax.Block)
+		alerts := make(map[string]*hclsyntax.Block)
+		for _, block := range sloBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 {
+				switch block.Labels[0] {
+				case "google_monitoring_custom_service":
+					services[block.Labels[1]] = block
+				case "google_monitoring_slo":
+					slos[block.Labels[1]] = block
+				case "google_monitoring_alert_policy":
+					alerts[block.Labels[1]] = block
+				}
+			}
+		}
+
+		require.Contains(t, services, "hub", "slos.tf missing google_monitoring_custom_service.hub")
+		require.Contains(t, services, "vault", "slos.tf missing google_monitoring_custom_service.vault")
+
+		hubSvc := services["hub"]
+		assert.Equal(t, "var.enable_slos && var.hub_service_name != \"\" && var.hub_service_name != null ? 1 : 0", getExprSource(sloFile, hubSvc.Body.Attributes["count"].Expr))
+		assert.Equal(t, "local.hub_custom_service_id", getExprSource(sloFile, hubSvc.Body.Attributes["service_id"].Expr))
+
+		vaultSvc := services["vault"]
+		assert.Equal(t, "var.enable_slos && var.vault_service_name != \"\" && var.vault_service_name != null ? 1 : 0", getExprSource(sloFile, vaultSvc.Body.Attributes["count"].Expr))
+		assert.Equal(t, "local.vault_custom_service_id", getExprSource(sloFile, vaultSvc.Body.Attributes["service_id"].Expr))
+
+		// 2. Assert SLO Definitions
+		expectedSLOs := []struct {
+			name        string
+			serviceExpr string
+			sloID       string
+			goal        string
+			period      string
+			dependsOn   string
+		}{
+			{
+				name:        "hub_availability",
+				serviceExpr: "local.hub_custom_service_id",
+				sloID:       `"hub-availability"`,
+				goal:        "0.999",
+				period:      "30",
+				dependsOn:   "google_monitoring_custom_service.hub",
+			},
+			{
+				name:        "hub_latency",
+				serviceExpr: "local.hub_custom_service_id",
+				sloID:       `"hub-latency"`,
+				goal:        "0.99",
+				period:      "30",
+				dependsOn:   "google_monitoring_custom_service.hub",
+			},
+			{
+				name:        "vault_availability",
+				serviceExpr: "local.vault_custom_service_id",
+				sloID:       `"vault-availability"`,
+				goal:        "0.9995",
+				period:      "30",
+				dependsOn:   "google_monitoring_custom_service.vault",
+			},
+			{
+				name:        "vault_latency",
+				serviceExpr: "local.vault_custom_service_id",
+				sloID:       `"vault-latency"`,
+				goal:        "0.99",
+				period:      "30",
+				dependsOn:   "google_monitoring_custom_service.vault",
+			},
+		}
+
+		for _, tc := range expectedSLOs {
+			slo, exists := slos[tc.name]
+			require.True(t, exists, "slos.tf missing google_monitoring_slo.%s", tc.name)
+			assert.Equal(t, tc.serviceExpr, getExprSource(sloFile, slo.Body.Attributes["service"].Expr))
+			assert.Equal(t, tc.sloID, getExprSource(sloFile, slo.Body.Attributes["slo_id"].Expr))
+			assert.Equal(t, tc.goal, getExprSource(sloFile, slo.Body.Attributes["goal"].Expr))
+			assert.Equal(t, tc.period, getExprSource(sloFile, slo.Body.Attributes["rolling_period_days"].Expr))
+
+			depAttr, hasDep := slo.Body.Attributes["depends_on"]
+			require.True(t, hasDep, "%s missing depends_on attribute", tc.name)
+			assert.Contains(t, getExprSource(sloFile, depAttr.Expr), tc.dependsOn)
+		}
+
+		// 3. Assert Plan-Time Determinism in Static SLO Resource IDs
+		sloFileContent := string(sloFile.Bytes)
+		assert.Contains(t, sloFileContent, "projects/${var.project_id}/services/${local.hub_custom_service_id}/serviceLevelObjectives")
+		assert.Contains(t, sloFileContent, "projects/${var.project_id}/services/${local.vault_custom_service_id}/serviceLevelObjectives")
+		assert.NotContains(t, sloFileContent, "google_monitoring_slo.hub_availability[0].id")
+		assert.NotContains(t, sloFileContent, "google_monitoring_slo.vault_availability[0].id")
+
+		// 4. Assert Burn-Rate Alert Policy
+		require.Contains(t, alerts, "slo_burn_rate", "slos.tf missing google_monitoring_alert_policy.slo_burn_rate")
+		burnAlert := alerts["slo_burn_rate"]
+
+		assert.Equal(t, "local.slo_alerts", getExprSource(sloFile, burnAlert.Body.Attributes["for_each"].Expr))
+		assert.Equal(t, `"OR"`, getExprSource(sloFile, burnAlert.Body.Attributes["combiner"].Expr))
+
+		// Check explicit depends_on on SLOs
+		depAttr, hasDep := burnAlert.Body.Attributes["depends_on"]
+		require.True(t, hasDep, "slo_burn_rate must define depends_on attribute")
+		depSrc := getExprSource(sloFile, depAttr.Expr)
+		assert.Contains(t, depSrc, "google_monitoring_slo.hub_availability")
+		assert.Contains(t, depSrc, "google_monitoring_slo.hub_latency")
+		assert.Contains(t, depSrc, "google_monitoring_slo.vault_availability")
+		assert.Contains(t, depSrc, "google_monitoring_slo.vault_latency")
+
+		// Check documentation block
+		var docBlock *hclsyntax.Block
+		for _, sub := range burnAlert.Body.Blocks {
+			if sub.Type == "documentation" {
+				docBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, docBlock, "slo_burn_rate must define documentation block")
+		contentSrc := getExprSource(sloFile, docBlock.Body.Attributes["content"].Expr)
+		assert.NotEmpty(t, contentSrc)
+		assert.LessOrEqual(t, len(contentSrc), 800, "Documentation for slo_burn_rate must be <= 800 characters")
+		assert.Contains(t, contentSrc, "gcloud", "Documentation for slo_burn_rate must include CLI triage command")
+
+		// Check condition filter
+		var condBlock *hclsyntax.Block
+		for _, sub := range burnAlert.Body.Blocks {
+			if sub.Type == "conditions" {
+				condBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, condBlock, "slo_burn_rate must define conditions block")
+		var threshBlock *hclsyntax.Block
+		for _, sub := range condBlock.Body.Blocks {
+			if sub.Type == "condition_threshold" {
+				threshBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, threshBlock, "slo_burn_rate must define condition_threshold block")
+		filterSrc := getExprSource(sloFile, threshBlock.Body.Attributes["filter"].Expr)
+		assert.Contains(t, filterSrc, "select_slo_burn_rate")
+
+		// 5. Assert outputs in outputs.tf
+		outputs := make(map[string]*hclsyntax.Block)
+		for _, block := range outBody.Blocks {
+			if block.Type == "output" && len(block.Labels) == 1 {
+				outputs[block.Labels[0]] = block
+			}
+		}
+
+		expectedOutputs := map[string]string{
+			"hub_custom_service_id":     `try(google_monitoring_custom_service.hub[0].service_id, "")`,
+			"vault_custom_service_id":   `try(google_monitoring_custom_service.vault[0].service_id, "")`,
+			"hub_availability_slo_id":   `try(google_monitoring_slo.hub_availability[0].id, "")`,
+			"hub_latency_slo_id":        `try(google_monitoring_slo.hub_latency[0].id, "")`,
+			"vault_availability_slo_id": `try(google_monitoring_slo.vault_availability[0].id, "")`,
+			"vault_latency_slo_id":      `try(google_monitoring_slo.vault_latency[0].id, "")`,
+		}
+
+		for name, expectedExpr := range expectedOutputs {
+			block, exists := outputs[name]
+			require.True(t, exists, "outputs.tf missing output %s", name)
+			valAttr, hasVal := block.Body.Attributes["value"]
+			require.True(t, hasVal)
+			assert.Equal(t, expectedExpr, getExprSource(outFile, valAttr.Expr))
+		}
+	})
+
+	t.Run("FirestoreAndEventarcAlerts", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		mainPath := filepath.Join(modulesDir, "monitoring_control_plane", "main.tf")
+		file, syntaxBody := parseHCLFileAST(t, parser, mainPath)
+
+		alerts := make(map[string]*hclsyntax.Block)
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 && block.Labels[0] == "google_monitoring_alert_policy" {
+				alerts[block.Labels[1]] = block
+			}
+		}
+
+		expectedAlerts := []string{
+			"firestore_aborted_transactions",
+			"firestore_quota_exhaustion",
+			"shovel_trigger_delivery_failures",
+			"core_subscription_unacked_age",
+			"dataform_dlq_backlog",
+		}
+		for _, name := range expectedAlerts {
+			require.Contains(t, alerts, name, "main.tf missing google_monitoring_alert_policy.%s", name)
+		}
+
+		// 1. firestore_aborted_transactions
+		abortedAlert := alerts["firestore_aborted_transactions"]
+		assert.Equal(t, "var.enable_control_plane_alerts ? 1 : 0", getExprSource(file, abortedAlert.Body.Attributes["count"].Expr))
+		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, abortedAlert.Body.Attributes["notification_channels"].Expr))
+		fileContent := string(file.Bytes)
+		assert.Contains(t, fileContent, "resource.labels.database_id = \\\"${var.firestore_database_id}\\\"")
+		assert.Contains(t, fileContent, "metric.label.response_code = \\\"ABORTED\\\"")
+
+		// 2. firestore_quota_exhaustion
+		quotaAlert := alerts["firestore_quota_exhaustion"]
+		assert.Equal(t, "var.enable_control_plane_alerts ? 1 : 0", getExprSource(file, quotaAlert.Body.Attributes["count"].Expr))
+		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, quotaAlert.Body.Attributes["notification_channels"].Expr))
+		assert.Contains(t, fileContent, "metric.label.response_code = \\\"RESOURCE_EXHAUSTED\\\"")
+
+		// 3. shovel_trigger_delivery_failures
+		shovelAlert := alerts["shovel_trigger_delivery_failures"]
+		assert.Equal(t, "var.enable_control_plane_alerts ? 1 : 0", getExprSource(file, shovelAlert.Body.Attributes["count"].Expr))
+		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, shovelAlert.Body.Attributes["notification_channels"].Expr))
+		assert.Contains(t, fileContent, "resource.labels.trigger_id = \\\"${var.shovel_trigger_name}\\\"")
+		assert.Contains(t, fileContent, "eventarc.googleapis.com/delivery_attempt_count")
+		assert.Contains(t, fileContent, "metric.label.response_code != \\\"OK\\\"")
+
+		// 4. core_subscription_unacked_age
+		coreSubAlert := alerts["core_subscription_unacked_age"]
+		assert.Equal(t, "var.enable_control_plane_alerts ? local.core_subscriptions : {}", getExprSource(file, coreSubAlert.Body.Attributes["for_each"].Expr))
+		assert.Equal(t, `each.value.tier == "Tier 1" ? local.all_alert_notification_channels : local.tier2_alert_notification_channels`, getExprSource(file, coreSubAlert.Body.Attributes["notification_channels"].Expr))
+		assert.Contains(t, fileContent, "pubsub.googleapis.com/subscription/oldest_unacked_message_age")
+		assert.Contains(t, fileContent, "element(split(\"/\", var.outbox_audit_subscription_name), length(split(\"/\", var.outbox_audit_subscription_name)) - 1)")
+
+		// 5. dataform_dlq_backlog
+		dlqAlert := alerts["dataform_dlq_backlog"]
+		assert.Equal(t, "var.enable_control_plane_alerts && var.dataform_events_dlq_subscription_name != \"\" ? 1 : 0", getExprSource(file, dlqAlert.Body.Attributes["count"].Expr))
+		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, dlqAlert.Body.Attributes["notification_channels"].Expr))
+		assert.Contains(t, fileContent, "pubsub.googleapis.com/subscription/num_undelivered_messages")
+
+		// Verify documentation blocks length <= 800 and contain gcloud
+		for _, name := range expectedAlerts {
+			alert := alerts[name]
+			var docBlock *hclsyntax.Block
+			for _, sub := range alert.Body.Blocks {
+				if sub.Type == "documentation" {
+					docBlock = sub
+					break
+				}
+			}
+			require.NotNil(t, docBlock, "%s must define documentation block", name)
+			contentSrc := getExprSource(file, docBlock.Body.Attributes["content"].Expr)
+			assert.NotEmpty(t, contentSrc)
+			assert.LessOrEqual(t, len(contentSrc), 800, "Documentation for %s must be <= 800 characters", name)
+			assert.Contains(t, contentSrc, "gcloud", "Documentation for %s must include CLI triage command", name)
+		}
+	})
+
+	t.Run("KMSAndVaultSecurityAlerts", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		mainPath := filepath.Join(modulesDir, "monitoring_control_plane", "main.tf")
+		file, syntaxBody := parseHCLFileAST(t, parser, mainPath)
+
+		alerts := make(map[string]*hclsyntax.Block)
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 && block.Labels[0] == "google_monitoring_alert_policy" {
+				alerts[block.Labels[1]] = block
+			}
+		}
+
+		require.Contains(t, alerts, "kms_access_denials", "main.tf missing google_monitoring_alert_policy.kms_access_denials")
+		require.Contains(t, alerts, "vault_forbidden_spikes", "main.tf missing google_monitoring_alert_policy.vault_forbidden_spikes")
+
+		kmsAlert := alerts["kms_access_denials"]
+		assert.Equal(t, "var.enable_control_plane_alerts ? 1 : 0", getExprSource(file, kmsAlert.Body.Attributes["count"].Expr))
+		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, kmsAlert.Body.Attributes["notification_channels"].Expr))
+
+		vaultAlert := alerts["vault_forbidden_spikes"]
+		assert.Equal(t, "var.enable_control_plane_alerts && var.vault_service_name != \"\" ? 1 : 0", getExprSource(file, vaultAlert.Body.Attributes["count"].Expr))
+		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, vaultAlert.Body.Attributes["notification_channels"].Expr))
+
+		fileContent := string(file.Bytes)
+		assert.Contains(t, fileContent, "cloudkms.googleapis.com/crypto_requests")
+		assert.Contains(t, fileContent, "metric.label.response_code = \\\"403\\\"")
+
+		// Verify documentation blocks length <= 800 and contain gcloud
+		for _, name := range []string{"kms_access_denials", "vault_forbidden_spikes"} {
+			alert := alerts[name]
+			var docBlock *hclsyntax.Block
+			for _, sub := range alert.Body.Blocks {
+				if sub.Type == "documentation" {
+					docBlock = sub
+					break
+				}
+			}
+			require.NotNil(t, docBlock, "%s must define documentation block", name)
+			contentSrc := getExprSource(file, docBlock.Body.Attributes["content"].Expr)
+			assert.NotEmpty(t, contentSrc)
+			assert.LessOrEqual(t, len(contentSrc), 800, "Documentation for %s must be <= 800 characters", name)
+			assert.Contains(t, contentSrc, "gcloud", "Documentation for %s must include CLI triage command", name)
+		}
+	})
+
+	t.Run("BatchJobsAndMetaTelemetryAlerts", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		mainPath := filepath.Join(modulesDir, "monitoring_control_plane", "main.tf")
+		file, syntaxBody := parseHCLFileAST(t, parser, mainPath)
+
+		alerts := make(map[string]*hclsyntax.Block)
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 && block.Labels[0] == "google_monitoring_alert_policy" {
+				alerts[block.Labels[1]] = block
+			}
+		}
+
+		expectedAlerts := []string{
+			"job_failed_execution",
+			"scheduler_dispatch_failure",
+			"telemetry_bq_unacked_age",
+			"telemetry_dlq_backlog",
+		}
+		for _, name := range expectedAlerts {
+			require.Contains(t, alerts, name, "main.tf missing google_monitoring_alert_policy.%s", name)
+		}
+
+		// 1. job_failed_execution
+		jobAlert := alerts["job_failed_execution"]
+		assert.Equal(t, "var.enable_control_plane_alerts ? local.monitored_batch_jobs : toset([])", getExprSource(file, jobAlert.Body.Attributes["for_each"].Expr))
+		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, jobAlert.Body.Attributes["notification_channels"].Expr))
+
+		// 2. scheduler_dispatch_failure
+		schedAlert := alerts["scheduler_dispatch_failure"]
+		assert.Equal(t, "var.enable_control_plane_alerts ? toset(var.scheduler_job_names) : toset([])", getExprSource(file, schedAlert.Body.Attributes["for_each"].Expr))
+		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, schedAlert.Body.Attributes["notification_channels"].Expr))
+
+		// 3. telemetry_bq_unacked_age
+		telemAlert := alerts["telemetry_bq_unacked_age"]
+		assert.Equal(t, "var.enable_control_plane_alerts ? toset(var.telemetry_subscriptions) : toset([])", getExprSource(file, telemAlert.Body.Attributes["for_each"].Expr))
+		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, telemAlert.Body.Attributes["notification_channels"].Expr))
+
+		// 4. telemetry_dlq_backlog
+		dlqAlert := alerts["telemetry_dlq_backlog"]
+		assert.Equal(t, "var.enable_control_plane_alerts && var.telemetry_dlq_subscription_name != \"\" ? 1 : 0", getExprSource(file, dlqAlert.Body.Attributes["count"].Expr))
+		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, dlqAlert.Body.Attributes["notification_channels"].Expr))
+
+		fileContent := string(file.Bytes)
+		assert.Contains(t, fileContent, "run.googleapis.com/job/completed_execution_count")
+		assert.Contains(t, fileContent, "cloudscheduler.googleapis.com/job/attempt_count")
+		assert.Contains(t, fileContent, "pubsub.googleapis.com/subscription/oldest_unacked_message_age")
+		assert.Contains(t, fileContent, "pubsub.googleapis.com/subscription/num_undelivered_messages")
+
+		// Verify documentation blocks length <= 800 and contain gcloud
+		for _, name := range expectedAlerts {
+			alert := alerts[name]
+			var docBlock *hclsyntax.Block
+			for _, sub := range alert.Body.Blocks {
+				if sub.Type == "documentation" {
+					docBlock = sub
+					break
+				}
+			}
+			require.NotNil(t, docBlock, "%s must define documentation block", name)
+			contentSrc := getExprSource(file, docBlock.Body.Attributes["content"].Expr)
+			assert.NotEmpty(t, contentSrc)
+			assert.LessOrEqual(t, len(contentSrc), 800, "Documentation for %s must be <= 800 characters", name)
+			assert.Contains(t, contentSrc, "gcloud", "Documentation for %s must include CLI triage command", name)
+		}
+	})
+
+	t.Run("ChildModulesVariableForwarding", func(t *testing.T) {
+		t.Parallel()
+		childModules := []string{"vault", "analytics_runner", "analytics_github_sync"}
+
+		for _, mod := range childModules {
+			mod := mod
+			t.Run(mod, func(t *testing.T) {
+				t.Parallel()
+				parser := hclparse.NewParser()
+				varPath := filepath.Join(modulesDir, mod, "variables.tf")
+				mainPath := filepath.Join(modulesDir, mod, "main.tf")
+
+				varFile, varBody := parseHCLFileAST(t, parser, varPath)
+				_, mainBody := parseHCLFileAST(t, parser, mainPath)
+
+				vars := make(map[string]*hclsyntax.Block)
+				for _, block := range varBody.Blocks {
+					if block.Type == "variable" && len(block.Labels) == 1 {
+						vars[block.Labels[0]] = block
+					}
+				}
+
+				require.Contains(t, vars, "enable_monitoring", "%s missing variable enable_monitoring", mod)
+				require.Contains(t, vars, "alert_notification_channels", "%s missing variable alert_notification_channels", mod)
+				require.Contains(t, vars, "sla_tier", "%s missing variable sla_tier", mod)
+
+				// Verify sla_tier has validation block
+				slaVar := vars["sla_tier"]
+				var hasValidation bool
+				for _, sub := range slaVar.Body.Blocks {
+					if sub.Type == "validation" {
+						hasValidation = true
+						condAttr, hasCond := sub.Body.Attributes["condition"]
+						require.True(t, hasCond)
+						assert.Contains(t, getExprSource(varFile, condAttr.Expr), "TIER_1")
+					}
+				}
+				assert.True(t, hasValidation, "%s sla_tier must have validation block", mod)
+
+				// Verify NO google_monitoring_alert_policy exists in child module (anti-proliferation rule)
+				for _, block := range mainBody.Blocks {
+					if block.Type == "resource" && len(block.Labels) == 2 {
+						assert.NotEqual(t, "google_monitoring_alert_policy", block.Labels[0],
+							"%s must not define duplicate alert policy; monitoring must be centralized in monitoring_control_plane", mod)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("TurnkeyPersonaDashboards", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		dashPath := filepath.Join(modulesDir, "monitoring_control_plane", "dashboards.tf")
+		outPath := filepath.Join(modulesDir, "monitoring_control_plane", "outputs.tf")
+
+		dashFile, dashBody := parseHCLFileAST(t, parser, dashPath)
+		outFile, outBody := parseHCLFileAST(t, parser, outPath)
+
+		dashboards := make(map[string]*hclsyntax.Block)
+		for _, block := range dashBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 && block.Labels[0] == "google_monitoring_dashboard" {
+				dashboards[block.Labels[1]] = block
+			}
+		}
+
+		require.Contains(t, dashboards, "control_plane_sre", "dashboards.tf missing google_monitoring_dashboard.control_plane_sre")
+		require.Contains(t, dashboards, "governance_privacy", "dashboards.tf missing google_monitoring_dashboard.governance_privacy")
+
+		// 1. Assert Control Plane SRE Dashboard
+		sreDash := dashboards["control_plane_sre"]
+		assert.Equal(t, "var.enable_dashboards ? 1 : 0", getExprSource(dashFile, sreDash.Body.Attributes["count"].Expr))
+		sreJsonAttr, hasSreJson := sreDash.Body.Attributes["dashboard_json"]
+		require.True(t, hasSreJson)
+		sreJson := getExprSource(dashFile, sreJsonAttr.Expr)
+		assert.True(t, strings.HasPrefix(sreJson, "jsonencode("))
+		assert.Contains(t, sreJson, `Supercargo - Control Plane & SRE Infrastructure (${var.environment})${local.name_suffix_display}`)
+		assert.Contains(t, sreJson, "mosaicLayout")
+
+		// Assert 6 SRE Sections
+		expectedSreSections := []string{
+			"Cloud Run Golden Signals",
+			"Container Resource Saturation",
+			"SLO Burn Rates",
+			"Pub/Sub & BigQuery Pipeline Health",
+			"Batch Ingestion Jobs & Cloud Schedulers",
+			"Meta-Telemetry Lakehouse Streaming Health",
+		}
+		for _, section := range expectedSreSections {
+			assert.Contains(t, sreJson, section, "control_plane_sre dashboard missing section %s", section)
+		}
+
+		// 2. Assert Governance & Privacy Dashboard
+		govDash := dashboards["governance_privacy"]
+		assert.Equal(t, "var.enable_dashboards ? 1 : 0", getExprSource(dashFile, govDash.Body.Attributes["count"].Expr))
+		govJsonAttr, hasGovJson := govDash.Body.Attributes["dashboard_json"]
+		require.True(t, hasGovJson)
+		govJson := getExprSource(dashFile, govJsonAttr.Expr)
+		assert.True(t, strings.HasPrefix(govJson, "jsonencode("))
+		assert.Contains(t, govJson, `Supercargo - Governance & Privacy Plane (${var.environment})${local.name_suffix_display}`)
+		assert.Contains(t, govJson, "mosaicLayout")
+
+		// Assert 5 Governance Sections
+		expectedGovSections := []string{
+			"Hub Contract Registry Operations",
+			"Firestore Outbox CDC & Metadata Shovel Delivery",
+			"Vault Cryptographic Operations & Security",
+			"Companion Service Interactions",
+			"Dataplex Taxonomy & Dataform Reconciliation State",
+		}
+		for _, section := range expectedGovSections {
+			assert.Contains(t, govJson, section, "governance_privacy dashboard missing section %s", section)
+		}
+
+		// 3. Assert Outputs in outputs.tf
+		outputs := make(map[string]*hclsyntax.Block)
+		for _, block := range outBody.Blocks {
+			if block.Type == "output" && len(block.Labels) == 1 {
+				outputs[block.Labels[0]] = block
+			}
+		}
+
+		expectedOutputs := map[string]string{
+			"dashboard_sre_id":         `try(google_monitoring_dashboard.control_plane_sre[0].id, "")`,
+			"dashboard_sre_url":        `length(google_monitoring_dashboard.control_plane_sre) > 0 ? "https://console.cloud.google.com/monitoring/dashboards/custom/${element(split("/", google_monitoring_dashboard.control_plane_sre[0].id), length(split("/", google_monitoring_dashboard.control_plane_sre[0].id)) - 1)}?project=${var.project_id}" : ""`,
+			"dashboard_governance_id":  `try(google_monitoring_dashboard.governance_privacy[0].id, "")`,
+			"dashboard_governance_url": `length(google_monitoring_dashboard.governance_privacy) > 0 ? "https://console.cloud.google.com/monitoring/dashboards/custom/${element(split("/", google_monitoring_dashboard.governance_privacy[0].id), length(split("/", google_monitoring_dashboard.governance_privacy[0].id)) - 1)}?project=${var.project_id}" : ""`,
+		}
+
+		for name, expectedExpr := range expectedOutputs {
+			block, exists := outputs[name]
+			require.True(t, exists, "outputs.tf missing output %s", name)
+			valAttr, hasVal := block.Body.Attributes["value"]
+			require.True(t, hasVal)
+			assert.Equal(t, expectedExpr, getExprSource(outFile, valAttr.Expr))
+		}
+	})
+
+	t.Run("DocumentationStringLength", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		tfFiles := []string{"main.tf", "slos.tf"}
+		totalAlertsChecked := 0
+
+		for _, tfFile := range tfFiles {
+			path := filepath.Join(modulesDir, "monitoring_control_plane", tfFile)
+			file, syntaxBody := parseHCLFileAST(t, parser, path)
+
+			for _, block := range syntaxBody.Blocks {
+				if block.Type == "resource" && len(block.Labels) == 2 && block.Labels[0] == "google_monitoring_alert_policy" {
+					policyName := block.Labels[1]
+					var docBlock *hclsyntax.Block
+					for _, sub := range block.Body.Blocks {
+						if sub.Type == "documentation" {
+							docBlock = sub
+							break
+						}
+					}
+					require.NotNil(t, docBlock, "%s in %s missing documentation block", policyName, tfFile)
+					contentAttr, hasContent := docBlock.Body.Attributes["content"]
+					require.True(t, hasContent, "%s in %s missing documentation.content", policyName, tfFile)
+					contentSrc := getExprSource(file, contentAttr.Expr)
+
+					assert.NotEmpty(t, contentSrc, "%s documentation content cannot be empty", policyName)
+					assert.LessOrEqual(t, len(contentSrc), 800, "%s in %s documentation content exceeds 800 characters limit (got %d)", policyName, tfFile, len(contentSrc))
+					assert.Contains(t, contentSrc, "gcloud", "%s in %s documentation must contain a copy-pasteable CLI command", policyName, tfFile)
+					totalAlertsChecked++
+				}
+			}
+		}
+
+		assert.GreaterOrEqual(t, totalAlertsChecked, 17, "expected at least 17 alert policies across main.tf and slos.tf")
+	})
+
+	t.Run("PlanTimeDeterminism", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		tfFiles := []string{"main.tf", "slos.tf", "dashboards.tf"}
+
+		for _, tfFile := range tfFiles {
+			path := filepath.Join(modulesDir, "monitoring_control_plane", tfFile)
+			file, syntaxBody := parseHCLFileAST(t, parser, path)
+
+			for _, block := range syntaxBody.Blocks {
+				if block.Type == "resource" {
+					resName := block.Labels[0] + "." + block.Labels[1]
+					if countAttr, hasCount := block.Body.Attributes["count"]; hasCount {
+						exprSrc := getExprSource(file, countAttr.Expr)
+						assert.False(t, strings.Contains(exprSrc, ".id") || strings.Contains(exprSrc, ".uri") || strings.Contains(exprSrc, ".email"),
+							"resource %s count attribute in %s must not reference dynamic resource attributes: %s", resName, tfFile, exprSrc)
+					}
+					if forEachAttr, hasForEach := block.Body.Attributes["for_each"]; hasForEach {
+						exprSrc := getExprSource(file, forEachAttr.Expr)
+						assert.False(t, strings.Contains(exprSrc, ".id") || strings.Contains(exprSrc, ".uri") || strings.Contains(exprSrc, ".email"),
+							"resource %s for_each attribute in %s must not reference dynamic resource attributes: %s", resName, tfFile, exprSrc)
+					}
+				}
+			}
+		}
+	})
+}

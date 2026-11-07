@@ -1419,3 +1419,54 @@ resource "google_pubsub_subscription" "dataform_events_dlq_pull" {
   }
 }
 
+# --- Cloud Monitoring Pack Integration ---
+
+module "monitoring" {
+  count  = var.enable_monitoring ? 1 : 0
+  source = "../monitoring_control_plane"
+
+  project_id  = var.project_id
+  environment = var.environment
+  name_suffix = var.name_suffix
+  region      = var.region
+
+  # Service Identifiers
+  hub_service_name                   = google_cloud_run_v2_service.hub.name
+  vault_service_name                 = ""
+  shovel_service_name                = google_cloud_run_v2_service.shovel.name
+  mcp_service_name                   = var.mcp_enabled ? google_cloud_run_v2_service.mcp[0].name : ""
+  console_service_name               = var.console_enabled ? google_cloud_run_v2_service.console[0].name : ""
+  analytics_dashboard_service_name   = ""
+  github_runner_webhook_service_name = ""
+
+  # Service Max Instances
+  hub_max_instances     = var.max_instances
+  shovel_max_instances  = var.shovel_max_instances
+  mcp_max_instances     = var.mcp_max_instances
+  console_max_instances = var.console_max_instances
+
+  # Storage & CDC Identifiers
+  shovel_trigger_name                    = google_eventarc_trigger.outbox_trigger.name
+  firestore_database_id                  = google_firestore_database.database.name
+  outbox_audit_subscription_name         = var.enable_audit_sink ? google_pubsub_subscription.outbox_audit_bq[0].name : ""
+  health_events_subscription_name        = var.enable_health_mesh ? google_pubsub_subscription.health_events_bq[0].name : ""
+  events_push_subscription_name          = ""
+  dataform_events_push_subscription_name = var.enable_dataform_integration ? google_pubsub_subscription.dataform_events_push[0].name : ""
+  dataform_events_dlq_subscription_name  = var.enable_dataform_integration ? google_pubsub_subscription.dataform_events_dlq_pull[0].name : ""
+
+  # Batch Jobs & Meta-Telemetry (Empty in hub standalone deployment)
+  monitored_batch_jobs    = []
+  telemetry_subscriptions = []
+
+  # SLA Tiering & Alert Routing
+  sla_tier                             = var.sla_tier
+  enable_control_plane_alerts          = true
+  enable_slos                          = true
+  enable_dashboards                    = true
+  alert_slack_channel                  = var.alert_slack_channel
+  alert_email_address                  = var.alert_email_address
+  alert_pagerduty_service_key          = var.alert_pagerduty_service_key
+  alert_notification_channels          = var.alert_notification_channels
+  additional_sre_notification_channels = var.additional_sre_notification_channels
+}
+

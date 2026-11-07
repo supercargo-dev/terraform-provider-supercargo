@@ -40,6 +40,7 @@ Data Product and Gateway infrastructure are declaratively compiled via `modules/
 * [hub Module](module-hub.md)
 * [loader Module](module-loader.md)
 * [metadata_shovel Module](module-metadata_shovel.md)
+* [monitoring_control_plane Module](module-monitoring_control_plane.md)
 * [security_vault Module](module-security_vault.md)
 * [vault Module](module-vault.md)
 

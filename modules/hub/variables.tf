@@ -304,4 +304,53 @@ variable "console_telemetry_identity_salt" {
   default     = ""
 }
 
+# --- Cloud Monitoring Pack Variables ---
+
+variable "enable_monitoring" {
+  description = "Whether to provision the Cloud Monitoring pack for the Hub control plane"
+  type        = bool
+  default     = false
+}
+
+variable "alert_slack_channel" {
+  description = "Slack notification channel name for alerts"
+  type        = string
+  default     = ""
+}
+
+variable "alert_email_address" {
+  description = "Email address for alerts"
+  type        = string
+  default     = ""
+}
+
+variable "alert_pagerduty_service_key" {
+  description = "PagerDuty service key for critical alerts"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "alert_notification_channels" {
+  description = "List of existing notification channel IDs"
+  type        = list(string)
+  default     = []
+}
+
+variable "additional_sre_notification_channels" {
+  description = "Additional notification channels for SRE operations"
+  type        = list(string)
+  default     = []
+}
+
+variable "sla_tier" {
+  description = "SLA tier for the control plane (TIER_1, TIER_2, TIER_3)"
+  type        = string
+  default     = "TIER_1"
+  validation {
+    condition     = contains(["TIER_1", "TIER_2", "TIER_3"], var.sla_tier)
+    error_message = "The sla_tier variable must be one of: TIER_1, TIER_2, TIER_3."
+  }
+}
+
 
