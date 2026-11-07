@@ -121,6 +121,34 @@ locals {
   control_plane_services = {
     for k, v in local.raw_control_plane_services : k => v if v.name != null && v.name != ""
   }
+
+  # Core Pub/Sub Subscriptions Monitored for Lag with Defensive Name Sanitization
+  raw_core_subscriptions = {
+    outbox_audit_bq = {
+      name = var.outbox_audit_subscription_name != "" ? element(split("/", var.outbox_audit_subscription_name), length(split("/", var.outbox_audit_subscription_name)) - 1) : ""
+      desc = "Outbox Audit BigQuery Sink (Issue #300)"
+      tier = "Tier 1"
+    }
+    health_events_bq = {
+      name = var.health_events_subscription_name != "" ? element(split("/", var.health_events_subscription_name), length(split("/", var.health_events_subscription_name)) - 1) : ""
+      desc = "Health Events BigQuery Sink"
+      tier = "Tier 1"
+    }
+    events_push = {
+      name = var.events_push_subscription_name != "" ? element(split("/", var.events_push_subscription_name), length(split("/", var.events_push_subscription_name)) - 1) : ""
+      desc = "Hub Alert Relay Events Push"
+      tier = "Tier 1"
+    }
+    dataform_events_push = {
+      name = var.dataform_events_push_subscription_name != "" ? element(split("/", var.dataform_events_push_subscription_name), length(split("/", var.dataform_events_push_subscription_name)) - 1) : ""
+      desc = "Dataform Events Push"
+      tier = "Tier 2"
+    }
+  }
+
+  core_subscriptions = {
+    for k, v in local.raw_core_subscriptions : k => v if v.name != null && v.name != ""
+  }
 }
 
 # 1. Cloud Run HTTP 5xx Error Rate Alert
@@ -336,6 +364,314 @@ resource "google_monitoring_alert_policy" "service_instance_saturation" {
   }
 
   notification_channels = local.tier2_alert_notification_channels
+  alert_strategy {
+    auto_close = "604800s"
+  }
+}
+
+# --- Firestore Contention & Quota Alerts (Strict Database ID Scoping) ---
+
+resource "google_monitoring_alert_policy" "firestore_aborted_transactions" {
+  count        = var.enable_control_plane_alerts ? 1 : 0
+  project      = var.project_id
+  display_name = "[Tier 1] [DATA] Firestore Transaction Contention (ABORTED)${local.name_suffix_display}"
+  combiner     = "OR"
+
+  conditions {
+    display_name = "Firestore ABORTED Contention Rate > 0"
+    condition_threshold {
+      filter          = "resource.type = \"firestore_database\" AND resource.labels.database_id = \"${var.firestore_database_id}\" AND metric.type = \"firestore.googleapis.com/api/request_count\" AND metric.label.response_code = \"ABORTED\""
+      duration        = "0s"
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      trigger {
+        count = 1
+      }
+      aggregations {
+        alignment_period   = "60s"
+        per_series_aligner = "ALIGN_DELTA"
+      }
+    }
+  }
+
+  documentation {
+    content   = <<-EOT
+      ## [Tier 1] Firestore Transaction Contention (ABORTED)
+      High rate of concurrent write conflicts detected on database `${var.firestore_database_id}`.
+
+      ### Triage CLI Command
+      ```bash
+      gcloud logging read "resource.type=firestore_database AND resource.labels.database_id=${var.firestore_database_id} AND protoPayload.status.code=10" --limit=20
+      ```
+    EOT
+    mime_type = "text/markdown"
+  }
+
+  notification_channels = local.all_alert_notification_channels
+  alert_strategy {
+    auto_close = "604800s"
+  }
+}
+
+resource "google_monitoring_alert_policy" "firestore_quota_exhaustion" {
+  count        = var.enable_control_plane_alerts ? 1 : 0
+  project      = var.project_id
+  display_name = "[Tier 1] [INFRA] Firestore Quota Exhaustion (RESOURCE_EXHAUSTED)${local.name_suffix_display}"
+  combiner     = "OR"
+
+  conditions {
+    display_name = "Firestore Quota Exhaustion Rate > 0"
+    condition_threshold {
+      filter          = "resource.type = \"firestore_database\" AND resource.labels.database_id = \"${var.firestore_database_id}\" AND metric.type = \"firestore.googleapis.com/api/request_count\" AND metric.label.response_code = \"RESOURCE_EXHAUSTED\""
+      duration        = "0s"
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      trigger {
+        count = 1
+      }
+      aggregations {
+        alignment_period   = "60s"
+        per_series_aligner = "ALIGN_DELTA"
+      }
+    }
+  }
+
+  documentation {
+    content   = <<-EOT
+      ## [Tier 1] Firestore Quota Exhaustion Detected
+      Firestore operations rejected due to RESOURCE_EXHAUSTED on `${var.firestore_database_id}`.
+
+      ### Triage CLI Command
+      ```bash
+      gcloud logging read "resource.type=firestore_database AND resource.labels.database_id=${var.firestore_database_id} AND protoPayload.status.code=8" --limit=20
+      ```
+    EOT
+    mime_type = "text/markdown"
+  }
+
+  notification_channels = local.all_alert_notification_channels
+  alert_strategy {
+    auto_close = "604800s"
+  }
+}
+
+# --- Eventarc Shovel Trigger Delivery Failures ---
+
+resource "google_monitoring_alert_policy" "shovel_trigger_delivery_failures" {
+  count        = var.enable_control_plane_alerts ? 1 : 0
+  project      = var.project_id
+  display_name = "[Tier 1] [INFRA] Eventarc Shovel Trigger Delivery Failures${local.name_suffix_display}"
+  combiner     = "OR"
+
+  conditions {
+    display_name = "Eventarc Shovel Trigger Failed Deliveries > 0"
+    condition_threshold {
+      filter          = "resource.type = \"eventarc_trigger\" AND resource.labels.trigger_id = \"${var.shovel_trigger_name}\" AND metric.type = \"eventarc.googleapis.com/delivery_attempt_count\" AND metric.label.response_code != \"OK\""
+      duration        = "0s"
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      trigger {
+        count = 1
+      }
+      aggregations {
+        alignment_period   = "60s"
+        per_series_aligner = "ALIGN_DELTA"
+      }
+    }
+  }
+
+  documentation {
+    content   = <<-EOT
+      ## [Tier 1] Eventarc Shovel Trigger Delivery Failures
+      - **Trigger**: `${var.shovel_trigger_name}`
+
+      ### Triage CLI Command
+      ```bash
+      gcloud eventarc triggers describe ${var.shovel_trigger_name} --location=${var.region}
+      ```
+    EOT
+    mime_type = "text/markdown"
+  }
+
+  notification_channels = local.all_alert_notification_channels
+  alert_strategy {
+    auto_close = "604800s"
+  }
+}
+
+# --- Core Pub/Sub Subscriptions Unacked Message Age (Resolves #300) ---
+
+resource "google_monitoring_alert_policy" "core_subscription_unacked_age" {
+  for_each     = var.enable_control_plane_alerts ? local.core_subscriptions : {}
+  project      = var.project_id
+  display_name = "[${each.value.tier}] [INFRA] Subscription Lag: ${each.value.desc}${local.name_suffix_display}"
+  combiner     = "OR"
+
+  conditions {
+    display_name = "Subscription Oldest Unacked Message Age High"
+    condition_threshold {
+      filter          = "resource.type = \"pubsub_subscription\" AND resource.labels.subscription_id = \"${each.value.name}\" AND metric.type = \"pubsub.googleapis.com/subscription/oldest_unacked_message_age\""
+      duration        = "0s"
+      comparison      = "COMPARISON_GT"
+      threshold_value = local.unacked_age_seconds
+      trigger {
+        count = 1
+      }
+      aggregations {
+        alignment_period   = "60s"
+        per_series_aligner = "ALIGN_MAX"
+      }
+    }
+  }
+
+  documentation {
+    content   = <<-EOT
+      ## Subscription Backlog Latency Exceeded
+      - **Subscription**: `${each.value.name}`
+      - **Description**: `${each.value.desc}`
+
+      ### Triage Runbook
+      BigQuery push subscriptions cannot be pulled directly. Check Cloud Logging:
+      ```bash
+      gcloud logging read "resource.type=pubsub_subscription AND resource.labels.subscription_id=${each.value.name}" --limit=20
+      ```
+    EOT
+    mime_type = "text/markdown"
+  }
+
+  notification_channels = each.value.tier == "Tier 1" ? local.all_alert_notification_channels : local.tier2_alert_notification_channels
+  alert_strategy {
+    auto_close = "604800s"
+  }
+}
+
+# --- Dataform DLQ Backlog Alert ---
+
+resource "google_monitoring_alert_policy" "dataform_dlq_backlog" {
+  count        = var.enable_control_plane_alerts && var.dataform_events_dlq_subscription_name != "" ? 1 : 0
+  project      = var.project_id
+  display_name = "[Tier 1] [DATA] Dataform Dead Letter Queue Backlog${local.name_suffix_display}"
+  combiner     = "OR"
+
+  conditions {
+    display_name = "Dataform DLQ Undelivered Messages > 0"
+    condition_threshold {
+      filter          = "resource.type = \"pubsub_subscription\" AND resource.labels.subscription_id = \"${var.dataform_events_dlq_subscription_name}\" AND metric.type = \"pubsub.googleapis.com/subscription/num_undelivered_messages\""
+      duration        = "0s"
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      trigger {
+        count = 1
+      }
+      aggregations {
+        alignment_period   = "60s"
+        per_series_aligner = "ALIGN_MAX"
+      }
+    }
+  }
+
+  documentation {
+    content   = <<-EOT
+      ## [Tier 1] Dataform Dead Letter Queue Messages Dropped
+      - **Subscription**: `${var.dataform_events_dlq_subscription_name}`
+
+      ### Triage CLI Command
+      ```bash
+      gcloud pubsub subscriptions pull ${var.dataform_events_dlq_subscription_name} --limit=5 --auto-ack=false
+      ```
+    EOT
+    mime_type = "text/markdown"
+  }
+
+  notification_channels = local.all_alert_notification_channels
+  alert_strategy {
+    auto_close = "604800s"
+  }
+}
+
+# --- Cloud KMS Crypto Request Rejections Alert ---
+
+resource "google_monitoring_alert_policy" "kms_access_denials" {
+  count        = var.enable_control_plane_alerts ? 1 : 0
+  project      = var.project_id
+  display_name = "[Tier 1] [SECURITY] Cloud KMS Crypto Request Rejections${local.name_suffix_display}"
+  combiner     = "OR"
+
+  conditions {
+    display_name = "Cloud KMS Rejection Rate > 0"
+    condition_threshold {
+      filter          = "resource.type = \"cloudkms_cryptokey\" AND metric.type = \"cloudkms.googleapis.com/crypto_requests\" AND metric.label.response_code != \"OK\""
+      duration        = "0s"
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      trigger {
+        count = 1
+      }
+      aggregations {
+        alignment_period   = "60s"
+        per_series_aligner = "ALIGN_DELTA"
+      }
+    }
+  }
+
+  documentation {
+    content   = <<-EOT
+      ## [Tier 1] Cloud KMS Cryptographic Request Rejection
+      Key operations failing. Verify KMS master key status and IAM roles for Vault SA.
+
+      ### Triage CLI Command
+      ```bash
+      gcloud kms keys describe ${var.kms_crypto_key_name} --keyring=${var.kms_key_ring_name} --location=${var.region}
+      ```
+    EOT
+    mime_type = "text/markdown"
+  }
+
+  notification_channels = local.all_alert_notification_channels
+  alert_strategy {
+    auto_close = "604800s"
+  }
+}
+
+# --- Vault 403 Forbidden Calls Spike Alert ---
+
+resource "google_monitoring_alert_policy" "vault_forbidden_spikes" {
+  count        = var.enable_control_plane_alerts && var.vault_service_name != "" ? 1 : 0
+  project      = var.project_id
+  display_name = "[Tier 1] [SECURITY] Spikes in Forbidden (403) Vault Calls${local.name_suffix_display}"
+  combiner     = "OR"
+
+  conditions {
+    display_name = "Vault 403 Rate > 0"
+    condition_threshold {
+      filter          = "resource.type = \"cloud_run_revision\" AND resource.labels.service_name = \"${var.vault_service_name}\" AND metric.type = \"run.googleapis.com/request_count\" AND metric.label.response_code = \"403\""
+      duration        = "0s"
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      trigger {
+        count = 1
+      }
+      aggregations {
+        alignment_period   = "60s"
+        per_series_aligner = "ALIGN_RATE"
+      }
+    }
+  }
+
+  documentation {
+    content   = <<-EOT
+      ## [Tier 1] Spikes in Forbidden (403) Vault Calls
+      Unauthorized callers attempting tokenization or key access on Vault.
+
+      ### Triage CLI Command
+      ```bash
+      gcloud beta run services logs read ${var.vault_service_name} --region=${var.region} --filter=\"httpRequest.status=403\" --limit=50
+      ```
+    EOT
+    mime_type = "text/markdown"
+  }
+
+  notification_channels = local.all_alert_notification_channels
   alert_strategy {
     auto_close = "604800s"
   }

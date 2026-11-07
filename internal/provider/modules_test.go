@@ -6418,4 +6418,127 @@ func TestModules_ControlPlaneMonitoring(t *testing.T) {
 			assert.Equal(t, expectedExpr, getExprSource(outFile, valAttr.Expr))
 		}
 	})
+
+	t.Run("FirestoreAndEventarcAlerts", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		mainPath := filepath.Join(modulesDir, "monitoring_control_plane", "main.tf")
+		file, syntaxBody := parseHCLFileAST(t, parser, mainPath)
+
+		alerts := make(map[string]*hclsyntax.Block)
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 && block.Labels[0] == "google_monitoring_alert_policy" {
+				alerts[block.Labels[1]] = block
+			}
+		}
+
+		expectedAlerts := []string{
+			"firestore_aborted_transactions",
+			"firestore_quota_exhaustion",
+			"shovel_trigger_delivery_failures",
+			"core_subscription_unacked_age",
+			"dataform_dlq_backlog",
+		}
+		for _, name := range expectedAlerts {
+			require.Contains(t, alerts, name, "main.tf missing google_monitoring_alert_policy.%s", name)
+		}
+
+		// 1. firestore_aborted_transactions
+		abortedAlert := alerts["firestore_aborted_transactions"]
+		assert.Equal(t, "var.enable_control_plane_alerts ? 1 : 0", getExprSource(file, abortedAlert.Body.Attributes["count"].Expr))
+		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, abortedAlert.Body.Attributes["notification_channels"].Expr))
+		fileContent := string(file.Bytes)
+		assert.Contains(t, fileContent, "resource.labels.database_id = \\\"${var.firestore_database_id}\\\"")
+		assert.Contains(t, fileContent, "metric.label.response_code = \\\"ABORTED\\\"")
+
+		// 2. firestore_quota_exhaustion
+		quotaAlert := alerts["firestore_quota_exhaustion"]
+		assert.Equal(t, "var.enable_control_plane_alerts ? 1 : 0", getExprSource(file, quotaAlert.Body.Attributes["count"].Expr))
+		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, quotaAlert.Body.Attributes["notification_channels"].Expr))
+		assert.Contains(t, fileContent, "metric.label.response_code = \\\"RESOURCE_EXHAUSTED\\\"")
+
+		// 3. shovel_trigger_delivery_failures
+		shovelAlert := alerts["shovel_trigger_delivery_failures"]
+		assert.Equal(t, "var.enable_control_plane_alerts ? 1 : 0", getExprSource(file, shovelAlert.Body.Attributes["count"].Expr))
+		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, shovelAlert.Body.Attributes["notification_channels"].Expr))
+		assert.Contains(t, fileContent, "resource.labels.trigger_id = \\\"${var.shovel_trigger_name}\\\"")
+		assert.Contains(t, fileContent, "eventarc.googleapis.com/delivery_attempt_count")
+		assert.Contains(t, fileContent, "metric.label.response_code != \\\"OK\\\"")
+
+		// 4. core_subscription_unacked_age
+		coreSubAlert := alerts["core_subscription_unacked_age"]
+		assert.Equal(t, "var.enable_control_plane_alerts ? local.core_subscriptions : {}", getExprSource(file, coreSubAlert.Body.Attributes["for_each"].Expr))
+		assert.Equal(t, `each.value.tier == "Tier 1" ? local.all_alert_notification_channels : local.tier2_alert_notification_channels`, getExprSource(file, coreSubAlert.Body.Attributes["notification_channels"].Expr))
+		assert.Contains(t, fileContent, "pubsub.googleapis.com/subscription/oldest_unacked_message_age")
+		assert.Contains(t, fileContent, "element(split(\"/\", var.outbox_audit_subscription_name), length(split(\"/\", var.outbox_audit_subscription_name)) - 1)")
+
+		// 5. dataform_dlq_backlog
+		dlqAlert := alerts["dataform_dlq_backlog"]
+		assert.Equal(t, "var.enable_control_plane_alerts && var.dataform_events_dlq_subscription_name != \"\" ? 1 : 0", getExprSource(file, dlqAlert.Body.Attributes["count"].Expr))
+		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, dlqAlert.Body.Attributes["notification_channels"].Expr))
+		assert.Contains(t, fileContent, "pubsub.googleapis.com/subscription/num_undelivered_messages")
+
+		// Verify documentation blocks length <= 800 and contain gcloud
+		for _, name := range expectedAlerts {
+			alert := alerts[name]
+			var docBlock *hclsyntax.Block
+			for _, sub := range alert.Body.Blocks {
+				if sub.Type == "documentation" {
+					docBlock = sub
+					break
+				}
+			}
+			require.NotNil(t, docBlock, "%s must define documentation block", name)
+			contentSrc := getExprSource(file, docBlock.Body.Attributes["content"].Expr)
+			assert.NotEmpty(t, contentSrc)
+			assert.LessOrEqual(t, len(contentSrc), 800, "Documentation for %s must be <= 800 characters", name)
+			assert.Contains(t, contentSrc, "gcloud", "Documentation for %s must include CLI triage command", name)
+		}
+	})
+
+	t.Run("KMSAndVaultSecurityAlerts", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		mainPath := filepath.Join(modulesDir, "monitoring_control_plane", "main.tf")
+		file, syntaxBody := parseHCLFileAST(t, parser, mainPath)
+
+		alerts := make(map[string]*hclsyntax.Block)
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 && block.Labels[0] == "google_monitoring_alert_policy" {
+				alerts[block.Labels[1]] = block
+			}
+		}
+
+		require.Contains(t, alerts, "kms_access_denials", "main.tf missing google_monitoring_alert_policy.kms_access_denials")
+		require.Contains(t, alerts, "vault_forbidden_spikes", "main.tf missing google_monitoring_alert_policy.vault_forbidden_spikes")
+
+		kmsAlert := alerts["kms_access_denials"]
+		assert.Equal(t, "var.enable_control_plane_alerts ? 1 : 0", getExprSource(file, kmsAlert.Body.Attributes["count"].Expr))
+		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, kmsAlert.Body.Attributes["notification_channels"].Expr))
+
+		vaultAlert := alerts["vault_forbidden_spikes"]
+		assert.Equal(t, "var.enable_control_plane_alerts && var.vault_service_name != \"\" ? 1 : 0", getExprSource(file, vaultAlert.Body.Attributes["count"].Expr))
+		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, vaultAlert.Body.Attributes["notification_channels"].Expr))
+
+		fileContent := string(file.Bytes)
+		assert.Contains(t, fileContent, "cloudkms.googleapis.com/crypto_requests")
+		assert.Contains(t, fileContent, "metric.label.response_code = \\\"403\\\"")
+
+		// Verify documentation blocks length <= 800 and contain gcloud
+		for _, name := range []string{"kms_access_denials", "vault_forbidden_spikes"} {
+			alert := alerts[name]
+			var docBlock *hclsyntax.Block
+			for _, sub := range alert.Body.Blocks {
+				if sub.Type == "documentation" {
+					docBlock = sub
+					break
+				}
+			}
+			require.NotNil(t, docBlock, "%s must define documentation block", name)
+			contentSrc := getExprSource(file, docBlock.Body.Attributes["content"].Expr)
+			assert.NotEmpty(t, contentSrc)
+			assert.LessOrEqual(t, len(contentSrc), 800, "Documentation for %s must be <= 800 characters", name)
+			assert.Contains(t, contentSrc, "gcloud", "Documentation for %s must include CLI triage command", name)
+		}
+	})
 }
