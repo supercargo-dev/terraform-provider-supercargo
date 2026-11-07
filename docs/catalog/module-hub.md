@@ -69,6 +69,7 @@ module "hub" {
 | `enable_audit_sink` | `bool` | `true` | no | Whether to provision the BigQuery audit sink and Pub/Sub subscription for outbox events |
 | `enable_dataform_integration` | `bool` | `false` | no | Whether to provision the Dataform Cloud Logging sink and Pub/Sub push subscription |
 | `enable_health_mesh` | `bool` | `true` | no | Whether to provision the Pub/Sub health events mesh, BigQuery catalog dataset, and streaming subscription |
+| `enable_job_monitoring_integration` | `bool` | `false` | no | Whether to provision the Cloud Run Job logging sink, Pub/Sub topics, and Cloud Monitoring alert integration |
 | `enable_monitoring` | `bool` | `false` | no | Whether to provision the Cloud Monitoring pack for the Hub control plane |
 | `environment` | `string` | *required* | no | The environment name (dev, staging, prod) |
 | `firestore_project_id` | `string` | *required* | no | Project ID where Firestore resides |
@@ -80,6 +81,8 @@ module "hub" {
 | `iam_domain` | `string` | `"example.com"` | no | The domain for IAM groups and users |
 | `image_project_id` | `string` | *required* | no | Project ID where the Artifact Registry resides |
 | `ingress_type` | `string` | `"INGRESS_TRAFFIC_ALL"` | no | The type of ingress traffic allowed (INGRESS_TRAFFIC_ALL or INGRESS_TRAFFIC_INTERNAL_ONLY or INGRESS_TRAFFIC_INTERNAL_AND_GCLB) |
+| `job_events_topic` | `string` | `"supercargo-job-events"` | no | Base Pub/Sub topic name for Cloud Run Job execution and Cloud Monitoring alert events |
+| `job_sink_filter` | `string` | `""` | no | Custom Cloud Logging sink filter expression for Cloud Run Job events (falls back to default job completion filter if empty) |
 | `max_instances` | `number` | `3` | no | The maximum number of instances for the Hub service |
 | `mcp_allowed_invokers` | `list(string)` | `[]` | no | List of IAM members authorized to invoke the MCP companion service (e.g. serviceAccount:..., group:...) |
 | `mcp_enabled` | `bool` | `false` | no | Whether to deploy the Supercargo MCP companion Cloud Run service |
@@ -127,6 +130,12 @@ module "hub" {
 | `health_events_topic_id` | no | The Pub/Sub topic ID for asset health transition events |
 | `health_events_topic_name` | no | The Pub/Sub topic name for asset health transition events |
 | `hub_service_account_email` | no | The service account email of the Hub runtime service |
+| `job_events_dlq_subscription_name` | no | The Pub/Sub pull subscription name for inspecting Cloud Run Job dead-letter messages |
+| `job_events_dlq_topic_name` | no | The Pub/Sub dead-letter topic name for Cloud Run Job execution and Cloud Monitoring alert events |
+| `job_events_subscription_name` | no | The Pub/Sub push subscription name for Cloud Run Job execution and Cloud Monitoring alert events |
+| `job_events_topic_id` | no | The Pub/Sub topic ID for Cloud Run Job execution and Cloud Monitoring alert events |
+| `job_events_topic_name` | no | The Pub/Sub topic name for Cloud Run Job execution and Cloud Monitoring alert events |
+| `job_monitoring_notification_channel_id` | no | The Cloud Monitoring Pub/Sub notification channel ID for Hub alert routing |
 | `mcp_service_account_email` | no | The service account email of the Supercargo MCP companion service |
 | `mcp_service_name` | no | The name of the Supercargo MCP companion Cloud Run service |
 | `mcp_service_url` | no | The URI of the Supercargo MCP companion Cloud Run service |
