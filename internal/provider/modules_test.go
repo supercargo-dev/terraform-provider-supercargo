@@ -6541,4 +6541,121 @@ func TestModules_ControlPlaneMonitoring(t *testing.T) {
 			assert.Contains(t, contentSrc, "gcloud", "Documentation for %s must include CLI triage command", name)
 		}
 	})
+
+	t.Run("BatchJobsAndMetaTelemetryAlerts", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		mainPath := filepath.Join(modulesDir, "monitoring_control_plane", "main.tf")
+		file, syntaxBody := parseHCLFileAST(t, parser, mainPath)
+
+		alerts := make(map[string]*hclsyntax.Block)
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 && block.Labels[0] == "google_monitoring_alert_policy" {
+				alerts[block.Labels[1]] = block
+			}
+		}
+
+		expectedAlerts := []string{
+			"job_failed_execution",
+			"scheduler_dispatch_failure",
+			"telemetry_bq_unacked_age",
+			"telemetry_dlq_backlog",
+		}
+		for _, name := range expectedAlerts {
+			require.Contains(t, alerts, name, "main.tf missing google_monitoring_alert_policy.%s", name)
+		}
+
+		// 1. job_failed_execution
+		jobAlert := alerts["job_failed_execution"]
+		assert.Equal(t, "var.enable_control_plane_alerts ? local.monitored_batch_jobs : toset([])", getExprSource(file, jobAlert.Body.Attributes["for_each"].Expr))
+		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, jobAlert.Body.Attributes["notification_channels"].Expr))
+
+		// 2. scheduler_dispatch_failure
+		schedAlert := alerts["scheduler_dispatch_failure"]
+		assert.Equal(t, "var.enable_control_plane_alerts ? toset(var.scheduler_job_names) : toset([])", getExprSource(file, schedAlert.Body.Attributes["for_each"].Expr))
+		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, schedAlert.Body.Attributes["notification_channels"].Expr))
+
+		// 3. telemetry_bq_unacked_age
+		telemAlert := alerts["telemetry_bq_unacked_age"]
+		assert.Equal(t, "var.enable_control_plane_alerts ? toset(var.telemetry_subscriptions) : toset([])", getExprSource(file, telemAlert.Body.Attributes["for_each"].Expr))
+		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, telemAlert.Body.Attributes["notification_channels"].Expr))
+
+		// 4. telemetry_dlq_backlog
+		dlqAlert := alerts["telemetry_dlq_backlog"]
+		assert.Equal(t, "var.enable_control_plane_alerts && var.telemetry_dlq_subscription_name != \"\" ? 1 : 0", getExprSource(file, dlqAlert.Body.Attributes["count"].Expr))
+		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, dlqAlert.Body.Attributes["notification_channels"].Expr))
+
+		fileContent := string(file.Bytes)
+		assert.Contains(t, fileContent, "run.googleapis.com/job/completed_execution_count")
+		assert.Contains(t, fileContent, "cloudscheduler.googleapis.com/job/attempt_count")
+		assert.Contains(t, fileContent, "pubsub.googleapis.com/subscription/oldest_unacked_message_age")
+		assert.Contains(t, fileContent, "pubsub.googleapis.com/subscription/num_undelivered_messages")
+
+		// Verify documentation blocks length <= 800 and contain gcloud
+		for _, name := range expectedAlerts {
+			alert := alerts[name]
+			var docBlock *hclsyntax.Block
+			for _, sub := range alert.Body.Blocks {
+				if sub.Type == "documentation" {
+					docBlock = sub
+					break
+				}
+			}
+			require.NotNil(t, docBlock, "%s must define documentation block", name)
+			contentSrc := getExprSource(file, docBlock.Body.Attributes["content"].Expr)
+			assert.NotEmpty(t, contentSrc)
+			assert.LessOrEqual(t, len(contentSrc), 800, "Documentation for %s must be <= 800 characters", name)
+			assert.Contains(t, contentSrc, "gcloud", "Documentation for %s must include CLI triage command", name)
+		}
+	})
+
+	t.Run("ChildModulesVariableForwarding", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		childModules := []string{"vault", "analytics_runner", "analytics_github_sync"}
+
+		for _, mod := range childModules {
+			mod := mod
+			t.Run(mod, func(t *testing.T) {
+				t.Parallel()
+				varPath := filepath.Join(modulesDir, mod, "variables.tf")
+				mainPath := filepath.Join(modulesDir, mod, "main.tf")
+
+				varFile, varBody := parseHCLFileAST(t, parser, varPath)
+				_, mainBody := parseHCLFileAST(t, parser, mainPath)
+
+				vars := make(map[string]*hclsyntax.Block)
+				for _, block := range varBody.Blocks {
+					if block.Type == "variable" && len(block.Labels) == 1 {
+						vars[block.Labels[0]] = block
+					}
+				}
+
+				require.Contains(t, vars, "enable_monitoring", "%s missing variable enable_monitoring", mod)
+				require.Contains(t, vars, "alert_notification_channels", "%s missing variable alert_notification_channels", mod)
+				require.Contains(t, vars, "sla_tier", "%s missing variable sla_tier", mod)
+
+				// Verify sla_tier has validation block
+				slaVar := vars["sla_tier"]
+				var hasValidation bool
+				for _, sub := range slaVar.Body.Blocks {
+					if sub.Type == "validation" {
+						hasValidation = true
+						condAttr, hasCond := sub.Body.Attributes["condition"]
+						require.True(t, hasCond)
+						assert.Contains(t, getExprSource(varFile, condAttr.Expr), "TIER_1")
+					}
+				}
+				assert.True(t, hasValidation, "%s sla_tier must have validation block", mod)
+
+				// Verify NO google_monitoring_alert_policy exists in child module (anti-proliferation rule)
+				for _, block := range mainBody.Blocks {
+					if block.Type == "resource" && len(block.Labels) == 2 {
+						assert.NotEqual(t, "google_monitoring_alert_policy", block.Labels[0],
+							"%s must not define duplicate alert policy; monitoring must be centralized in monitoring_control_plane", mod)
+					}
+				}
+			})
+		}
+	})
 }

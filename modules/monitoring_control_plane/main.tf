@@ -149,6 +149,12 @@ locals {
   core_subscriptions = {
     for k, v in local.raw_core_subscriptions : k => v if v.name != null && v.name != ""
   }
+
+  # Monitored Cloud Run Batch Jobs
+  monitored_batch_jobs = var.monitored_batch_jobs != null ? toset(compact(var.monitored_batch_jobs)) : toset(compact(concat(
+    [var.analytics_runner_job_name, var.github_runner_job_name],
+    var.github_sync_job_names
+  )))
 }
 
 # 1. Cloud Run HTTP 5xx Error Rate Alert
@@ -666,6 +672,180 @@ resource "google_monitoring_alert_policy" "vault_forbidden_spikes" {
       ### Triage CLI Command
       ```bash
       gcloud beta run services logs read ${var.vault_service_name} --region=${var.region} --filter=\"httpRequest.status=403\" --limit=50
+      ```
+    EOT
+    mime_type = "text/markdown"
+  }
+
+  notification_channels = local.all_alert_notification_channels
+  alert_strategy {
+    auto_close = "604800s"
+  }
+}
+
+# --- Centralized Batch Jobs, Schedulers & Meta-Telemetry BigQuery Alerts ---
+
+# 1. Cloud Run Job Execution Failure Alert
+resource "google_monitoring_alert_policy" "job_failed_execution" {
+  for_each     = var.enable_control_plane_alerts ? local.monitored_batch_jobs : toset([])
+  project      = var.project_id
+  display_name = "[Tier 1] [INFRA] Cloud Run Job Execution Failure (${each.value})${local.name_suffix_display}"
+  combiner     = "OR"
+
+  conditions {
+    display_name = "Cloud Run Job Completed with Failure"
+    condition_threshold {
+      filter          = "resource.type = \"cloud_run_job\" AND resource.labels.job_name = \"${each.value}\" AND metric.type = \"run.googleapis.com/job/completed_execution_count\" AND metric.label.result = \"failed\""
+      duration        = "0s"
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      trigger {
+        count = 1
+      }
+      aggregations {
+        alignment_period   = "60s"
+        per_series_aligner = "ALIGN_DELTA"
+      }
+    }
+  }
+
+  documentation {
+    content   = <<-EOT
+      ## [Tier 1] Cloud Run Job Execution Failure
+      - **Job Name**: `${each.value}`
+
+      ### Triage CLI Command
+      ```bash
+      gcloud run jobs executions list --job=${each.value} --region=${var.region} --limit=5
+      ```
+    EOT
+    mime_type = "text/markdown"
+  }
+
+  notification_channels = local.all_alert_notification_channels
+  alert_strategy {
+    auto_close = "604800s"
+  }
+}
+
+# 2. Cloud Scheduler Dispatch Failure Alert
+resource "google_monitoring_alert_policy" "scheduler_dispatch_failure" {
+  for_each     = var.enable_control_plane_alerts ? toset(var.scheduler_job_names) : toset([])
+  project      = var.project_id
+  display_name = "[Tier 1] [INFRA] Cloud Scheduler Dispatch Failure (${each.value})${local.name_suffix_display}"
+  combiner     = "OR"
+
+  conditions {
+    display_name = "Cloud Scheduler HTTP Status != SUCCESS"
+    condition_threshold {
+      filter          = "resource.type = \"cloud_scheduler_job\" AND resource.labels.job_id = \"${each.value}\" AND metric.type = \"cloudscheduler.googleapis.com/job/attempt_count\" AND metric.label.response_status != \"SUCCESS\""
+      duration        = "0s"
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      trigger {
+        count = 1
+      }
+      aggregations {
+        alignment_period   = "60s"
+        per_series_aligner = "ALIGN_DELTA"
+      }
+    }
+  }
+
+  documentation {
+    content   = <<-EOT
+      ## [Tier 1] Cloud Scheduler Dispatch Failure
+      - **Scheduler Job**: `${each.value}`
+
+      ### Triage CLI Command
+      ```bash
+      gcloud logging read "resource.type=cloud_scheduler_job AND resource.labels.job_id=${each.value}" --limit=10
+      ```
+    EOT
+    mime_type = "text/markdown"
+  }
+
+  notification_channels = local.all_alert_notification_channels
+  alert_strategy {
+    auto_close = "604800s"
+  }
+}
+
+# 3. Operational Meta-Telemetry BigQuery Subscriptions Lag Alert
+resource "google_monitoring_alert_policy" "telemetry_bq_unacked_age" {
+  for_each     = var.enable_control_plane_alerts ? toset(var.telemetry_subscriptions) : toset([])
+  project      = var.project_id
+  display_name = "[Tier 1] [INFRA] Meta-Telemetry Subscription Lag (${each.value})${local.name_suffix_display}"
+  combiner     = "OR"
+
+  conditions {
+    display_name = "Telemetry BQ Subscription Oldest Unacked Message Age High"
+    condition_threshold {
+      filter          = "resource.type = \"pubsub_subscription\" AND resource.labels.subscription_id = \"${each.value}\" AND metric.type = \"pubsub.googleapis.com/subscription/oldest_unacked_message_age\""
+      duration        = "0s"
+      comparison      = "COMPARISON_GT"
+      threshold_value = local.unacked_age_seconds
+      trigger {
+        count = 1
+      }
+      aggregations {
+        alignment_period   = "60s"
+        per_series_aligner = "ALIGN_MAX"
+      }
+    }
+  }
+
+  documentation {
+    content   = <<-EOT
+      ## [Tier 1] Operational Telemetry BigQuery Subscription Lag
+      - **Subscription**: `${each.value}`
+
+      ### Triage CLI Command
+      ```bash
+      gcloud logging read "resource.type=pubsub_subscription AND resource.labels.subscription_id=${each.value}" --limit=20
+      ```
+    EOT
+    mime_type = "text/markdown"
+  }
+
+  notification_channels = local.all_alert_notification_channels
+  alert_strategy {
+    auto_close = "604800s"
+  }
+}
+
+# 4. Meta-Telemetry Dead Letter Queue Backlog Alert
+resource "google_monitoring_alert_policy" "telemetry_dlq_backlog" {
+  count        = var.enable_control_plane_alerts && var.telemetry_dlq_subscription_name != "" ? 1 : 0
+  project      = var.project_id
+  display_name = "[Tier 1] [DATA] Meta-Telemetry Dead Letter Queue Backlog${local.name_suffix_display}"
+  combiner     = "OR"
+
+  conditions {
+    display_name = "Telemetry DLQ Undelivered Messages > 0"
+    condition_threshold {
+      filter          = "resource.type = \"pubsub_subscription\" AND resource.labels.subscription_id = \"${var.telemetry_dlq_subscription_name}\" AND metric.type = \"pubsub.googleapis.com/subscription/num_undelivered_messages\""
+      duration        = "0s"
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      trigger {
+        count = 1
+      }
+      aggregations {
+        alignment_period   = "60s"
+        per_series_aligner = "ALIGN_MAX"
+      }
+    }
+  }
+
+  documentation {
+    content   = <<-EOT
+      ## [Tier 1] Meta-Telemetry Dead Letter Queue Backlog Detected
+      - **DLQ Subscription**: `${var.telemetry_dlq_subscription_name}`
+
+      ### Triage CLI Command
+      ```bash
+      gcloud pubsub subscriptions pull ${var.telemetry_dlq_subscription_name} --limit=5 --auto-ack=false
       ```
     EOT
     mime_type = "text/markdown"
