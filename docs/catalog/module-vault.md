@@ -35,11 +35,13 @@ module "vault" {
 
 | Variable | Type | Default | Sensitive | Description |
 | :--- | :--- | :--- | :--- | :--- |
+| `alert_notification_channels` | `list(string)` | `[]` | no | List of Cloud Monitoring notification channel IDs for alert routing |
 | `auth_enforce` | `bool` | `true` | no | Whether to enforce OIDC authentication (Shadow Mode if false) |
 | `authorized_invokers` | `list(string)` | `[]` | no | List of IAM members authorized to invoke the vault directly |
 | `authorized_tokenizer_sa` | `string` | `""` | no | Authorized tokenizer service account email |
 | `crypto_key_name` | `string` | `"supercargo-vault-master-key"` | no | The name of the Cloud KMS CryptoKey for the Vault master key. Defaults to 'supercargo-vault-master-key'. |
 | `custom_audiences` | `list(string)` | `[]` | no | List of custom audiences to accept for OIDC |
+| `enable_monitoring` | `bool` | `true` | no | Whether to enable Cloud Monitoring alerts for Vault |
 | `force_deploy_trigger` | `string` | `"static"` | no | A value that, when changed, triggers a new Cloud Run revision (e.g. git SHA or image digest). Use 'latest' or a fixed value for idempotency. |
 | `gateway_service_account_email` | `string` | *required* | no | The service account email of the Ingestion Gateway |
 | `image` | `string` | *required* | no | The container image to deploy |
@@ -53,6 +55,7 @@ module "vault" {
 | `project_number` | `string` | *required* | no | The GCP Project Number |
 | `region` | `string` | `"europe-west1"` | no | The GCP region |
 | `service_name` | `string` | `"vault"` | no | The name of the Cloud Run service |
+| `sla_tier` | `string` | `"TIER_1"` | no | The SLA tier (TIER_1, TIER_2, TIER_3) |
 | `telemetry_identity_salt` | `string` | `"supercargo-default-salt"` | no | Identity salt for vault operational telemetry hashing |
 | `telemetry_topic_id` | `string` | `"supercargo-platform-telemetry"` | no | Target Pub/Sub topic ID for vault operational telemetry |
 
