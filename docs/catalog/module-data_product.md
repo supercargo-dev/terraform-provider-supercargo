@@ -46,6 +46,7 @@ module "data_product" {
 
 | Variable | Type | Default | Sensitive | Description |
 | :--- | :--- | :--- | :--- | :--- |
+| `additional_sre_notification_channels` | `list(string)` | `[]` | no | Additional Cloud Monitoring notification channel IDs for SRE / platform monitoring (e.g., webhook, central ops) |
 | `alert_email_address` | `string` | `""` | no | Email address for alerts |
 | `alert_notification_channels` | `list(string)` | `[]` | no | List of existing Cloud Monitoring notification channel IDs to attach to alerts |
 | `alert_pagerduty_service_key` | `string` | (sensitive) | yes | PagerDuty integration/service key for alert routing |
@@ -73,6 +74,8 @@ module "data_product" {
 | `dlt_time_zone` | `string` | `"UTC"` | no | Time zone for Cloud Scheduler cron jobs (e.g. UTC, America/New_York) |
 | `dlt_timeout` | `string` | `"3600s"` | no | The maximum execution timeout for DLT Cloud Run jobs |
 | `enable_dlq_alerts` | `bool` | `true` | no | Whether to enable Cloud Monitoring alert policies for DLQ |
+| `enable_infrastructure_alerts` | `bool` | `true` | no | Whether to provision Cloud Monitoring alert policies for Cloud Run, Pub/Sub, DLT jobs, and BigQuery sinks |
+| `enable_monitoring_dashboard` | `bool` | `true` | no | Whether to provision the turnkey Cloud Monitoring Dashboard for this data product |
 | `force_deploy_trigger` | `string` | `"static"` | no | A value that, when changed, triggers a new Cloud Run revision (e.g. git SHA or image digest). Use 'latest' or a fixed value for idempotency. |
 | `gateway_audience` | `string` | `""` | no | - |
 | `hub_address` | `string` | *required* | no | The address of the Hub service |
@@ -92,6 +95,8 @@ module "data_product" {
 | `pubsub_minimum_backoff` | `string` | `"30s"` | no | The minimum backoff duration for retries. |
 | `region` | `string` | *required* | no | The GCP region |
 | `service_account_id` | `string` | `""` | no | Optional custom service account ID for the Gateway. If unset, defaults to 'gateway-<product_id>' with optional name_suffix. |
+| `sla_tier` | `string` | `"TIER_2"` | no | The SLA tier of the data product (TIER_1, TIER_2, or TIER_3). Calibrates alert thresholds and paging severity. |
+| `unacked_message_age_threshold_seconds` | `number` | `null` | no | Optional override for Pub/Sub unacknowledged message age alert threshold. If unset, derived from sla_tier. |
 | `vault_oidc_audience` | `string` | `""` | no | The OIDC audience for the Vault service (Internal OIDC) |
 
 ## Module Outputs
@@ -101,6 +106,8 @@ module "data_product" {
 | `bigquery_table_ids` | no | A map of contract names to BigQuery table IDs |
 | `clean_topic_id` | no | The ID of the Clean topic |
 | `contracts` | no | Map of auto-discovered or explicitly provided contracts |
+| `dashboard_id` | no | The resource ID of the Data Product Cloud Monitoring dashboard |
+| `dashboard_url` | no | The direct GCP Console URL for the Data Product Cloud Monitoring dashboard in view mode |
 | `dlq_alert_policy_age_id` | no | The ID of the Cloud Monitoring alert policy for DLQ oldest unacked message age |
 | `dlq_alert_policy_undelivered_id` | no | The ID of the Cloud Monitoring alert policy for DLQ undelivered messages |
 | `dlq_subscription_id` | no | The ID of the Dead Letter Queue Subscription |

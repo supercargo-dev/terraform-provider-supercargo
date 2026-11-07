@@ -74,5 +74,11 @@ module "gateway" {
   service_account_id                  = var.service_account_id
   max_instances                       = var.max_instances
 
+  sla_tier                              = var.sla_tier
+  enable_infrastructure_alerts          = var.enable_infrastructure_alerts
+  enable_monitoring_dashboard           = var.enable_monitoring_dashboard
+  additional_sre_notification_channels  = var.additional_sre_notification_channels
+  unacked_message_age_threshold_seconds = var.unacked_message_age_threshold_seconds
+
   contracts = local.gateway_contracts
 }

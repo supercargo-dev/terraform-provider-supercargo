@@ -41,6 +41,7 @@ module "gateway" {
 
 | Variable | Type | Default | Sensitive | Description |
 | :--- | :--- | :--- | :--- | :--- |
+| `additional_sre_notification_channels` | `list(string)` | `[]` | no | Additional Cloud Monitoring notification channel IDs for SRE / platform monitoring (e.g., webhook, central ops) |
 | `alert_email_address` | `string` | `""` | no | Email address for alerts |
 | `alert_notification_channels` | `list(string)` | `[]` | no | List of existing Cloud Monitoring notification channel IDs to attach to alerts |
 | `alert_pagerduty_service_key` | `string` | (sensitive) | yes | PagerDuty integration/service key for alert routing |
@@ -62,6 +63,8 @@ module "gateway" {
 | `dlq_runbook_url` | `string` | `"https://docs.supercargo.dev/operations/runbooks/dlq-remediation"` | no | Runbook URL for DLQ incident remediation |
 | `dlq_unacked_message_age_seconds` | `number` | `300` | no | Threshold age (in seconds) of oldest unacknowledged message in DLQ to trigger alert |
 | `enable_dlq_alerts` | `bool` | `true` | no | Whether to enable Cloud Monitoring alert policies for DLQ |
+| `enable_infrastructure_alerts` | `bool` | `true` | no | Whether to provision Cloud Monitoring alert policies for Cloud Run, Pub/Sub, DLT jobs, and BigQuery sinks |
+| `enable_monitoring_dashboard` | `bool` | `true` | no | Whether to provision the turnkey Cloud Monitoring Dashboard for this data product |
 | `environment` | `string` | `"dev"` | no | The deployment environment (e.g. dev, staging, prod) |
 | `force_deploy_trigger` | `string` | `"static"` | no | A value that, when changed, triggers a new Cloud Run revision (e.g. git SHA or image digest). Use 'latest' or a fixed value for idempotency. |
 | `gateway_audience` | `string` | `""` | no | The expected audience for OIDC tokens (e.g. the service URL) |
@@ -84,6 +87,8 @@ module "gateway" {
 | `pubsub_push_path` | `string` | `"/pubsub/push/"` | no | The URL path for Pub/Sub push requests |
 | `region` | `string` | *required* | no | The GCP region |
 | `service_account_id` | `string` | `""` | no | Optional custom service account ID for the Gateway. If unset, defaults to 'gateway-<product_id>' with optional name_suffix. |
+| `sla_tier` | `string` | `"TIER_2"` | no | The SLA tier of the data product (TIER_1, TIER_2, or TIER_3). Calibrates alert thresholds and paging severity. |
+| `unacked_message_age_threshold_seconds` | `number` | `null` | no | Optional override for Pub/Sub unacknowledged message age alert threshold. If unset, derived from sla_tier. |
 | `vault_address` | `string` | `""` | no | The address of the Vault service |
 | `vault_oidc_audience` | `string` | `""` | no | The OIDC audience for the Vault service (Internal OIDC) |
 
@@ -91,8 +96,11 @@ module "gateway" {
 
 | Output | Sensitive | Description |
 | :--- | :--- | :--- |
+| `alert_notification_channels` | no | Aggregated list of all alert notification channels including PagerDuty (suppressed on TIER_3) |
 | `bigquery_table_ids` | no | A map of contract names to BigQuery table IDs |
 | `clean_topic_id` | no | The ID of the Clean topic |
+| `dashboard_id` | no | The resource ID of the Data Product Cloud Monitoring dashboard |
+| `dashboard_url` | no | The direct GCP Console URL for the Data Product Cloud Monitoring dashboard in view mode |
 | `dlq_alert_policy_age_id` | no | The ID of the DLQ message age alert policy |
 | `dlq_alert_policy_undelivered_id` | no | The ID of the DLQ undelivered messages alert policy |
 | `dlq_subscription_id` | no | The ID of the Dead Letter Queue subscription |
@@ -104,6 +112,8 @@ module "gateway" {
 | `service_account_id` | no | The account ID of the Gateway Service Account |
 | `service_name` | no | The name of the Gateway service |
 | `service_url` | no | The URL of the Gateway service |
+| `tier2_alert_notification_channels` | no | Aggregated list of non-paging alert notification channels (excluding PagerDuty) |
+| `unacked_message_age_threshold_seconds` | no | The active unacknowledged message age threshold in seconds derived from SLA tier |
 
 ## Implementation
 - Source Code: `modules/gateway`

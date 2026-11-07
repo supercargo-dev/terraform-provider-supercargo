@@ -108,5 +108,12 @@ output "dlt_scheduler_service_account_email" {
   value       = length(local.dlt_input_ports) > 0 ? local.dlt_scheduler_sa_email : null
 }
 
+output "dashboard_id" {
+  description = "The resource ID of the Data Product Cloud Monitoring dashboard"
+  value       = module.gateway.dashboard_id
+}
 
-
+output "dashboard_url" {
+  description = "The direct GCP Console URL for the Data Product Cloud Monitoring dashboard in view mode"
+  value       = module.gateway.dashboard_url
+}

@@ -63,4 +63,27 @@ output "dlq_alert_policy_age_id" {
   value       = try(google_monitoring_alert_policy.dlq_message_age[0].name, "")
 }
 
+output "alert_notification_channels" {
+  description = "Aggregated list of all alert notification channels including PagerDuty (suppressed on TIER_3)"
+  value       = local.all_alert_notification_channels
+}
 
+output "tier2_alert_notification_channels" {
+  description = "Aggregated list of non-paging alert notification channels (excluding PagerDuty)"
+  value       = local.tier2_alert_notification_channels
+}
+
+output "unacked_message_age_threshold_seconds" {
+  description = "The active unacknowledged message age threshold in seconds derived from SLA tier"
+  value       = local.unacked_age_seconds
+}
+
+output "dashboard_id" {
+  description = "The resource ID of the Data Product Cloud Monitoring dashboard"
+  value       = try(google_monitoring_dashboard.data_product[0].id, "")
+}
+
+output "dashboard_url" {
+  description = "The direct GCP Console URL for the Data Product Cloud Monitoring dashboard in view mode"
+  value       = length(google_monitoring_dashboard.data_product) > 0 ? "https://console.cloud.google.com/monitoring/dashboards/custom/${element(split("/", google_monitoring_dashboard.data_product[0].id), length(split("/", google_monitoring_dashboard.data_product[0].id)) - 1)}?project=${var.project_id}" : ""
+}
