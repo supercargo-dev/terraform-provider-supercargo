@@ -4898,3 +4898,513 @@ func TestModules_AnalyticsRunner(t *testing.T) {
 		assert.NotEmpty(t, syntaxBody.Blocks)
 	})
 }
+
+func TestModules_DataProductGatewayVariableForwarding(t *testing.T) {
+	t.Parallel()
+	modulesDir := "../../modules"
+	parser := hclparse.NewParser()
+
+	// 1. Verify variables in modules/data_product/variables.tf
+	t.Run("DataProductVariables", func(t *testing.T) {
+		t.Parallel()
+		dpVarPath := filepath.Join(modulesDir, "data_product", "variables.tf")
+		file, syntaxBody := parseHCLFileAST(t, parser, dpVarPath)
+
+		vars := make(map[string]*hclsyntax.Block)
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "variable" && len(block.Labels) == 1 {
+				vars[block.Labels[0]] = block
+			}
+		}
+
+		expectedVars := []struct {
+			name        string
+			defaultExpr string
+		}{
+			{name: "sla_tier", defaultExpr: `"TIER_2"`},
+			{name: "enable_infrastructure_alerts", defaultExpr: "true"},
+			{name: "enable_monitoring_dashboard", defaultExpr: "true"},
+			{name: "additional_sre_notification_channels", defaultExpr: "[]"},
+			{name: "unacked_message_age_threshold_seconds", defaultExpr: "null"},
+		}
+
+		for _, ev := range expectedVars {
+			block, exists := vars[ev.name]
+			require.True(t, exists, "data_product missing variable %s", ev.name)
+			defAttr, hasDef := block.Body.Attributes["default"]
+			require.True(t, hasDef, "data_product variable %s must define default", ev.name)
+			assert.Equal(t, ev.defaultExpr, getExprSource(file, defAttr.Expr))
+		}
+	})
+
+	// 2. Verify variables in modules/gateway/variables.tf
+	t.Run("GatewayVariables", func(t *testing.T) {
+		t.Parallel()
+		gwVarPath := filepath.Join(modulesDir, "gateway", "variables.tf")
+		file, syntaxBody := parseHCLFileAST(t, parser, gwVarPath)
+
+		vars := make(map[string]*hclsyntax.Block)
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "variable" && len(block.Labels) == 1 {
+				vars[block.Labels[0]] = block
+			}
+		}
+
+		expectedVars := []struct {
+			name        string
+			defaultExpr string
+		}{
+			{name: "sla_tier", defaultExpr: `"TIER_2"`},
+			{name: "enable_infrastructure_alerts", defaultExpr: "true"},
+			{name: "enable_monitoring_dashboard", defaultExpr: "true"},
+			{name: "additional_sre_notification_channels", defaultExpr: "[]"},
+			{name: "unacked_message_age_threshold_seconds", defaultExpr: "null"},
+		}
+
+		for _, ev := range expectedVars {
+			block, exists := vars[ev.name]
+			require.True(t, exists, "gateway missing variable %s", ev.name)
+			defAttr, hasDef := block.Body.Attributes["default"]
+			require.True(t, hasDef, "gateway variable %s must define default", ev.name)
+			assert.Equal(t, ev.defaultExpr, getExprSource(file, defAttr.Expr))
+		}
+
+		// Verify sla_tier validation block
+		slaBlock := vars["sla_tier"]
+		require.NotNil(t, slaBlock)
+		var valBlock *hclsyntax.Block
+		for _, sub := range slaBlock.Body.Blocks {
+			if sub.Type == "validation" {
+				valBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, valBlock, "gateway variable sla_tier must have validation block")
+		condAttr, hasCond := valBlock.Body.Attributes["condition"]
+		require.True(t, hasCond)
+		assert.Contains(t, getExprSource(file, condAttr.Expr), `"TIER_1"`)
+		assert.Contains(t, getExprSource(file, condAttr.Expr), `"TIER_2"`)
+		assert.Contains(t, getExprSource(file, condAttr.Expr), `"TIER_3"`)
+	})
+
+	// 3. Verify variable forwarding in modules/data_product/main.tf
+	t.Run("GatewayForwarding", func(t *testing.T) {
+		t.Parallel()
+		mainPath := filepath.Join(modulesDir, "data_product", "main.tf")
+		file, syntaxBody := parseHCLFileAST(t, parser, mainPath)
+
+		var gwModule *hclsyntax.Block
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "module" && len(block.Labels) == 1 && block.Labels[0] == "gateway" {
+				gwModule = block
+				break
+			}
+		}
+		require.NotNil(t, gwModule, "modules/data_product/main.tf must declare module gateway")
+
+		forwardedAttrs := []string{
+			"sla_tier",
+			"enable_infrastructure_alerts",
+			"enable_monitoring_dashboard",
+			"additional_sre_notification_channels",
+			"unacked_message_age_threshold_seconds",
+		}
+
+		for _, attr := range forwardedAttrs {
+			a, exists := gwModule.Body.Attributes[attr]
+			require.True(t, exists, "module.gateway missing forwarding for %s", attr)
+			assert.Equal(t, "var."+attr, getExprSource(file, a.Expr))
+		}
+	})
+}
+
+func TestModules_GatewayCloudRunInfrastructureAlerts(t *testing.T) {
+	t.Parallel()
+	modulesDir := "../../modules"
+	parser := hclparse.NewParser()
+	monitoringPath := filepath.Join(modulesDir, "gateway", "monitoring.tf")
+	file, syntaxBody := parseHCLFileAST(t, parser, monitoringPath)
+
+	alerts := make(map[string]*hclsyntax.Block)
+	for _, block := range syntaxBody.Blocks {
+		if block.Type == "resource" && len(block.Labels) == 2 && block.Labels[0] == "google_monitoring_alert_policy" {
+			alerts[block.Labels[1]] = block
+		}
+	}
+
+	expectedAlerts := []struct {
+		name                 string
+		displayNamePrefix    string
+		expectedChannelsExpr string
+		filterContains       []string
+		aligner              string
+		duration             string
+		comparison           string
+	}{
+		{
+			name:                 "gateway_5xx_rate",
+			displayNamePrefix:    "[Tier 1] [INFRA] Gateway Cloud Run 5xx Errors",
+			expectedChannelsExpr: "local.all_alert_notification_channels",
+			filterContains:       []string{`response_code_class = "5xx"`, `metric.type = "run.googleapis.com/request_count"`},
+			aligner:              `"ALIGN_RATE"`,
+			duration:             `"0s"`,
+			comparison:           `"COMPARISON_GT"`,
+		},
+		{
+			name:                 "gateway_auth_failures",
+			displayNamePrefix:    "[Tier 1] [INFRA] Gateway Push Invoker Auth 401/403",
+			expectedChannelsExpr: "local.all_alert_notification_channels",
+			filterContains:       []string{`response_code = one_of("401", "403")`, `metric.type = "run.googleapis.com/request_count"`},
+			aligner:              `"ALIGN_RATE"`,
+			duration:             `"0s"`,
+			comparison:           `"COMPARISON_GT"`,
+		},
+		{
+			name:                 "gateway_memory_utilization",
+			displayNamePrefix:    "[Tier 2] [INFRA] Gateway Memory Saturation >85%",
+			expectedChannelsExpr: "local.tier2_alert_notification_channels",
+			filterContains:       []string{`metric.type = "run.googleapis.com/container/memory/utilizations"`},
+			aligner:              `"ALIGN_PERCENTILE_99"`,
+			duration:             `"300s"`,
+			comparison:           `"COMPARISON_GT"`,
+		},
+		{
+			name:                 "gateway_cpu_utilization",
+			displayNamePrefix:    "[Tier 2] [INFRA] Gateway CPU Saturation >85%",
+			expectedChannelsExpr: "local.tier2_alert_notification_channels",
+			filterContains:       []string{`metric.type = "run.googleapis.com/container/cpu/utilizations"`},
+			aligner:              `"ALIGN_PERCENTILE_99"`,
+			duration:             `"300s"`,
+			comparison:           `"COMPARISON_GT"`,
+		},
+		{
+			name:                 "gateway_instance_saturation",
+			displayNamePrefix:    "[Tier 2] [INFRA] Gateway Instance Saturation",
+			expectedChannelsExpr: "local.tier2_alert_notification_channels",
+			filterContains:       []string{`metric.type = "run.googleapis.com/container/instance_count"`, `metric.label.state = "active"`},
+			aligner:              `"ALIGN_MAX"`,
+			duration:             `"180s"`,
+			comparison:           `"COMPARISON_GTE"`,
+		},
+	}
+
+	for _, tc := range expectedAlerts {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			alert, exists := alerts[tc.name]
+			require.True(t, exists, "google_monitoring_alert_policy.%s must exist in monitoring.tf", tc.name)
+
+			// Count guard
+			countAttr, hasCount := alert.Body.Attributes["count"]
+			require.True(t, hasCount, "%s must have count attribute", tc.name)
+			assert.Equal(t, "var.enable_infrastructure_alerts ? 1 : 0", getExprSource(file, countAttr.Expr))
+
+			// Combiner
+			combAttr, hasComb := alert.Body.Attributes["combiner"]
+			require.True(t, hasComb)
+			assert.Equal(t, `"OR"`, getExprSource(file, combAttr.Expr))
+
+			// Display Name
+			nameAttr, hasName := alert.Body.Attributes["display_name"]
+			require.True(t, hasName)
+			assert.Contains(t, getExprSource(file, nameAttr.Expr), tc.displayNamePrefix)
+
+			// Notification channels
+			chanAttr, hasChan := alert.Body.Attributes["notification_channels"]
+			require.True(t, hasChan)
+			assert.Equal(t, tc.expectedChannelsExpr, getExprSource(file, chanAttr.Expr))
+
+			// Auto close strategy
+			var stratBlock *hclsyntax.Block
+			for _, sub := range alert.Body.Blocks {
+				if sub.Type == "alert_strategy" {
+					stratBlock = sub
+					break
+				}
+			}
+			require.NotNil(t, stratBlock, "%s must define alert_strategy block", tc.name)
+			autoCloseAttr, hasAutoClose := stratBlock.Body.Attributes["auto_close"]
+			require.True(t, hasAutoClose)
+			assert.Equal(t, `"604800s"`, getExprSource(file, autoCloseAttr.Expr))
+
+			// Documentation block
+			var docBlock *hclsyntax.Block
+			for _, sub := range alert.Body.Blocks {
+				if sub.Type == "documentation" {
+					docBlock = sub
+					break
+				}
+			}
+			require.NotNil(t, docBlock, "%s must define documentation block", tc.name)
+			contentAttr, hasContent := docBlock.Body.Attributes["content"]
+			require.True(t, hasContent)
+			assert.NotEmpty(t, getExprSource(file, contentAttr.Expr))
+
+			// Conditions block
+			var condBlock *hclsyntax.Block
+			for _, sub := range alert.Body.Blocks {
+				if sub.Type == "conditions" {
+					condBlock = sub
+					break
+				}
+			}
+			require.NotNil(t, condBlock, "%s must define conditions block", tc.name)
+
+			var threshBlock *hclsyntax.Block
+			for _, sub := range condBlock.Body.Blocks {
+				if sub.Type == "condition_threshold" {
+					threshBlock = sub
+					break
+				}
+			}
+			require.NotNil(t, threshBlock, "%s must define condition_threshold block", tc.name)
+
+			filterAttr, hasFilter := threshBlock.Body.Attributes["filter"]
+			require.True(t, hasFilter)
+			filterExpr := strings.ReplaceAll(getExprSource(file, filterAttr.Expr), `\"`, `"`)
+			for _, f := range tc.filterContains {
+				assert.Contains(t, filterExpr, f)
+			}
+
+			durAttr, hasDur := threshBlock.Body.Attributes["duration"]
+			require.True(t, hasDur)
+			assert.Equal(t, tc.duration, getExprSource(file, durAttr.Expr))
+
+			compAttr, hasComp := threshBlock.Body.Attributes["comparison"]
+			require.True(t, hasComp)
+			assert.Equal(t, tc.comparison, getExprSource(file, compAttr.Expr))
+
+			// Trigger count = 1
+			var trigBlock *hclsyntax.Block
+			for _, sub := range threshBlock.Body.Blocks {
+				if sub.Type == "trigger" {
+					trigBlock = sub
+					break
+				}
+			}
+			require.NotNil(t, trigBlock, "%s must define trigger block", tc.name)
+			trigCount, hasTrigCount := trigBlock.Body.Attributes["count"]
+			require.True(t, hasTrigCount)
+			assert.Equal(t, "1", getExprSource(file, trigCount.Expr))
+
+			// Aggregations
+			var aggBlock *hclsyntax.Block
+			for _, sub := range threshBlock.Body.Blocks {
+				if sub.Type == "aggregations" {
+					aggBlock = sub
+					break
+				}
+			}
+			require.NotNil(t, aggBlock, "%s must define aggregations block", tc.name)
+			alignerAttr, hasAligner := aggBlock.Body.Attributes["per_series_aligner"]
+			require.True(t, hasAligner)
+			assert.Equal(t, tc.aligner, getExprSource(file, alignerAttr.Expr))
+		})
+	}
+}
+
+func TestModules_GatewayCleanBigQuerySinkMonitoring(t *testing.T) {
+	t.Parallel()
+	modulesDir := "../../modules"
+	parser := hclparse.NewParser()
+	monitoringPath := filepath.Join(modulesDir, "gateway", "monitoring.tf")
+	file, syntaxBody := parseHCLFileAST(t, parser, monitoringPath)
+
+	alerts := make(map[string]*hclsyntax.Block)
+	for _, block := range syntaxBody.Blocks {
+		if block.Type == "resource" && len(block.Labels) == 2 && block.Labels[0] == "google_monitoring_alert_policy" {
+			alerts[block.Labels[1]] = block
+		}
+	}
+
+	t.Run("raw_push_latency", func(t *testing.T) {
+		t.Parallel()
+		alert, exists := alerts["raw_push_latency"]
+		require.True(t, exists, "google_monitoring_alert_policy.raw_push_latency must exist in monitoring.tf")
+
+		countAttr, hasCount := alert.Body.Attributes["count"]
+		require.True(t, hasCount)
+		assert.Equal(t, "var.enable_infrastructure_alerts ? 1 : 0", getExprSource(file, countAttr.Expr))
+
+		nameAttr, hasName := alert.Body.Attributes["display_name"]
+		require.True(t, hasName)
+		assert.Contains(t, getExprSource(file, nameAttr.Expr), "[Tier 1] [INFRA] Raw Push Subscription Latency")
+	})
+
+	t.Run("clean_bq_unacked_message_age", func(t *testing.T) {
+		t.Parallel()
+		alert, exists := alerts["clean_bq_unacked_message_age"]
+		require.True(t, exists, "google_monitoring_alert_policy.clean_bq_unacked_message_age must exist in monitoring.tf")
+
+		forEachAttr, hasForEach := alert.Body.Attributes["for_each"]
+		require.True(t, hasForEach)
+		assert.Equal(t, "var.enable_infrastructure_alerts ? var.contracts : {}", getExprSource(file, forEachAttr.Expr))
+
+		nameAttr, hasName := alert.Body.Attributes["display_name"]
+		require.True(t, hasName)
+		assert.Contains(t, getExprSource(file, nameAttr.Expr), "[Tier 1] [INFRA] Clean BigQuery Write Stall")
+
+		// Threshold must use local.unacked_age_seconds
+		var condBlock *hclsyntax.Block
+		for _, sub := range alert.Body.Blocks {
+			if sub.Type == "conditions" {
+				condBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, condBlock)
+		var threshBlock *hclsyntax.Block
+		for _, sub := range condBlock.Body.Blocks {
+			if sub.Type == "condition_threshold" {
+				threshBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, threshBlock)
+		threshValAttr, hasThreshVal := threshBlock.Body.Attributes["threshold_value"]
+		require.True(t, hasThreshVal)
+		assert.Equal(t, "local.unacked_age_seconds", getExprSource(file, threshValAttr.Expr))
+	})
+
+	t.Run("clean_bq_dead_letter_count", func(t *testing.T) {
+		t.Parallel()
+		alert, exists := alerts["clean_bq_dead_letter_count"]
+		require.True(t, exists, "google_monitoring_alert_policy.clean_bq_dead_letter_count must exist in monitoring.tf")
+
+		forEachAttr, hasForEach := alert.Body.Attributes["for_each"]
+		require.True(t, hasForEach)
+		assert.Equal(t, "var.enable_infrastructure_alerts ? var.contracts : {}", getExprSource(file, forEachAttr.Expr))
+
+		nameAttr, hasName := alert.Body.Attributes["display_name"]
+		require.True(t, hasName)
+		assert.Contains(t, getExprSource(file, nameAttr.Expr), "[Tier 1] [DATA] Clean BigQuery Schema Rejections")
+
+		// Aligner must be ALIGN_DELTA for cumulative dead letter message count
+		var condBlock *hclsyntax.Block
+		for _, sub := range alert.Body.Blocks {
+			if sub.Type == "conditions" {
+				condBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, condBlock)
+		var threshBlock *hclsyntax.Block
+		for _, sub := range condBlock.Body.Blocks {
+			if sub.Type == "condition_threshold" {
+				threshBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, threshBlock)
+
+		var aggBlock *hclsyntax.Block
+		for _, sub := range threshBlock.Body.Blocks {
+			if sub.Type == "aggregations" {
+				aggBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, aggBlock)
+		alignerAttr, hasAligner := aggBlock.Body.Attributes["per_series_aligner"]
+		require.True(t, hasAligner)
+		assert.Equal(t, `"ALIGN_DELTA"`, getExprSource(file, alignerAttr.Expr))
+	})
+}
+
+func TestModules_GatewayMultiChannelRoutingAndHygiene(t *testing.T) {
+	t.Parallel()
+	modulesDir := "../../modules"
+	parser := hclparse.NewParser()
+	monitoringPath := filepath.Join(modulesDir, "gateway", "monitoring.tf")
+	file, syntaxBody := parseHCLFileAST(t, parser, monitoringPath)
+
+	t.Run("LocalsHygiene", func(t *testing.T) {
+		var localsBlocks []*hclsyntax.Block
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "locals" {
+				localsBlocks = append(localsBlocks, block)
+			}
+		}
+		require.NotEmpty(t, localsBlocks)
+
+		allAttrs := make(map[string]hclsyntax.Expression)
+		for _, lb := range localsBlocks {
+			for name, attr := range lb.Body.Attributes {
+				allAttrs[name] = attr.Expr
+			}
+		}
+
+		// tier2_alert_notification_channels
+		t2Expr, hasT2 := allAttrs["tier2_alert_notification_channels"]
+		require.True(t, hasT2, "monitoring.tf must define tier2_alert_notification_channels local")
+		t2Src := getExprSource(file, t2Expr)
+		assert.Contains(t, t2Src, "google_monitoring_notification_channel.slack[*].name")
+		assert.Contains(t, t2Src, "google_monitoring_notification_channel.email[*].name")
+		assert.Contains(t, t2Src, "var.alert_notification_channels")
+		assert.Contains(t, t2Src, "var.additional_sre_notification_channels")
+		assert.NotContains(t, t2Src, "pagerduty", "tier2_alert_notification_channels must not include PagerDuty")
+
+		// all_alert_notification_channels with TIER_3 suppression
+		allExpr, hasAll := allAttrs["all_alert_notification_channels"]
+		require.True(t, hasAll, "monitoring.tf must define all_alert_notification_channels local")
+		allSrc := getExprSource(file, allExpr)
+		assert.Contains(t, allSrc, "local.tier2_alert_notification_channels")
+		assert.Contains(t, allSrc, `"TIER_3"`)
+
+		// monitored_contracts_summary truncation
+		truncExpr, hasTrunc := allAttrs["monitored_contracts_summary"]
+		require.True(t, hasTrunc, "monitoring.tf must define monitored_contracts_summary local")
+		truncSrc := getExprSource(file, truncExpr)
+		assert.Contains(t, truncSrc, "250")
+		assert.Contains(t, truncSrc, "more contracts")
+	})
+
+	t.Run("Tier2PoliciesUseTier2Channels", func(t *testing.T) {
+		alerts := make(map[string]*hclsyntax.Block)
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 && block.Labels[0] == "google_monitoring_alert_policy" {
+				alerts[block.Labels[1]] = block
+			}
+		}
+
+		spike, hasSpike := alerts["tier2_latency_spike"]
+		require.True(t, hasSpike)
+		spikeChan, hasChan := spike.Body.Attributes["notification_channels"]
+		require.True(t, hasChan)
+		assert.Equal(t, "local.tier2_alert_notification_channels", getExprSource(file, spikeChan.Expr))
+
+		errorRate, hasErrorRate := alerts["tier2_high_error_rate"]
+		require.True(t, hasErrorRate)
+		errChan, hasChan := errorRate.Body.Attributes["notification_channels"]
+		require.True(t, hasChan)
+		assert.Equal(t, "local.tier2_alert_notification_channels", getExprSource(file, errChan.Expr))
+	})
+
+	t.Run("GatewayOutputsExported", func(t *testing.T) {
+		outPath := filepath.Join(modulesDir, "gateway", "outputs.tf")
+		outFile, outBody := parseHCLFileAST(t, parser, outPath)
+
+		outputs := make(map[string]*hclsyntax.Block)
+		for _, block := range outBody.Blocks {
+			if block.Type == "output" && len(block.Labels) == 1 {
+				outputs[block.Labels[0]] = block
+			}
+		}
+
+		expectedOutputs := map[string]string{
+			"alert_notification_channels":           "local.all_alert_notification_channels",
+			"tier2_alert_notification_channels":     "local.tier2_alert_notification_channels",
+			"unacked_message_age_threshold_seconds": "local.unacked_age_seconds",
+		}
+
+		for name, expectedExpr := range expectedOutputs {
+			block, exists := outputs[name]
+			require.True(t, exists, "gateway outputs.tf missing output %s", name)
+			valAttr, hasVal := block.Body.Attributes["value"]
+			require.True(t, hasVal)
+			assert.Equal(t, expectedExpr, getExprSource(outFile, valAttr.Expr))
+		}
+	})
+}
+

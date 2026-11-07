@@ -63,4 +63,19 @@ output "dlq_alert_policy_age_id" {
   value       = try(google_monitoring_alert_policy.dlq_message_age[0].name, "")
 }
 
+output "alert_notification_channels" {
+  description = "Aggregated list of all alert notification channels including PagerDuty (suppressed on TIER_3)"
+  value       = local.all_alert_notification_channels
+}
+
+output "tier2_alert_notification_channels" {
+  description = "Aggregated list of non-paging alert notification channels (excluding PagerDuty)"
+  value       = local.tier2_alert_notification_channels
+}
+
+output "unacked_message_age_threshold_seconds" {
+  description = "The active unacknowledged message age threshold in seconds derived from SLA tier"
+  value       = local.unacked_age_seconds
+}
+
 

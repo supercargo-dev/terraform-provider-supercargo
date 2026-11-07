@@ -271,5 +271,36 @@ variable "max_instances" {
   default     = 3
 }
 
+variable "sla_tier" {
+  description = "The SLA tier of the data product (TIER_1, TIER_2, or TIER_3). Calibrates alert thresholds and paging severity."
+  type        = string
+  default     = "TIER_2"
+  validation {
+    condition     = contains(["TIER_1", "TIER_2", "TIER_3"], var.sla_tier)
+    error_message = "The sla_tier variable must be one of: TIER_1, TIER_2, TIER_3."
+  }
+}
 
+variable "enable_monitoring_dashboard" {
+  description = "Whether to provision the turnkey Cloud Monitoring Dashboard for this data product"
+  type        = bool
+  default     = true
+}
 
+variable "enable_infrastructure_alerts" {
+  description = "Whether to provision Cloud Monitoring alert policies for Cloud Run, Pub/Sub, DLT jobs, and BigQuery sinks"
+  type        = bool
+  default     = true
+}
+
+variable "additional_sre_notification_channels" {
+  description = "Additional Cloud Monitoring notification channel IDs for SRE / platform monitoring (e.g., webhook, central ops)"
+  type        = list(string)
+  default     = []
+}
+
+variable "unacked_message_age_threshold_seconds" {
+  description = "Optional override for Pub/Sub unacknowledged message age alert threshold. If unset, derived from sla_tier."
+  type        = number
+  default     = null
+}
