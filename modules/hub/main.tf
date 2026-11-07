@@ -1,11 +1,14 @@
 locals {
   bq_location                     = var.bigquery_location != "" ? var.bigquery_location : var.region
   default_dataform_sink_filter    = "resource.type = \"dataform.googleapis.com/Repository\" AND (jsonPayload.terminalState:* OR protoPayload.@type = \"type.googleapis.com/google.cloud.dataform.v1alpha2.WorkflowInvocation\" OR jsonPayload.@type = \"type.googleapis.com/google.cloud.dataform.logging.v1.WorkflowInvocationCompletionLogEntry\" OR jsonPayload.@type = \"type.googleapis.com/google.cloud.dataform.v1alpha2.WorkflowInvocationCompletionLogEntry\")"
+  default_job_sink_filter         = "resource.type = \"cloud_run_job\" AND (log_name =~ \"run.googleapis.com%2Fjob-execution-result\" OR textPayload =~ \"Completed with status:\")"
   console_iap_audience            = var.console_iap_audience != "" ? var.console_iap_audience : (var.console_iap_enabled ? "/projects/${var.project_number}/locations/${var.region}/services/console${var.name_suffix != "" ? "-${var.name_suffix}" : ""}" : "")
   console_telemetry_identity_salt = var.console_telemetry_identity_salt != "" ? var.console_telemetry_identity_salt : "supercargo-${var.project_id}-${var.environment}-telemetry-salt"
 }
 
-
+data "google_project" "project" {
+  project_id = var.project_id
+}
 
 resource "google_project_service" "hub_apis" {
   for_each = toset([
@@ -1470,3 +1473,120 @@ module "monitoring" {
   additional_sre_notification_channels = var.additional_sre_notification_channels
 }
 
+# ----------------------------------------------------------------------------------------------------------------------
+# CLOUD RUN JOB LOGGING SINK, PUB/SUB & CLOUD MONITORING ALERT INTEGRATION
+# ----------------------------------------------------------------------------------------------------------------------
+
+resource "google_pubsub_topic" "job_events" {
+  count   = var.enable_job_monitoring_integration ? 1 : 0
+  project = var.project_id
+  name    = var.job_events_topic
+}
+
+resource "google_pubsub_topic" "job_events_dlq" {
+  count   = var.enable_job_monitoring_integration ? 1 : 0
+  project = var.project_id
+  name    = "${var.job_events_topic}-dlq"
+}
+
+resource "google_logging_project_sink" "job_events" {
+  count                  = var.enable_job_monitoring_integration ? 1 : 0
+  project                = var.project_id
+  name                   = "supercargo-job-events-sink${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
+  destination            = "pubsub.googleapis.com/${google_pubsub_topic.job_events[0].id}"
+  filter                 = var.job_sink_filter != "" ? var.job_sink_filter : local.default_job_sink_filter
+  unique_writer_identity = true
+}
+
+resource "google_pubsub_topic_iam_member" "job_sink_publisher" {
+  count   = var.enable_job_monitoring_integration ? 1 : 0
+  project = var.project_id
+  topic   = google_pubsub_topic.job_events[0].name
+  role    = "roles/pubsub.publisher"
+  member  = google_logging_project_sink.job_events[0].writer_identity
+}
+
+resource "google_monitoring_notification_channel" "hub_events" {
+  count        = var.enable_job_monitoring_integration ? 1 : 0
+  project      = var.project_id
+  display_name = "Supercargo Hub Events Notification Channel${var.name_suffix != "" ? " (${var.name_suffix})" : ""}"
+  type         = "pubsub"
+  labels = {
+    topic = google_pubsub_topic.job_events[0].id
+  }
+}
+
+resource "google_pubsub_topic_iam_member" "monitoring_notification_publisher" {
+  count   = var.enable_job_monitoring_integration ? 1 : 0
+  project = var.project_id
+  topic   = google_pubsub_topic.job_events[0].name
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:service-${var.project_number != "" ? var.project_number : data.google_project.project.number}@gcp-sa-monitoring-notification.iam.gserviceaccount.com"
+}
+
+resource "google_pubsub_subscription" "job_events_push" {
+  count   = var.enable_job_monitoring_integration ? 1 : 0
+  project = var.project_id
+  name    = "hub-job-events-push${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
+  topic   = google_pubsub_topic.job_events[0].name
+
+  ack_deadline_seconds = 60
+
+  push_config {
+    push_endpoint = "${google_cloud_run_v2_service.hub.uri}/v1/internal/monitoring-events"
+    oidc_token {
+      service_account_email = google_service_account.events_invoker.email
+      audience              = var.oidc_audience != "" ? trimspace(split(",", var.oidc_audience)[0]) : google_cloud_run_v2_service.hub.uri
+    }
+  }
+
+  dead_letter_policy {
+    dead_letter_topic     = google_pubsub_topic.job_events_dlq[0].id
+    max_delivery_attempts = 5
+  }
+
+  retry_policy {
+    minimum_backoff = "10s"
+    maximum_backoff = "600s"
+  }
+
+  expiration_policy {
+    ttl = ""
+  }
+
+  depends_on = [
+    google_cloud_run_v2_service_iam_member.events_invoker_run,
+    google_service_account_iam_member.pubsub_events_invoker_token_creator,
+    google_pubsub_topic_iam_member.job_dlq_publisher,
+  ]
+}
+
+resource "google_pubsub_topic_iam_member" "job_dlq_publisher" {
+  count   = var.enable_job_monitoring_integration ? 1 : 0
+  project = var.project_id
+  topic   = google_pubsub_topic.job_events_dlq[0].name
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:service-${var.project_number != "" ? var.project_number : data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
+resource "google_pubsub_subscription_iam_member" "job_push_dlq_subscriber" {
+  count        = var.enable_job_monitoring_integration ? 1 : 0
+  project      = var.project_id
+  subscription = google_pubsub_subscription.job_events_push[0].name
+  role         = "roles/pubsub.subscriber"
+  member       = "serviceAccount:service-${var.project_number != "" ? var.project_number : data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
+resource "google_pubsub_subscription" "job_events_dlq_pull" {
+  count   = var.enable_job_monitoring_integration ? 1 : 0
+  project = var.project_id
+  name    = "${var.job_events_topic}-dlq-sub"
+  topic   = google_pubsub_topic.job_events_dlq[0].name
+
+  message_retention_duration = "604800s"
+  retain_acked_messages      = false
+
+  expiration_policy {
+    ttl = ""
+  }
+}

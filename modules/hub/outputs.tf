@@ -165,4 +165,33 @@ output "dashboard_governance_url" {
   value       = var.enable_monitoring && length(module.monitoring) > 0 ? module.monitoring[0].dashboard_governance_url : ""
 }
 
+output "job_events_topic_name" {
+  description = "The Pub/Sub topic name for Cloud Run Job execution and Cloud Monitoring alert events"
+  value       = var.enable_job_monitoring_integration ? google_pubsub_topic.job_events[0].name : null
+}
+
+output "job_events_topic_id" {
+  description = "The Pub/Sub topic ID for Cloud Run Job execution and Cloud Monitoring alert events"
+  value       = var.enable_job_monitoring_integration ? google_pubsub_topic.job_events[0].id : null
+}
+
+output "job_events_dlq_topic_name" {
+  description = "The Pub/Sub dead-letter topic name for Cloud Run Job execution and Cloud Monitoring alert events"
+  value       = var.enable_job_monitoring_integration ? google_pubsub_topic.job_events_dlq[0].name : null
+}
+
+output "job_events_subscription_name" {
+  description = "The Pub/Sub push subscription name for Cloud Run Job execution and Cloud Monitoring alert events"
+  value       = var.enable_job_monitoring_integration ? google_pubsub_subscription.job_events_push[0].name : null
+}
+
+output "job_events_dlq_subscription_name" {
+  description = "The Pub/Sub pull subscription name for inspecting Cloud Run Job dead-letter messages"
+  value       = var.enable_job_monitoring_integration ? google_pubsub_subscription.job_events_dlq_pull[0].name : null
+}
+
+output "job_monitoring_notification_channel_id" {
+  description = "The Cloud Monitoring Pub/Sub notification channel ID for Hub alert routing"
+  value       = var.enable_job_monitoring_integration ? google_monitoring_notification_channel.hub_events[0].id : null
+}
 
