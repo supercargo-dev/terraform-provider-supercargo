@@ -5408,3 +5408,332 @@ func TestModules_GatewayMultiChannelRoutingAndHygiene(t *testing.T) {
 	})
 }
 
+func TestModules_DataProductDLTAndSchedulerMonitoring(t *testing.T) {
+	t.Parallel()
+	modulesDir := "../../modules"
+	parser := hclparse.NewParser()
+	monitoringPath := filepath.Join(modulesDir, "data_product", "monitoring.tf")
+	file, syntaxBody := parseHCLFileAST(t, parser, monitoringPath)
+
+	t.Run("LocalsHygiene", func(t *testing.T) {
+		var localsBlocks []*hclsyntax.Block
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "locals" {
+				localsBlocks = append(localsBlocks, block)
+			}
+		}
+		require.NotEmpty(t, localsBlocks, "modules/data_product/monitoring.tf must define a locals block")
+
+		allAttrs := make(map[string]hclsyntax.Expression)
+		for _, lb := range localsBlocks {
+			for name, attr := range lb.Body.Attributes {
+				allAttrs[name] = attr.Expr
+			}
+		}
+
+		suffixExpr, hasSuffix := allAttrs["name_suffix_display"]
+		require.True(t, hasSuffix, "monitoring.tf must define name_suffix_display local")
+		assert.Equal(t, `var.name_suffix != "" ? " - ${var.name_suffix}" : ""`, getExprSource(file, suffixExpr))
+	})
+
+	alerts := make(map[string]*hclsyntax.Block)
+	for _, block := range syntaxBody.Blocks {
+		if block.Type == "resource" && len(block.Labels) == 2 && block.Labels[0] == "google_monitoring_alert_policy" {
+			alerts[block.Labels[1]] = block
+		}
+	}
+
+	t.Run("dlt_job_failed_execution", func(t *testing.T) {
+		t.Parallel()
+		alert, exists := alerts["dlt_job_failed_execution"]
+		require.True(t, exists, "google_monitoring_alert_policy.dlt_job_failed_execution must exist in monitoring.tf")
+
+		forEachAttr, hasForEach := alert.Body.Attributes["for_each"]
+		require.True(t, hasForEach)
+		assert.Equal(t, "var.enable_infrastructure_alerts ? local.dlt_input_ports : {}", getExprSource(file, forEachAttr.Expr))
+
+		nameAttr, hasName := alert.Body.Attributes["display_name"]
+		require.True(t, hasName)
+		assert.Contains(t, getExprSource(file, nameAttr.Expr), "[Tier 1] [INFRA] DLT Batch Ingestion Failed")
+
+		chanAttr, hasChan := alert.Body.Attributes["notification_channels"]
+		require.True(t, hasChan)
+		assert.Equal(t, "module.gateway.alert_notification_channels", getExprSource(file, chanAttr.Expr))
+
+		depAttr, hasDep := alert.Body.Attributes["depends_on"]
+		require.True(t, hasDep)
+		assert.Contains(t, getExprSource(file, depAttr.Expr), "google_cloud_run_v2_job.dlt_jobs")
+
+		// Alert strategy auto close
+		var stratBlock *hclsyntax.Block
+		for _, sub := range alert.Body.Blocks {
+			if sub.Type == "alert_strategy" {
+				stratBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, stratBlock)
+		autoCloseAttr, hasAutoClose := stratBlock.Body.Attributes["auto_close"]
+		require.True(t, hasAutoClose)
+		assert.Equal(t, `"604800s"`, getExprSource(file, autoCloseAttr.Expr))
+
+		// Documentation triage CLI command
+		var docBlock *hclsyntax.Block
+		for _, sub := range alert.Body.Blocks {
+			if sub.Type == "documentation" {
+				docBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, docBlock)
+		contentAttr, hasContent := docBlock.Body.Attributes["content"]
+		require.True(t, hasContent)
+		assert.Contains(t, getExprSource(file, contentAttr.Expr), "gcloud run jobs executions list")
+
+		// Condition threshold
+		var condBlock *hclsyntax.Block
+		for _, sub := range alert.Body.Blocks {
+			if sub.Type == "conditions" {
+				condBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, condBlock)
+		var threshBlock *hclsyntax.Block
+		for _, sub := range condBlock.Body.Blocks {
+			if sub.Type == "condition_threshold" {
+				threshBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, threshBlock)
+
+		filterAttr, hasFilter := threshBlock.Body.Attributes["filter"]
+		require.True(t, hasFilter)
+		filterSrc := strings.ReplaceAll(getExprSource(file, filterAttr.Expr), `\"`, `"`)
+		assert.Contains(t, filterSrc, `resource.type = "cloud_run_job"`)
+		assert.Contains(t, filterSrc, `google_cloud_run_v2_job.dlt_jobs[each.key].name`)
+		assert.Contains(t, filterSrc, `metric.type = "run.googleapis.com/job/completed_execution_count"`)
+		assert.Contains(t, filterSrc, `metric.label.result = "failed"`)
+
+		durAttr, hasDur := threshBlock.Body.Attributes["duration"]
+		require.True(t, hasDur)
+		assert.Equal(t, `"0s"`, getExprSource(file, durAttr.Expr))
+
+		compAttr, hasComp := threshBlock.Body.Attributes["comparison"]
+		require.True(t, hasComp)
+		assert.Equal(t, `"COMPARISON_GT"`, getExprSource(file, compAttr.Expr))
+
+		valAttr, hasVal := threshBlock.Body.Attributes["threshold_value"]
+		require.True(t, hasVal)
+		assert.Equal(t, "0", getExprSource(file, valAttr.Expr))
+
+		// Aggregations must be ALIGN_DELTA for completed_execution_count
+		var aggBlock *hclsyntax.Block
+		for _, sub := range threshBlock.Body.Blocks {
+			if sub.Type == "aggregations" {
+				aggBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, aggBlock)
+		alignerAttr, hasAligner := aggBlock.Body.Attributes["per_series_aligner"]
+		require.True(t, hasAligner)
+		assert.Equal(t, `"ALIGN_DELTA"`, getExprSource(file, alignerAttr.Expr))
+	})
+
+	t.Run("dlt_scheduler_failure", func(t *testing.T) {
+		t.Parallel()
+		alert, exists := alerts["dlt_scheduler_failure"]
+		require.True(t, exists, "google_monitoring_alert_policy.dlt_scheduler_failure must exist in monitoring.tf")
+
+		forEachAttr, hasForEach := alert.Body.Attributes["for_each"]
+		require.True(t, hasForEach)
+		assert.Equal(t, "var.enable_infrastructure_alerts ? local.dlt_input_ports : {}", getExprSource(file, forEachAttr.Expr))
+
+		nameAttr, hasName := alert.Body.Attributes["display_name"]
+		require.True(t, hasName)
+		assert.Contains(t, getExprSource(file, nameAttr.Expr), "[Tier 1] [INFRA] DLT Scheduler Trigger Failure")
+
+		chanAttr, hasChan := alert.Body.Attributes["notification_channels"]
+		require.True(t, hasChan)
+		assert.Equal(t, "module.gateway.alert_notification_channels", getExprSource(file, chanAttr.Expr))
+
+		depAttr, hasDep := alert.Body.Attributes["depends_on"]
+		require.True(t, hasDep)
+		assert.Contains(t, getExprSource(file, depAttr.Expr), "google_cloud_scheduler_job.dlt_schedules")
+
+		// Alert strategy auto close
+		var stratBlock *hclsyntax.Block
+		for _, sub := range alert.Body.Blocks {
+			if sub.Type == "alert_strategy" {
+				stratBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, stratBlock)
+		autoCloseAttr, hasAutoClose := stratBlock.Body.Attributes["auto_close"]
+		require.True(t, hasAutoClose)
+		assert.Equal(t, `"604800s"`, getExprSource(file, autoCloseAttr.Expr))
+
+		// Documentation triage CLI command
+		var docBlock *hclsyntax.Block
+		for _, sub := range alert.Body.Blocks {
+			if sub.Type == "documentation" {
+				docBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, docBlock)
+		contentAttr, hasContent := docBlock.Body.Attributes["content"]
+		require.True(t, hasContent)
+		assert.Contains(t, getExprSource(file, contentAttr.Expr), "gcloud logging read")
+
+		// Condition threshold
+		var condBlock *hclsyntax.Block
+		for _, sub := range alert.Body.Blocks {
+			if sub.Type == "conditions" {
+				condBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, condBlock)
+		var threshBlock *hclsyntax.Block
+		for _, sub := range condBlock.Body.Blocks {
+			if sub.Type == "condition_threshold" {
+				threshBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, threshBlock)
+
+		filterAttr, hasFilter := threshBlock.Body.Attributes["filter"]
+		require.True(t, hasFilter)
+		filterSrc := strings.ReplaceAll(getExprSource(file, filterAttr.Expr), `\"`, `"`)
+		assert.Contains(t, filterSrc, `resource.type = "cloud_scheduler_job"`)
+		assert.Contains(t, filterSrc, `google_cloud_scheduler_job.dlt_schedules[each.key].name`)
+		assert.Contains(t, filterSrc, `metric.type = "cloudscheduler.googleapis.com/job/attempt_count"`)
+		assert.Contains(t, filterSrc, `metric.label.response_status != "SUCCESS"`)
+
+		durAttr, hasDur := threshBlock.Body.Attributes["duration"]
+		require.True(t, hasDur)
+		assert.Equal(t, `"0s"`, getExprSource(file, durAttr.Expr))
+
+		compAttr, hasComp := threshBlock.Body.Attributes["comparison"]
+		require.True(t, hasComp)
+		assert.Equal(t, `"COMPARISON_GT"`, getExprSource(file, compAttr.Expr))
+
+		valAttr, hasVal := threshBlock.Body.Attributes["threshold_value"]
+		require.True(t, hasVal)
+		assert.Equal(t, "0", getExprSource(file, valAttr.Expr))
+
+		// Aggregations must be ALIGN_DELTA for attempt_count
+		var aggBlock *hclsyntax.Block
+		for _, sub := range threshBlock.Body.Blocks {
+			if sub.Type == "aggregations" {
+				aggBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, aggBlock)
+		alignerAttr, hasAligner := aggBlock.Body.Attributes["per_series_aligner"]
+		require.True(t, hasAligner)
+		assert.Equal(t, `"ALIGN_DELTA"`, getExprSource(file, alignerAttr.Expr))
+	})
+
+	t.Run("input_push_latency", func(t *testing.T) {
+		t.Parallel()
+		alert, exists := alerts["input_push_latency"]
+		require.True(t, exists, "google_monitoring_alert_policy.input_push_latency must exist in monitoring.tf")
+
+		forEachAttr, hasForEach := alert.Body.Attributes["for_each"]
+		require.True(t, hasForEach)
+		assert.Equal(t, "var.enable_infrastructure_alerts ? local.pubsub_input_ports : {}", getExprSource(file, forEachAttr.Expr))
+
+		nameAttr, hasName := alert.Body.Attributes["display_name"]
+		require.True(t, hasName)
+		assert.Contains(t, getExprSource(file, nameAttr.Expr), "[Tier 2] [INFRA] Input Push Subscription Latency")
+
+		chanAttr, hasChan := alert.Body.Attributes["notification_channels"]
+		require.True(t, hasChan)
+		assert.Equal(t, "module.gateway.tier2_alert_notification_channels", getExprSource(file, chanAttr.Expr))
+
+		depAttr, hasDep := alert.Body.Attributes["depends_on"]
+		require.True(t, hasDep)
+		assert.Contains(t, getExprSource(file, depAttr.Expr), "google_pubsub_subscription.input_push")
+
+		// Alert strategy auto close
+		var stratBlock *hclsyntax.Block
+		for _, sub := range alert.Body.Blocks {
+			if sub.Type == "alert_strategy" {
+				stratBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, stratBlock)
+		autoCloseAttr, hasAutoClose := stratBlock.Body.Attributes["auto_close"]
+		require.True(t, hasAutoClose)
+		assert.Equal(t, `"604800s"`, getExprSource(file, autoCloseAttr.Expr))
+
+		// Condition threshold
+		var condBlock *hclsyntax.Block
+		for _, sub := range alert.Body.Blocks {
+			if sub.Type == "conditions" {
+				condBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, condBlock)
+		var threshBlock *hclsyntax.Block
+		for _, sub := range condBlock.Body.Blocks {
+			if sub.Type == "condition_threshold" {
+				threshBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, threshBlock)
+
+		filterAttr, hasFilter := threshBlock.Body.Attributes["filter"]
+		require.True(t, hasFilter)
+		filterSrc := strings.ReplaceAll(getExprSource(file, filterAttr.Expr), `\"`, `"`)
+		assert.Contains(t, filterSrc, `resource.type = "pubsub_subscription"`)
+		assert.Contains(t, filterSrc, `google_pubsub_subscription.input_push[each.key].name`)
+		assert.Contains(t, filterSrc, `metric.type = "pubsub.googleapis.com/subscription/oldest_unacked_message_age"`)
+
+		durAttr, hasDur := threshBlock.Body.Attributes["duration"]
+		require.True(t, hasDur)
+		assert.Equal(t, `"0s"`, getExprSource(file, durAttr.Expr))
+
+		compAttr, hasComp := threshBlock.Body.Attributes["comparison"]
+		require.True(t, hasComp)
+		assert.Equal(t, `"COMPARISON_GT"`, getExprSource(file, compAttr.Expr))
+
+		valAttr, hasVal := threshBlock.Body.Attributes["threshold_value"]
+		require.True(t, hasVal)
+		assert.Equal(t, "module.gateway.unacked_message_age_threshold_seconds", getExprSource(file, valAttr.Expr))
+
+		// Aggregations must be ALIGN_MAX for latency
+		var aggBlock *hclsyntax.Block
+		for _, sub := range threshBlock.Body.Blocks {
+			if sub.Type == "aggregations" {
+				aggBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, aggBlock)
+		alignerAttr, hasAligner := aggBlock.Body.Attributes["per_series_aligner"]
+		require.True(t, hasAligner)
+		assert.Equal(t, `"ALIGN_MAX"`, getExprSource(file, alignerAttr.Expr))
+	})
+
+	t.Run("PlanTimeDeterminism", func(t *testing.T) {
+		t.Parallel()
+		for alertName, alert := range alerts {
+			forEachAttr, hasForEach := alert.Body.Attributes["for_each"]
+			require.True(t, hasForEach, "alert %s must define for_each", alertName)
+			exprSrc := getExprSource(file, forEachAttr.Expr)
+			assert.False(t, strings.Contains(exprSrc, ".id") || strings.Contains(exprSrc, ".name") || strings.Contains(exprSrc, ".email"),
+				"alert %s for_each must not reference dynamic resource attributes: %s", alertName, exprSrc)
+		}
+	})
+}
