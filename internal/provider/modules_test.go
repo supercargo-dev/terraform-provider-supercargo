@@ -5737,3 +5737,150 @@ func TestModules_DataProductDLTAndSchedulerMonitoring(t *testing.T) {
 		}
 	})
 }
+
+func TestModules_GatewayMonitoringDashboard(t *testing.T) {
+	t.Parallel()
+	modulesDir := "../../modules"
+	parser := hclparse.NewParser()
+	dashboardPath := filepath.Join(modulesDir, "gateway", "dashboard.tf")
+	file, syntaxBody := parseHCLFileAST(t, parser, dashboardPath)
+
+	t.Run("DashboardResourceAttributes", func(t *testing.T) {
+		t.Parallel()
+		var dashboardBlock *hclsyntax.Block
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 &&
+				block.Labels[0] == "google_monitoring_dashboard" && block.Labels[1] == "data_product" {
+				dashboardBlock = block
+				break
+			}
+		}
+		require.NotNil(t, dashboardBlock, "google_monitoring_dashboard.data_product must exist in gateway/dashboard.tf")
+
+		countAttr, hasCount := dashboardBlock.Body.Attributes["count"]
+		require.True(t, hasCount)
+		assert.Equal(t, "var.enable_monitoring_dashboard ? 1 : 0", getExprSource(file, countAttr.Expr))
+
+		jsonAttr, hasJson := dashboardBlock.Body.Attributes["dashboard_json"]
+		require.True(t, hasJson)
+		jsonExpr := getExprSource(file, jsonAttr.Expr)
+		assert.True(t, strings.HasPrefix(jsonExpr, "jsonencode("), "dashboard_json must use jsonencode(...)")
+
+		// Assert Title
+		assert.Contains(t, jsonExpr, `Supercargo Data Product - ${var.product_id}${local.name_suffix_display}`)
+
+		// Assert MosaicLayout
+		assert.Contains(t, jsonExpr, "mosaicLayout")
+
+		// Assert 5 Operational Sections
+		expectedSections := []string{
+			"Contract Validation & Quarantine Health",
+			"Gateway Cloud Run Golden Signals & Scaling",
+			"Pub/Sub Ingress & BigQuery Sink Backlogs",
+			"DLT Batch Jobs & Schedulers",
+			"BigQuery Landing Table Throughput",
+		}
+		for _, sec := range expectedSections {
+			assert.Contains(t, jsonExpr, sec, "dashboard_json must contain section %q", sec)
+		}
+
+		// Assert Section 1 contents: total messages, validation errors, validation latencies, DLQ unacked message age
+		assert.Contains(t, jsonExpr, "custom.googleapis.com/supercargo/gateway/messages_total")
+		assert.Contains(t, jsonExpr, "custom.googleapis.com/supercargo/gateway/validation_errors_total")
+		assert.Contains(t, jsonExpr, "custom.googleapis.com/supercargo/gateway/validation_duration_seconds")
+		assert.Contains(t, jsonExpr, "google_pubsub_subscription.dlq_sub.name")
+
+		// Assert Section 2 contents: Cloud Run response code classes, request latencies, CPU, memory, active instances
+		assert.Contains(t, jsonExpr, "run.googleapis.com/request_count")
+		assert.Contains(t, jsonExpr, "run.googleapis.com/request_latencies")
+		assert.Contains(t, jsonExpr, "run.googleapis.com/container/cpu/utilizations")
+		assert.Contains(t, jsonExpr, "run.googleapis.com/container/memory/utilizations")
+		assert.Contains(t, jsonExpr, "run.googleapis.com/container/instance_count")
+
+		// Assert Section 3 contents: Pub/Sub ingress unacked age, num undelivered messages, Clean BigQuery unacked age, dead-letter count
+		assert.Contains(t, jsonExpr, "google_pubsub_subscription.raw_push.name")
+		assert.Contains(t, jsonExpr, "pubsub.googleapis.com/subscription/num_undelivered_messages")
+		assert.Contains(t, jsonExpr, "pubsub.googleapis.com/subscription/dead_letter_message_count")
+
+		// Assert Section 4 contents: Prefix matching for DLT jobs and schedulers (streaming-only compatibility)
+		assert.Contains(t, strings.ReplaceAll(jsonExpr, `\"`, `"`), `starts_with("dlt-${var.product_id}-")`)
+		assert.Contains(t, jsonExpr, "run.googleapis.com/job/completed_execution_count")
+		assert.Contains(t, jsonExpr, "cloudscheduler.googleapis.com/job/attempt_count")
+
+		// Assert Section 5 contents: BigQuery insert message rate & stored bytes/row count
+		assert.Contains(t, jsonExpr, "bigquery.googleapis.com")
+	})
+
+	t.Run("GatewayOutputs", func(t *testing.T) {
+		t.Parallel()
+		outPath := filepath.Join(modulesDir, "gateway", "outputs.tf")
+		outFile, outBody := parseHCLFileAST(t, parser, outPath)
+
+		outputs := make(map[string]*hclsyntax.Block)
+		for _, block := range outBody.Blocks {
+			if block.Type == "output" && len(block.Labels) == 1 {
+				outputs[block.Labels[0]] = block
+			}
+		}
+
+		expectedOutputs := map[string]string{
+			"dashboard_id":  `try(google_monitoring_dashboard.data_product[0].id, "")`,
+			"dashboard_url": `length(google_monitoring_dashboard.data_product) > 0 ? "https://console.cloud.google.com/monitoring/dashboards/custom/${element(split("/", google_monitoring_dashboard.data_product[0].id), length(split("/", google_monitoring_dashboard.data_product[0].id)) - 1)}?project=${var.project_id}" : ""`,
+		}
+
+		for name, expectedExpr := range expectedOutputs {
+			block, exists := outputs[name]
+			require.True(t, exists, "gateway outputs.tf missing output %s", name)
+			valAttr, hasVal := block.Body.Attributes["value"]
+			require.True(t, hasVal)
+			assert.Equal(t, expectedExpr, getExprSource(outFile, valAttr.Expr))
+		}
+	})
+
+	t.Run("PlanTimeDeterminism", func(t *testing.T) {
+		t.Parallel()
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "resource" {
+				if countAttr, hasCount := block.Body.Attributes["count"]; hasCount {
+					exprSrc := getExprSource(file, countAttr.Expr)
+					assert.False(t, strings.Contains(exprSrc, ".id") || strings.Contains(exprSrc, ".name") || strings.Contains(exprSrc, ".email"),
+						"dashboard resource count must not reference dynamic resource attributes: %s", exprSrc)
+				}
+				if forEachAttr, hasForEach := block.Body.Attributes["for_each"]; hasForEach {
+					exprSrc := getExprSource(file, forEachAttr.Expr)
+					assert.False(t, strings.Contains(exprSrc, ".id") || strings.Contains(exprSrc, ".name") || strings.Contains(exprSrc, ".email"),
+						"dashboard resource for_each must not reference dynamic resource attributes: %s", exprSrc)
+				}
+			}
+		}
+	})
+}
+
+func TestModules_DataProductDashboardOutputForwarding(t *testing.T) {
+	t.Parallel()
+	modulesDir := "../../modules"
+	parser := hclparse.NewParser()
+	outPath := filepath.Join(modulesDir, "data_product", "outputs.tf")
+	outFile, outBody := parseHCLFileAST(t, parser, outPath)
+
+	outputs := make(map[string]*hclsyntax.Block)
+	for _, block := range outBody.Blocks {
+		if block.Type == "output" && len(block.Labels) == 1 {
+			outputs[block.Labels[0]] = block
+		}
+	}
+
+	expectedOutputs := map[string]string{
+		"dashboard_id":  "module.gateway.dashboard_id",
+		"dashboard_url": "module.gateway.dashboard_url",
+	}
+
+	for name, expectedExpr := range expectedOutputs {
+		block, exists := outputs[name]
+		require.True(t, exists, "data_product outputs.tf missing output %s", name)
+		valAttr, hasVal := block.Body.Attributes["value"]
+		require.True(t, hasVal)
+		assert.Equal(t, expectedExpr, getExprSource(outFile, valAttr.Expr))
+	}
+}
+

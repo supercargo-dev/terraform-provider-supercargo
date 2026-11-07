@@ -78,4 +78,12 @@ output "unacked_message_age_threshold_seconds" {
   value       = local.unacked_age_seconds
 }
 
+output "dashboard_id" {
+  description = "The resource ID of the Data Product Cloud Monitoring dashboard"
+  value       = try(google_monitoring_dashboard.data_product[0].id, "")
+}
 
+output "dashboard_url" {
+  description = "The direct GCP Console URL for the Data Product Cloud Monitoring dashboard in view mode"
+  value       = length(google_monitoring_dashboard.data_product) > 0 ? "https://console.cloud.google.com/monitoring/dashboards/custom/${element(split("/", google_monitoring_dashboard.data_product[0].id), length(split("/", google_monitoring_dashboard.data_product[0].id)) - 1)}?project=${var.project_id}" : ""
+}
