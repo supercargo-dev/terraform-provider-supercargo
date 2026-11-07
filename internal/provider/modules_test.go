@@ -5785,9 +5785,9 @@ func TestModules_GatewayMonitoringDashboard(t *testing.T) {
 		}
 
 		// Assert Section 1 contents: total messages, validation errors, validation latencies, DLQ unacked message age
-		assert.Contains(t, jsonExpr, "custom.googleapis.com/supercargo/gateway/messages_total")
-		assert.Contains(t, jsonExpr, "custom.googleapis.com/supercargo/gateway/validation_errors_total")
-		assert.Contains(t, jsonExpr, "custom.googleapis.com/supercargo/gateway/validation_duration_seconds")
+		assert.Contains(t, jsonExpr, `custom.googleapis.com/${replace(var.product_id, "-", "_")}${local.metric_suffix}_messages_total`)
+		assert.Contains(t, jsonExpr, `custom.googleapis.com/${replace(var.product_id, "-", "_")}${local.metric_suffix}_validation_errors_total`)
+		assert.Contains(t, jsonExpr, `custom.googleapis.com/${replace(var.product_id, "-", "_")}${local.metric_suffix}_validation_duration_ms`)
 		assert.Contains(t, jsonExpr, "google_pubsub_subscription.dlq_sub.name")
 
 		// Assert Section 2 contents: Cloud Run response code classes, request latencies, CPU, memory, active instances
@@ -5804,11 +5804,13 @@ func TestModules_GatewayMonitoringDashboard(t *testing.T) {
 
 		// Assert Section 4 contents: Prefix matching for DLT jobs and schedulers (streaming-only compatibility)
 		assert.Contains(t, strings.ReplaceAll(jsonExpr, `\"`, `"`), `starts_with("dlt-${var.product_id}-")`)
+		assert.Contains(t, strings.ReplaceAll(jsonExpr, `\"`, `"`), `starts_with("dlt-sched-${var.product_id}-")`)
 		assert.Contains(t, jsonExpr, "run.googleapis.com/job/completed_execution_count")
 		assert.Contains(t, jsonExpr, "cloudscheduler.googleapis.com/job/attempt_count")
 
 		// Assert Section 5 contents: BigQuery insert message rate & stored bytes/row count
 		assert.Contains(t, jsonExpr, "bigquery.googleapis.com")
+		assert.Contains(t, jsonExpr, "var.bigquery_dataset_id")
 	})
 
 	t.Run("GatewayOutputs", func(t *testing.T) {

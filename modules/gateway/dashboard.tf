@@ -31,7 +31,7 @@ resource "google_monitoring_dashboard" "data_product" {
             scorecard = {
               timeSeriesQuery = {
                 timeSeriesFilter = {
-                  filter = "metric.type=\"custom.googleapis.com/supercargo/gateway/messages_total\" AND metric.label.product_id=\"${var.product_id}\""
+                  filter = "metric.type=\"custom.googleapis.com/${replace(var.product_id, "-", "_")}${local.metric_suffix}_messages_total\" AND metric.label.product_id=\"${var.product_id}\""
                   aggregation = {
                     alignmentPeriod  = "60s"
                     perSeriesAligner = "ALIGN_RATE"
@@ -51,7 +51,7 @@ resource "google_monitoring_dashboard" "data_product" {
             scorecard = {
               timeSeriesQuery = {
                 timeSeriesFilter = {
-                  filter = "metric.type=\"custom.googleapis.com/supercargo/gateway/validation_errors_total\" AND metric.label.product_id=\"${var.product_id}\""
+                  filter = "metric.type=\"custom.googleapis.com/${replace(var.product_id, "-", "_")}${local.metric_suffix}_validation_errors_total\" AND metric.label.product_id=\"${var.product_id}\""
                   aggregation = {
                     alignmentPeriod  = "60s"
                     perSeriesAligner = "ALIGN_RATE"
@@ -73,7 +73,7 @@ resource "google_monitoring_dashboard" "data_product" {
                 {
                   timeSeriesQuery = {
                     timeSeriesFilter = {
-                      filter = "metric.type=\"custom.googleapis.com/supercargo/gateway/validation_duration_seconds\" AND metric.label.product_id=\"${var.product_id}\""
+                      filter = "metric.type=\"custom.googleapis.com/${replace(var.product_id, "-", "_")}${local.metric_suffix}_validation_duration_ms\" AND metric.label.product_id=\"${var.product_id}\""
                       aggregation = {
                         alignmentPeriod  = "60s"
                         perSeriesAligner = "ALIGN_PERCENTILE_95"
@@ -407,7 +407,7 @@ resource "google_monitoring_dashboard" "data_product" {
                 {
                   timeSeriesQuery = {
                     timeSeriesFilter = {
-                      filter = "resource.type=\"cloud_scheduler_job\" AND resource.labels.job_id=starts_with(\"dlt-${var.product_id}-\") AND metric.type=\"cloudscheduler.googleapis.com/job/attempt_count\""
+                      filter = "resource.type=\"cloud_scheduler_job\" AND resource.labels.job_id=starts_with(\"dlt-sched-${var.product_id}-\") AND metric.type=\"cloudscheduler.googleapis.com/job/attempt_count\""
                       aggregation = {
                         alignmentPeriod  = "60s"
                         perSeriesAligner = "ALIGN_DELTA"
@@ -473,7 +473,7 @@ resource "google_monitoring_dashboard" "data_product" {
                 {
                   timeSeriesQuery = {
                     timeSeriesFilter = {
-                      filter = "resource.type=\"bigquery_dataset\" AND metric.type=\"bigquery.googleapis.com/storage/uploaded_row_count\""
+                      filter = "resource.type=\"bigquery_dataset\" AND metric.type=\"bigquery.googleapis.com/storage/uploaded_row_count\" AND resource.labels.dataset_id=\"${var.bigquery_dataset_id}\""
                       aggregation = {
                         alignmentPeriod  = "60s"
                         perSeriesAligner = "ALIGN_RATE"
