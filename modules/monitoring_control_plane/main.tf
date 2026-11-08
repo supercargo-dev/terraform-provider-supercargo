@@ -343,7 +343,7 @@ resource "google_monitoring_alert_policy" "service_instance_saturation" {
     condition_threshold {
       filter          = "resource.type = \"cloud_run_revision\" AND resource.labels.service_name = \"${each.value.name}\" AND metric.type = \"run.googleapis.com/container/instance_count\" AND metric.label.state = \"active\""
       duration        = "180s"
-      comparison      = "COMPARISON_GTE"
+      comparison      = "COMPARISON_GE"
       threshold_value = each.value.max_instances
       trigger {
         count = 1
