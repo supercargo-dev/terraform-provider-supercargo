@@ -1,13 +1,13 @@
 # --- Slug & Display Name Hygiene (Whitespace Elimination) ---
 locals {
-  name_suffix_id      = var.name_suffix != "" ? "-${var.name_suffix}" : ""
-  name_suffix_display = var.name_suffix != "" ? " - ${var.name_suffix}" : ""
+  name_suffix_id      = var.name_suffix != null && var.name_suffix != "" ? "-${var.name_suffix}" : ""
+  name_suffix_display = var.name_suffix != null && var.name_suffix != "" ? " - ${var.name_suffix}" : ""
 }
 
 # --- Cloud Monitoring Notification Channels ---
 
 resource "google_monitoring_notification_channel" "slack" {
-  count        = var.alert_slack_channel != "" ? 1 : 0
+  count        = var.alert_slack_channel != null && var.alert_slack_channel != "" ? 1 : 0
   project      = var.project_id
   display_name = "Slack Alert Channel (Control Plane)${local.name_suffix_display}"
   type         = "slack"
@@ -17,7 +17,7 @@ resource "google_monitoring_notification_channel" "slack" {
 }
 
 resource "google_monitoring_notification_channel" "email" {
-  count        = var.alert_email_address != "" ? 1 : 0
+  count        = var.alert_email_address != null && var.alert_email_address != "" ? 1 : 0
   project      = var.project_id
   display_name = "Email Alert Channel (Control Plane)${local.name_suffix_display}"
   type         = "email"
@@ -27,7 +27,7 @@ resource "google_monitoring_notification_channel" "email" {
 }
 
 resource "google_monitoring_notification_channel" "pagerduty" {
-  count        = var.alert_pagerduty_service_key != "" ? 1 : 0
+  count        = var.alert_pagerduty_service_key != null && var.alert_pagerduty_service_key != "" ? 1 : 0
   project      = var.project_id
   display_name = "PagerDuty Alert Channel (Control Plane)${local.name_suffix_display}"
   type         = "pagerduty"
@@ -125,22 +125,22 @@ locals {
   # Core Pub/Sub Subscriptions Monitored for Lag with Defensive Name Sanitization
   raw_core_subscriptions = {
     outbox_audit_bq = {
-      name = var.outbox_audit_subscription_name != "" ? element(split("/", var.outbox_audit_subscription_name), length(split("/", var.outbox_audit_subscription_name)) - 1) : ""
+      name = var.outbox_audit_subscription_name != null && var.outbox_audit_subscription_name != "" ? element(split("/", var.outbox_audit_subscription_name), length(split("/", var.outbox_audit_subscription_name)) - 1) : ""
       desc = "Outbox Audit BigQuery Sink (Issue #300)"
       tier = "Tier 1"
     }
     health_events_bq = {
-      name = var.health_events_subscription_name != "" ? element(split("/", var.health_events_subscription_name), length(split("/", var.health_events_subscription_name)) - 1) : ""
+      name = var.health_events_subscription_name != null && var.health_events_subscription_name != "" ? element(split("/", var.health_events_subscription_name), length(split("/", var.health_events_subscription_name)) - 1) : ""
       desc = "Health Events BigQuery Sink"
       tier = "Tier 1"
     }
     events_push = {
-      name = var.events_push_subscription_name != "" ? element(split("/", var.events_push_subscription_name), length(split("/", var.events_push_subscription_name)) - 1) : ""
+      name = var.events_push_subscription_name != null && var.events_push_subscription_name != "" ? element(split("/", var.events_push_subscription_name), length(split("/", var.events_push_subscription_name)) - 1) : ""
       desc = "Hub Alert Relay Events Push"
       tier = "Tier 1"
     }
     dataform_events_push = {
-      name = var.dataform_events_push_subscription_name != "" ? element(split("/", var.dataform_events_push_subscription_name), length(split("/", var.dataform_events_push_subscription_name)) - 1) : ""
+      name = var.dataform_events_push_subscription_name != null && var.dataform_events_push_subscription_name != "" ? element(split("/", var.dataform_events_push_subscription_name), length(split("/", var.dataform_events_push_subscription_name)) - 1) : ""
       desc = "Dataform Events Push"
       tier = "Tier 2"
     }
@@ -554,7 +554,7 @@ resource "google_monitoring_alert_policy" "core_subscription_unacked_age" {
 # --- Dataform DLQ Backlog Alert ---
 
 resource "google_monitoring_alert_policy" "dataform_dlq_backlog" {
-  count        = var.enable_control_plane_alerts && var.dataform_events_dlq_subscription_name != "" ? 1 : 0
+  count        = var.enable_control_plane_alerts && var.dataform_events_dlq_subscription_name != null && var.dataform_events_dlq_subscription_name != "" ? 1 : 0
   project      = var.project_id
   display_name = "[Tier 1] [DATA] Dataform Dead Letter Queue Backlog${local.name_suffix_display}"
   combiner     = "OR"
@@ -642,7 +642,7 @@ resource "google_monitoring_alert_policy" "kms_access_denials" {
 # --- Vault 403 Forbidden Calls Spike Alert ---
 
 resource "google_monitoring_alert_policy" "vault_forbidden_spikes" {
-  count        = var.enable_control_plane_alerts && var.vault_service_name != "" ? 1 : 0
+  count        = var.enable_control_plane_alerts && var.vault_service_name != null && var.vault_service_name != "" ? 1 : 0
   project      = var.project_id
   display_name = "[Tier 1] [SECURITY] Spikes in Forbidden (403) Vault Calls${local.name_suffix_display}"
   combiner     = "OR"
@@ -816,7 +816,7 @@ resource "google_monitoring_alert_policy" "telemetry_bq_unacked_age" {
 
 # 4. Meta-Telemetry Dead Letter Queue Backlog Alert
 resource "google_monitoring_alert_policy" "telemetry_dlq_backlog" {
-  count        = var.enable_control_plane_alerts && var.telemetry_dlq_subscription_name != "" ? 1 : 0
+  count        = var.enable_control_plane_alerts && var.telemetry_dlq_subscription_name != null && var.telemetry_dlq_subscription_name != "" ? 1 : 0
   project      = var.project_id
   display_name = "[Tier 1] [DATA] Meta-Telemetry Dead Letter Queue Backlog${local.name_suffix_display}"
   combiner     = "OR"

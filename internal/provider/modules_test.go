@@ -6768,7 +6768,7 @@ func TestModules_ControlPlaneMonitoring(t *testing.T) {
 
 		// 5. dataform_dlq_backlog
 		dlqAlert := alerts["dataform_dlq_backlog"]
-		assert.Equal(t, "var.enable_control_plane_alerts && var.dataform_events_dlq_subscription_name != \"\" ? 1 : 0", getExprSource(file, dlqAlert.Body.Attributes["count"].Expr))
+		assert.Equal(t, "var.enable_control_plane_alerts && var.dataform_events_dlq_subscription_name != null && var.dataform_events_dlq_subscription_name != \"\" ? 1 : 0", getExprSource(file, dlqAlert.Body.Attributes["count"].Expr))
 		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, dlqAlert.Body.Attributes["notification_channels"].Expr))
 		assert.Contains(t, fileContent, "pubsub.googleapis.com/subscription/num_undelivered_messages")
 
@@ -6811,7 +6811,7 @@ func TestModules_ControlPlaneMonitoring(t *testing.T) {
 		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, kmsAlert.Body.Attributes["notification_channels"].Expr))
 
 		vaultAlert := alerts["vault_forbidden_spikes"]
-		assert.Equal(t, "var.enable_control_plane_alerts && var.vault_service_name != \"\" ? 1 : 0", getExprSource(file, vaultAlert.Body.Attributes["count"].Expr))
+		assert.Equal(t, "var.enable_control_plane_alerts && var.vault_service_name != null && var.vault_service_name != \"\" ? 1 : 0", getExprSource(file, vaultAlert.Body.Attributes["count"].Expr))
 		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, vaultAlert.Body.Attributes["notification_channels"].Expr))
 
 		fileContent := string(file.Bytes)
@@ -6876,7 +6876,7 @@ func TestModules_ControlPlaneMonitoring(t *testing.T) {
 
 		// 4. telemetry_dlq_backlog
 		dlqAlert := alerts["telemetry_dlq_backlog"]
-		assert.Equal(t, "var.enable_control_plane_alerts && var.telemetry_dlq_subscription_name != \"\" ? 1 : 0", getExprSource(file, dlqAlert.Body.Attributes["count"].Expr))
+		assert.Equal(t, "var.enable_control_plane_alerts && var.telemetry_dlq_subscription_name != null && var.telemetry_dlq_subscription_name != \"\" ? 1 : 0", getExprSource(file, dlqAlert.Body.Attributes["count"].Expr))
 		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, dlqAlert.Body.Attributes["notification_channels"].Expr))
 
 		fileContent := string(file.Bytes)
