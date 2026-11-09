@@ -736,19 +736,9 @@ resource "google_monitoring_alert_policy" "scheduler_dispatch_failure" {
   combiner     = "OR"
 
   conditions {
-    display_name = "Cloud Scheduler HTTP Status != SUCCESS"
-    condition_threshold {
-      filter          = "resource.type = \"cloud_scheduler_job\" AND resource.labels.job_id = \"${each.value}\" AND metric.type = \"cloudscheduler.googleapis.com/job/attempt_count\" AND metric.label.status != \"SUCCESS\""
-      duration        = "0s"
-      comparison      = "COMPARISON_GT"
-      threshold_value = 0
-      trigger {
-        count = 1
-      }
-      aggregations {
-        alignment_period   = "60s"
-        per_series_aligner = "ALIGN_DELTA"
-      }
+    display_name = "Cloud Scheduler Error Logs"
+    condition_matched_log {
+      filter = "resource.type = \"cloud_scheduler_job\" AND resource.labels.job_id = \"${each.value}\" AND severity >= ERROR"
     }
   }
 
@@ -767,6 +757,9 @@ resource "google_monitoring_alert_policy" "scheduler_dispatch_failure" {
 
   notification_channels = local.all_alert_notification_channels
   alert_strategy {
+    notification_rate_limit {
+      period = "300s"
+    }
     auto_close = "604800s"
   }
 }

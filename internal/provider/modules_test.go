@@ -5883,7 +5883,7 @@ func TestModules_DataProductDLTAndSchedulerMonitoring(t *testing.T) {
 		require.True(t, hasContent)
 		assert.Contains(t, getExprSource(file, contentAttr.Expr), "gcloud logging read")
 
-		// Condition threshold
+		// Condition matched log
 		var condBlock *hclsyntax.Block
 		for _, sub := range alert.Body.Blocks {
 			if sub.Type == "conditions" {
@@ -5892,47 +5892,21 @@ func TestModules_DataProductDLTAndSchedulerMonitoring(t *testing.T) {
 			}
 		}
 		require.NotNil(t, condBlock)
-		var threshBlock *hclsyntax.Block
+		var logBlock *hclsyntax.Block
 		for _, sub := range condBlock.Body.Blocks {
-			if sub.Type == "condition_threshold" {
-				threshBlock = sub
+			if sub.Type == "condition_matched_log" {
+				logBlock = sub
 				break
 			}
 		}
-		require.NotNil(t, threshBlock)
+		require.NotNil(t, logBlock)
 
-		filterAttr, hasFilter := threshBlock.Body.Attributes["filter"]
+		filterAttr, hasFilter := logBlock.Body.Attributes["filter"]
 		require.True(t, hasFilter)
 		filterSrc := strings.ReplaceAll(getExprSource(file, filterAttr.Expr), `\"`, `"`)
 		assert.Contains(t, filterSrc, `resource.type = "cloud_scheduler_job"`)
 		assert.Contains(t, filterSrc, `google_cloud_scheduler_job.dlt_schedules[each.key].name`)
-		assert.Contains(t, filterSrc, `metric.type = "cloudscheduler.googleapis.com/job/attempt_count"`)
-		assert.Contains(t, filterSrc, `metric.label.status != "SUCCESS"`)
-
-		durAttr, hasDur := threshBlock.Body.Attributes["duration"]
-		require.True(t, hasDur)
-		assert.Equal(t, `"0s"`, getExprSource(file, durAttr.Expr))
-
-		compAttr, hasComp := threshBlock.Body.Attributes["comparison"]
-		require.True(t, hasComp)
-		assert.Equal(t, `"COMPARISON_GT"`, getExprSource(file, compAttr.Expr))
-
-		valAttr, hasVal := threshBlock.Body.Attributes["threshold_value"]
-		require.True(t, hasVal)
-		assert.Equal(t, "0", getExprSource(file, valAttr.Expr))
-
-		// Aggregations must be ALIGN_DELTA for attempt_count
-		var aggBlock *hclsyntax.Block
-		for _, sub := range threshBlock.Body.Blocks {
-			if sub.Type == "aggregations" {
-				aggBlock = sub
-				break
-			}
-		}
-		require.NotNil(t, aggBlock)
-		alignerAttr, hasAligner := aggBlock.Body.Attributes["per_series_aligner"]
-		require.True(t, hasAligner)
-		assert.Equal(t, `"ALIGN_DELTA"`, getExprSource(file, alignerAttr.Expr))
+		assert.Contains(t, filterSrc, `severity >= ERROR`)
 	})
 
 	t.Run("input_push_latency", func(t *testing.T) {
@@ -6881,7 +6855,7 @@ func TestModules_ControlPlaneMonitoring(t *testing.T) {
 
 		fileContent := string(file.Bytes)
 		assert.Contains(t, fileContent, "run.googleapis.com/job/completed_execution_count")
-		assert.Contains(t, fileContent, "cloudscheduler.googleapis.com/job/attempt_count")
+		assert.Contains(t, fileContent, "severity >= ERROR")
 		assert.Contains(t, fileContent, "pubsub.googleapis.com/subscription/oldest_unacked_message_age")
 		assert.Contains(t, fileContent, "pubsub.googleapis.com/subscription/num_undelivered_messages")
 

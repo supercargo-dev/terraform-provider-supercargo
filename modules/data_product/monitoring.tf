@@ -58,18 +58,8 @@ resource "google_monitoring_alert_policy" "dlt_scheduler_failure" {
 
   conditions {
     display_name = "Scheduler Job Non-Success Status"
-    condition_threshold {
-      filter          = "resource.type = \"cloud_scheduler_job\" AND resource.labels.job_id = \"${google_cloud_scheduler_job.dlt_schedules[each.key].name}\" AND metric.type = \"cloudscheduler.googleapis.com/job/attempt_count\" AND metric.label.status != \"SUCCESS\""
-      duration        = "0s"
-      comparison      = "COMPARISON_GT"
-      threshold_value = 0
-      trigger {
-        count = 1
-      }
-      aggregations {
-        alignment_period   = "60s"
-        per_series_aligner = "ALIGN_DELTA"
-      }
+    condition_matched_log {
+      filter = "resource.type = \"cloud_scheduler_job\" AND resource.labels.job_id = \"${google_cloud_scheduler_job.dlt_schedules[each.key].name}\" AND severity >= ERROR"
     }
   }
 
@@ -89,6 +79,9 @@ resource "google_monitoring_alert_policy" "dlt_scheduler_failure" {
 
   notification_channels = module.gateway.alert_notification_channels
   alert_strategy {
+    notification_rate_limit {
+      period = "300s"
+    }
     auto_close = "604800s"
   }
 }
