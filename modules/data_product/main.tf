@@ -24,7 +24,7 @@ locals {
       length(split(":", k)) > 1 ? element(split(":", k), length(split(":", k)) - 1) : k
       ) => {
       id     = c.id
-      schema = c.schema_json
+      schema = try(c.schema_json, lookup(c, "schema", null))
     }
   }
 }
