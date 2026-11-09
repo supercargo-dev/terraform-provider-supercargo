@@ -411,7 +411,7 @@ resource "google_monitoring_dashboard" "data_product" {
                       aggregation = {
                         alignmentPeriod  = "60s"
                         perSeriesAligner = "ALIGN_DELTA"
-                        groupByFields    = ["metric.label.response_status"]
+                        groupByFields    = ["metric.label.status"]
                       }
                     }
                   }

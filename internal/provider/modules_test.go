@@ -5907,7 +5907,7 @@ func TestModules_DataProductDLTAndSchedulerMonitoring(t *testing.T) {
 		assert.Contains(t, filterSrc, `resource.type = "cloud_scheduler_job"`)
 		assert.Contains(t, filterSrc, `google_cloud_scheduler_job.dlt_schedules[each.key].name`)
 		assert.Contains(t, filterSrc, `metric.type = "cloudscheduler.googleapis.com/job/attempt_count"`)
-		assert.Contains(t, filterSrc, `metric.label.response_status != "SUCCESS"`)
+		assert.Contains(t, filterSrc, `metric.label.status != "SUCCESS"`)
 
 		durAttr, hasDur := threshBlock.Body.Attributes["duration"]
 		require.True(t, hasDur)

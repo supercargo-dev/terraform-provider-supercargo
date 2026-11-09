@@ -738,7 +738,7 @@ resource "google_monitoring_alert_policy" "scheduler_dispatch_failure" {
   conditions {
     display_name = "Cloud Scheduler HTTP Status != SUCCESS"
     condition_threshold {
-      filter          = "resource.type = \"cloud_scheduler_job\" AND resource.labels.job_id = \"${each.value}\" AND metric.type = \"cloudscheduler.googleapis.com/job/attempt_count\" AND metric.label.response_status != \"SUCCESS\""
+      filter          = "resource.type = \"cloud_scheduler_job\" AND resource.labels.job_id = \"${each.value}\" AND metric.type = \"cloudscheduler.googleapis.com/job/attempt_count\" AND metric.label.status != \"SUCCESS\""
       duration        = "0s"
       comparison      = "COMPARISON_GT"
       threshold_value = 0
