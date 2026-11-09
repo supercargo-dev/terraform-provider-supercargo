@@ -125,6 +125,28 @@ resource "google_firestore_index" "audit_runs_index" {
   depends_on = [google_firestore_database.database]
 }
 
+resource "google_firestore_index" "health_transitions_index" {
+  project    = var.project_id
+  collection = "health_transitions"
+
+  fields {
+    field_path = "urn"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "last_updated_at"
+    order      = "DESCENDING"
+  }
+
+  fields {
+    field_path = "__name__"
+    order      = "DESCENDING"
+  }
+
+  depends_on = [google_firestore_database.database]
+}
+
 resource "google_firestore_field" "dataplex_cache_ttl" {
   project    = var.project_id
   collection = "dataplex_cache"
