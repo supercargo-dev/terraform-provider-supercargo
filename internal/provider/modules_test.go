@@ -5378,7 +5378,7 @@ func TestModules_GatewayCloudRunInfrastructureAlerts(t *testing.T) {
 			filterContains:       []string{`metric.type = "run.googleapis.com/container/instance_count"`, `metric.label.state = "active"`},
 			aligner:              `"ALIGN_MAX"`,
 			duration:             `"180s"`,
-			comparison:           `"COMPARISON_GE"`,
+			comparison:           `"COMPARISON_GT"`,
 		},
 	}
 
@@ -6316,7 +6316,7 @@ func TestModules_ControlPlaneMonitoring(t *testing.T) {
 				filterContains:       []string{`metric.type = "run.googleapis.com/container/instance_count"`, `metric.label.state = "active"`},
 				aligner:              `"ALIGN_MAX"`,
 				duration:             `"180s"`,
-				comparison:           `"COMPARISON_GE"`,
+				comparison:           `"COMPARISON_GT"`,
 			},
 		}
 

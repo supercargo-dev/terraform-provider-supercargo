@@ -603,8 +603,8 @@ resource "google_monitoring_alert_policy" "gateway_instance_saturation" {
     condition_threshold {
       filter          = "resource.type = \"cloud_run_revision\" AND resource.labels.service_name = \"${google_cloud_run_v2_service.gateway.name}\" AND metric.type = \"run.googleapis.com/container/instance_count\" AND metric.label.state = \"active\""
       duration        = "180s"
-      comparison      = "COMPARISON_GE"
-      threshold_value = var.max_instances
+      comparison      = "COMPARISON_GT"
+      threshold_value = var.max_instances - 1
       trigger {
         count = 1
       }
