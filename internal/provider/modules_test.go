@@ -6716,7 +6716,7 @@ func TestModules_ControlPlaneMonitoring(t *testing.T) {
 		assert.Equal(t, "var.enable_control_plane_alerts ? 1 : 0", getExprSource(file, abortedAlert.Body.Attributes["count"].Expr))
 		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, abortedAlert.Body.Attributes["notification_channels"].Expr))
 		fileContent := string(file.Bytes)
-		assert.Contains(t, fileContent, "resource.labels.database_id = \\\"${var.firestore_database_id}\\\"")
+		assert.Contains(t, fileContent, "resource.type = \\\"datastore_request\\\"")
 		assert.Contains(t, fileContent, "metric.label.response_code = \\\"ABORTED\\\"")
 
 		// 2. firestore_quota_exhaustion
@@ -6729,9 +6729,9 @@ func TestModules_ControlPlaneMonitoring(t *testing.T) {
 		shovelAlert := alerts["shovel_trigger_delivery_failures"]
 		assert.Equal(t, "var.enable_control_plane_alerts ? 1 : 0", getExprSource(file, shovelAlert.Body.Attributes["count"].Expr))
 		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, shovelAlert.Body.Attributes["notification_channels"].Expr))
+		assert.Contains(t, fileContent, "resource.type = \\\"eventarc_trigger\\\"")
 		assert.Contains(t, fileContent, "resource.labels.trigger_id = \\\"${var.shovel_trigger_name}\\\"")
-		assert.Contains(t, fileContent, "eventarc.googleapis.com/delivery_attempt_count")
-		assert.Contains(t, fileContent, "metric.label.response_code != \\\"OK\\\"")
+		assert.Contains(t, fileContent, "severity >= ERROR")
 
 		// 4. core_subscription_unacked_age
 		coreSubAlert := alerts["core_subscription_unacked_age"]
@@ -6789,7 +6789,8 @@ func TestModules_ControlPlaneMonitoring(t *testing.T) {
 		assert.Equal(t, "local.all_alert_notification_channels", getExprSource(file, vaultAlert.Body.Attributes["notification_channels"].Expr))
 
 		fileContent := string(file.Bytes)
-		assert.Contains(t, fileContent, "cloudkms.googleapis.com/crypto_requests")
+		assert.Contains(t, fileContent, "protoPayload.serviceName = \\\"cloudkms.googleapis.com\\\"")
+		assert.Contains(t, fileContent, "severity >= ERROR")
 		assert.Contains(t, fileContent, "metric.label.response_code = \\\"403\\\"")
 
 		// Verify documentation blocks length <= 800 and contain gcloud

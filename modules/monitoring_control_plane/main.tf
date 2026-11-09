@@ -386,7 +386,7 @@ resource "google_monitoring_alert_policy" "firestore_aborted_transactions" {
   conditions {
     display_name = "Firestore ABORTED Contention Rate > 0"
     condition_threshold {
-      filter          = "resource.type = \"firestore_database\" AND resource.labels.database_id = \"${var.firestore_database_id}\" AND metric.type = \"firestore.googleapis.com/api/request_count\" AND metric.label.response_code = \"ABORTED\""
+      filter          = "resource.type = \"datastore_request\" AND metric.type = \"firestore.googleapis.com/api/request_count\" AND metric.label.response_code = \"ABORTED\""
       duration        = "0s"
       comparison      = "COMPARISON_GT"
       threshold_value = 0
@@ -428,7 +428,7 @@ resource "google_monitoring_alert_policy" "firestore_quota_exhaustion" {
   conditions {
     display_name = "Firestore Quota Exhaustion Rate > 0"
     condition_threshold {
-      filter          = "resource.type = \"firestore_database\" AND resource.labels.database_id = \"${var.firestore_database_id}\" AND metric.type = \"firestore.googleapis.com/api/request_count\" AND metric.label.response_code = \"RESOURCE_EXHAUSTED\""
+      filter          = "resource.type = \"datastore_request\" AND metric.type = \"firestore.googleapis.com/api/request_count\" AND metric.label.response_code = \"RESOURCE_EXHAUSTED\""
       duration        = "0s"
       comparison      = "COMPARISON_GT"
       threshold_value = 0
@@ -470,19 +470,9 @@ resource "google_monitoring_alert_policy" "shovel_trigger_delivery_failures" {
   combiner     = "OR"
 
   conditions {
-    display_name = "Eventarc Shovel Trigger Failed Deliveries > 0"
-    condition_threshold {
-      filter          = "resource.type = \"eventarc_trigger\" AND resource.labels.trigger_id = \"${var.shovel_trigger_name}\" AND metric.type = \"eventarc.googleapis.com/delivery_attempt_count\" AND metric.label.response_code != \"OK\""
-      duration        = "0s"
-      comparison      = "COMPARISON_GT"
-      threshold_value = 0
-      trigger {
-        count = 1
-      }
-      aggregations {
-        alignment_period   = "60s"
-        per_series_aligner = "ALIGN_DELTA"
-      }
+    display_name = "Eventarc Shovel Trigger Failed Deliveries"
+    condition_matched_log {
+      filter = "resource.type = \"eventarc_trigger\" AND resource.labels.trigger_id = \"${var.shovel_trigger_name}\" AND severity >= ERROR"
     }
   }
 
@@ -501,6 +491,9 @@ resource "google_monitoring_alert_policy" "shovel_trigger_delivery_failures" {
 
   notification_channels = local.all_alert_notification_channels
   alert_strategy {
+    notification_rate_limit {
+      period = "300s"
+    }
     auto_close = "604800s"
   }
 }
@@ -604,19 +597,9 @@ resource "google_monitoring_alert_policy" "kms_access_denials" {
   combiner     = "OR"
 
   conditions {
-    display_name = "Cloud KMS Rejection Rate > 0"
-    condition_threshold {
-      filter          = "resource.type = \"cloudkms_cryptokey\" AND metric.type = \"cloudkms.googleapis.com/crypto_requests\" AND metric.label.response_code != \"OK\""
-      duration        = "0s"
-      comparison      = "COMPARISON_GT"
-      threshold_value = 0
-      trigger {
-        count = 1
-      }
-      aggregations {
-        alignment_period   = "60s"
-        per_series_aligner = "ALIGN_DELTA"
-      }
+    display_name = "Cloud KMS Access Errors"
+    condition_matched_log {
+      filter = "protoPayload.serviceName = \"cloudkms.googleapis.com\" AND severity >= ERROR"
     }
   }
 
@@ -635,6 +618,9 @@ resource "google_monitoring_alert_policy" "kms_access_denials" {
 
   notification_channels = local.all_alert_notification_channels
   alert_strategy {
+    notification_rate_limit {
+      period = "300s"
+    }
     auto_close = "604800s"
   }
 }
