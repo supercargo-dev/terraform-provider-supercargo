@@ -3145,6 +3145,32 @@ func TestModules_HubEventsPushAudience(t *testing.T) {
 	}
 }
 
+func TestModules_HubPushInvokerSAEnv(t *testing.T) {
+	modulesDir := "../../modules"
+	hubDir := filepath.Join(modulesDir, "hub")
+	mainPath := filepath.Join(hubDir, "main.tf")
+	mainBytes, err := os.ReadFile(mainPath)
+	if err != nil {
+		t.Fatalf("Failed to read %s: %v", mainPath, err)
+	}
+	mainContent := string(mainBytes)
+
+	if !strings.Contains(mainContent, `resource "google_cloud_run_v2_service" "hub"`) {
+		t.Fatalf("modules/hub/main.tf missing resource \"google_cloud_run_v2_service\" \"hub\"")
+	}
+	hubChunk := extractHCLBlock(mainContent, `resource "google_cloud_run_v2_service" "hub"`)
+	if hubChunk == "" {
+		t.Fatalf("Failed to extract hub cloud run service block")
+	}
+
+	if !strings.Contains(hubChunk, `name  = "HUB_PUSH_INVOKER_SA"`) {
+		t.Errorf("hub cloud run service must define HUB_PUSH_INVOKER_SA environment variable")
+	}
+	if !strings.Contains(hubChunk, "value = google_service_account.events_invoker.email") {
+		t.Errorf("hub cloud run service HUB_PUSH_INVOKER_SA must reference google_service_account.events_invoker.email")
+	}
+}
+
 func TestModules_HubShovelOIDCAudienceAndLifecycle(t *testing.T) {
 	modulesDir := "../../modules"
 	hubDir := filepath.Join(modulesDir, "hub")

@@ -388,6 +388,11 @@ resource "google_cloud_run_v2_service" "hub" {
         value = var.health_events_topic
       }
 
+      env {
+        name  = "HUB_PUSH_INVOKER_SA"
+        value = google_service_account.events_invoker.email
+      }
+
       ports {
         container_port = 8080
         name           = "h2c"
