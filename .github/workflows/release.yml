@@ -17,7 +17,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.5' # The Go version requested
+          go-version: '1.27.4' # The Go version requested
           cache: true
 
       - name: Import GPG key
