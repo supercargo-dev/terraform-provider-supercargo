@@ -917,7 +917,7 @@ resource "google_monitoring_alert_policy" "vault_search_hash_rate_limit_cluster"
 
       ### Triage CLI Command
       ```bash
-      gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=${var.vault_service_name} AND jsonPayload.message=~'search hash rate limit exceeded'" --limit=20
+      gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=${var.vault_service_name} AND jsonPayload.msg=~'search hash rate limit exceeded'" --limit=20
       ```
       See runbook: docs/catalog/vault-search-hash-incident-response.md
     EOT
@@ -963,7 +963,7 @@ resource "google_monitoring_alert_policy" "vault_search_hash_unauthorized_probes
 
       ### Triage CLI Command
       ```bash
-      gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=${var.vault_service_name} AND (jsonPayload.message=~'unauthorized search hash access attempt' OR httpRequest.status=401)" --limit=20
+      gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=${var.vault_service_name} AND (jsonPayload.msg=~'unauthorized search hash access attempt' OR httpRequest.status=401)" --limit=20
       ```
       See runbook: docs/catalog/vault-search-hash-incident-response.md
     EOT
