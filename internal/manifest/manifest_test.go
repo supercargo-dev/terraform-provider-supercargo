@@ -498,8 +498,8 @@ SELECT * FROM ranked;`,
 SELECT * FROM ranked`,
 		},
 		{
-			name: "Already unwrapped query",
-			input: `SELECT * FROM ` + "`acme.orders_internal.orders`",
+			name:     "Already unwrapped query",
+			input:    `SELECT * FROM ` + "`acme.orders_internal.orders`",
 			expected: `SELECT * FROM ` + "`acme.orders_internal.orders`",
 		},
 		{
@@ -643,7 +643,7 @@ func TestLoadCompiledOutputs_AllLensesAndBridge(t *testing.T) {
 	require.NoError(t, os.MkdirAll(contractsDir, 0755))
 
 	lenses := []struct {
-		portName string
+		portName     string
 		expectedLens string
 	}{
 		{portName: "orders_event_log", expectedLens: "event_log"},
@@ -738,5 +738,3 @@ func TestDiscoverLockDir_MultiProductWorkspace(t *testing.T) {
 	assert.True(t, found)
 	assert.Equal(t, slugLockDir, discovered)
 }
-
-

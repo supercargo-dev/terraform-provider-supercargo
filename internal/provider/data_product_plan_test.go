@@ -475,4 +475,3 @@ output_ports:
 		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), sameURN)
 	})
 }
-

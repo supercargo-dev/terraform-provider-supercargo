@@ -924,4 +924,3 @@ func LoadCompiledInputs(lockDir, productSlug string) (map[string]*CompiledInputP
 
 	return inputs, nil
 }
-

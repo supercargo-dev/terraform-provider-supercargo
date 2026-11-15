@@ -62,8 +62,8 @@ var outputPortAttrTypes = map[string]attr.Type{
 	"urn":             types.StringType,
 	"lens":            types.StringType,
 	"materialization": types.StringType,
-	"view_query":       types.StringType,
-	"view_sql":         types.StringType,
+	"view_query":      types.StringType,
+	"view_sql":        types.StringType,
 }
 
 var outputPortObjectType = types.ObjectType{
