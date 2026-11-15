@@ -4491,7 +4491,8 @@ func TestModules_ControlPlaneModuleVariablesAndEnv(t *testing.T) {
 
 func parseHCLFileAST(t *testing.T, parser *hclparse.Parser, path string) (*hcl.File, *hclsyntax.Body) {
 	t.Helper()
-	file, diags := parser.ParseHCLFile(path)
+	p := hclparse.NewParser()
+	file, diags := p.ParseHCLFile(path)
 	require.False(t, diags.HasErrors(), "HCL parse errors in %s: %s", path, diags.Error())
 	require.NotNil(t, file)
 	syntaxBody, ok := file.Body.(*hclsyntax.Body)

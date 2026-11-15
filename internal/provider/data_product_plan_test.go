@@ -320,3 +320,159 @@ func exprToString(fileBytes []byte, expr hclsyntax.Expression) string {
 	rng := expr.Range()
 	return strings.TrimSpace(string(fileBytes[rng.Start.Byte:rng.End.Byte]))
 }
+
+func TestModules_DataProduct_PlanTimeDeterminismAndNegativeIAM(t *testing.T) {
+	dpDir := filepath.Join("..", "..", "modules", "data_product")
+	parser := hclparse.NewParser()
+
+	tfFiles, err := filepath.Glob(filepath.Join(dpDir, "*.tf"))
+	require.NoError(t, err)
+
+	for _, fPath := range tfFiles {
+		f, diags := parser.ParseHCLFile(fPath)
+		require.False(t, diags.HasErrors(), "failed parsing %s: %v", fPath, diags)
+		body, ok := f.Body.(*hclsyntax.Body)
+		require.True(t, ok)
+
+		for _, block := range body.Blocks {
+			for _, attrName := range []string{"for_each", "count"} {
+				if attr, ok := block.Body.Attributes[attrName]; ok {
+					exprStr := exprToString(f.Bytes, attr.Expr)
+					assert.NotContains(t, exprStr, "module.gateway.service_account_email", "Plan-time determinism violation in %s: %s contains module.gateway.service_account_email", fPath, attrName)
+					assert.NotContains(t, exprStr, "module.gateway.service_account_id", "Plan-time determinism violation in %s: %s contains module.gateway.service_account_id", fPath, attrName)
+				}
+			}
+		}
+	}
+
+	mainFile, diags := parser.ParseHCLFile(filepath.Join(dpDir, "main.tf"))
+	require.False(t, diags.HasErrors())
+	mainBody := mainFile.Body.(*hclsyntax.Body)
+
+	for _, block := range mainBody.Blocks {
+		if block.Type == "resource" && len(block.Labels) == 2 && block.Labels[0] == "google_bigquery_dataset_iam_member" {
+			switch block.Labels[1] {
+			case "runners_data_editor":
+				dsExpr := exprToString(mainFile.Bytes, block.Body.Attributes["dataset_id"].Expr)
+				assert.Contains(t, dsExpr, "google_bigquery_dataset.internal.dataset_id")
+				feExpr := exprToString(mainFile.Bytes, block.Body.Attributes["for_each"].Expr)
+				assert.Contains(t, feExpr, "local.all_runner_members")
+				assert.NotContains(t, feExpr, "consumer", "runners_data_editor must not iterate over consumers")
+			case "consumers_data_viewer":
+				dsExpr := exprToString(mainFile.Bytes, block.Body.Attributes["dataset_id"].Expr)
+				assert.Contains(t, dsExpr, "google_bigquery_dataset.public.dataset_id")
+				feExpr := exprToString(mainFile.Bytes, block.Body.Attributes["for_each"].Expr)
+				assert.Contains(t, feExpr, "local.all_consumer_members")
+				assert.NotContains(t, feExpr, "runner", "consumers_data_viewer must not iterate over runners")
+			}
+		}
+	}
+}
+
+func TestSupercargoDataProductDataSource_MultiLensAndValidation(t *testing.T) {
+	ctx := context.Background()
+	ds := NewSupercargoDataProductDataSource()
+	var schemaResp datasource.SchemaResponse
+	ds.Schema(ctx, datasource.SchemaRequest{}, &schemaResp)
+	require.False(t, schemaResp.Diagnostics.HasError())
+
+	t.Run("5 lenses and bridge view extraction", func(t *testing.T) {
+		tempDir := t.TempDir()
+		manifestPath := filepath.Join(tempDir, "dataproduct.yaml")
+		require.NoError(t, os.WriteFile(manifestPath, []byte(`meta:
+  urn: urn:supercargo:hub:product:orders
+  version: v1.0.0
+`), 0644))
+
+		lockDir := filepath.Join(tempDir, ".supercargo", "lock", "orders")
+		viewsDir := filepath.Join(lockDir, "views")
+		require.NoError(t, os.MkdirAll(viewsDir, 0755))
+
+		lensViews := []string{
+			"orders_event_log",
+			"orders_replica",
+			"orders_scd2",
+			"orders_cdc",
+			"orders_reidentified",
+			"orders_v1",
+		}
+		for _, lv := range lensViews {
+			sql := "CREATE OR REPLACE VIEW `acme.orders." + lv + "` AS SELECT 1 AS col;"
+			require.NoError(t, os.WriteFile(filepath.Join(viewsDir, lv+".sql"), []byte(sql), 0644))
+		}
+
+		cfg, state := createTestConfigWithLockDir(ctx, t, schemaResp.Schema, manifestPath, "")
+		req := datasource.ReadRequest{Config: cfg}
+		resp := datasource.ReadResponse{State: state}
+		ds.Read(ctx, req, &resp)
+
+		require.False(t, resp.Diagnostics.HasError(), "must succeed: %v", resp.Diagnostics)
+		var resState supercargoDataProductDataSourceModel
+		resp.Diagnostics.Append(resp.State.Get(ctx, &resState)...)
+		require.False(t, resp.Diagnostics.HasError())
+		assert.Len(t, resState.Outputs.Elements(), 6)
+	})
+
+	t.Run("unsupported materialization returns fatal diagnostic error", func(t *testing.T) {
+		tempDir := t.TempDir()
+		manifestPath := filepath.Join(tempDir, "dataproduct.yaml")
+		require.NoError(t, os.WriteFile(manifestPath, []byte(`meta:
+  urn: urn:supercargo:hub:product:orders
+  version: v1.0.0
+`), 0644))
+
+		lockDir := filepath.Join(tempDir, ".supercargo", "lock", "orders")
+		viewsDir := filepath.Join(lockDir, "views")
+		require.NoError(t, os.MkdirAll(viewsDir, 0755))
+		require.NoError(t, os.WriteFile(filepath.Join(viewsDir, "orders_custom.sql"), []byte("SELECT 1;"), 0644))
+
+		odpsYAML := `id: urn:supercargo:hub:product:orders:v1
+output_ports:
+  - name: orders_custom
+    lens: replica
+    materialization: materialized_table
+`
+		require.NoError(t, os.WriteFile(filepath.Join(lockDir, "dataproduct.odps.yaml"), []byte(odpsYAML), 0644))
+
+		cfg, state := createTestConfigWithLockDir(ctx, t, schemaResp.Schema, manifestPath, "")
+		req := datasource.ReadRequest{Config: cfg}
+		resp := datasource.ReadResponse{State: state}
+		ds.Read(ctx, req, &resp)
+
+		require.True(t, resp.Diagnostics.HasError(), "unsupported materialization must fail")
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Summary(), "Invalid Materialization")
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "materialized_table")
+	})
+
+	t.Run("duplicate port key returns fatal diagnostic error", func(t *testing.T) {
+		tempDir := t.TempDir()
+		manifestPath := filepath.Join(tempDir, "dataproduct.yaml")
+		require.NoError(t, os.WriteFile(manifestPath, []byte(`meta:
+  urn: urn:supercargo:hub:product:orders
+  version: v1.0.0
+`), 0644))
+
+		lockDir := filepath.Join(tempDir, ".supercargo", "lock", "orders")
+		viewsDir := filepath.Join(lockDir, "views")
+		contractsDir := filepath.Join(lockDir, "contracts")
+		require.NoError(t, os.MkdirAll(viewsDir, 0755))
+		require.NoError(t, os.MkdirAll(contractsDir, 0755))
+
+		require.NoError(t, os.WriteFile(filepath.Join(viewsDir, "port_a.sql"), []byte("SELECT 1;"), 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(viewsDir, "port_b.sql"), []byte("SELECT 2;"), 0644))
+
+		sameURN := "urn:supercargo:hub:contract:orders-dup:v1"
+		require.NoError(t, os.WriteFile(filepath.Join(contractsDir, "port_a.odcs.yaml"), []byte("id: "+sameURN+"\n"), 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(contractsDir, "port_b.odcs.yaml"), []byte("id: "+sameURN+"\n"), 0644))
+
+		cfg, state := createTestConfigWithLockDir(ctx, t, schemaResp.Schema, manifestPath, "")
+		req := datasource.ReadRequest{Config: cfg}
+		resp := datasource.ReadResponse{State: state}
+		ds.Read(ctx, req, &resp)
+
+		require.True(t, resp.Diagnostics.HasError(), "duplicate key must fail")
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Summary(), "Duplicate Collection Key")
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), sameURN)
+	})
+}
+

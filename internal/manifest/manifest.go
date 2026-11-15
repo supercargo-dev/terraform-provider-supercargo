@@ -730,6 +730,8 @@ func inferLensFromName(name string) string {
 		return "cdc"
 	case strings.HasSuffix(lower, "_reidentified"):
 		return "reidentified"
+	case strings.HasSuffix(lower, "_v1") || strings.HasSuffix(lower, "@v1"):
+		return "bridge"
 	default:
 		return "replica"
 	}
