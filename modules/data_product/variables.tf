@@ -322,5 +322,30 @@ variable "unacked_message_age_threshold_seconds" {
   default     = null
 }
 
+variable "internal_bigquery_dataset_id" {
+  description = "The BigQuery dataset ID for private internal landing tables. Defaults to '<public_dataset_id>_internal'."
+  type        = string
+  default     = ""
+}
+
+variable "lock_dir" {
+  description = "Optional explicit path to the compiled .supercargo/lock directory. If omitted, auto-discovered."
+  type        = string
+  default     = ""
+}
+
+variable "authorized_consumers" {
+  description = "List of IAM principals (users, groups, service accounts) granted roles/bigquery.dataViewer strictly on the public dataset."
+  type        = list(string)
+  default     = []
+}
+
+variable "runner_service_accounts" {
+  description = "List of runner service account emails (e.g. dbt, ingestion jobs) granted roles/bigquery.dataEditor strictly on the internal dataset."
+  type        = list(string)
+  default     = []
+}
+
+
 
 

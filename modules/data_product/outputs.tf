@@ -117,3 +117,24 @@ output "dashboard_url" {
   description = "The direct GCP Console URL for the Data Product Cloud Monitoring dashboard in view mode"
   value       = module.gateway.dashboard_url
 }
+
+output "internal_dataset_id" {
+  description = "The dataset ID of the private internal BigQuery dataset"
+  value       = google_bigquery_dataset.internal.dataset_id
+}
+
+output "public_dataset_id" {
+  description = "The dataset ID of the public BigQuery dataset"
+  value       = google_bigquery_dataset.public.dataset_id
+}
+
+output "authorized_view_table_ids" {
+  description = "Map of output view names to their BigQuery table IDs"
+  value       = { for k, v in google_bigquery_table.outputs : k => v.table_id }
+}
+
+output "landing_table_ids" {
+  description = "Map of boundary input landing port names to their BigQuery table IDs"
+  value       = { for k, v in google_bigquery_table.inputs : k => v.table_id }
+}
+

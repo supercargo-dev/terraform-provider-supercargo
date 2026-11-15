@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -40,6 +41,61 @@ type supercargoDataProductDataSourceModel struct {
 	ServiceIdentities     types.Map           `tfsdk:"service_identities"`
 	Contracts             types.Map           `tfsdk:"contracts"`
 	SLA                   *supercargoSLAModel `tfsdk:"sla"`
+	LockDir               types.String        `tfsdk:"lock_dir"`
+	InternalDatasetID     types.String        `tfsdk:"internal_dataset_id"`
+	PublicDatasetID       types.String        `tfsdk:"public_dataset_id"`
+	Outputs               types.Map           `tfsdk:"outputs"`
+	Inputs                types.Map           `tfsdk:"inputs"`
+}
+
+type supercargoOutputPortModel struct {
+	Name            types.String `tfsdk:"name"`
+	URN             types.String `tfsdk:"urn"`
+	Lens            types.String `tfsdk:"lens"`
+	Materialization types.String `tfsdk:"materialization"`
+	ViewQuery       types.String `tfsdk:"view_query"`
+	ViewSQL         types.String `tfsdk:"view_sql"`
+}
+
+var outputPortAttrTypes = map[string]attr.Type{
+	"name":            types.StringType,
+	"urn":             types.StringType,
+	"lens":            types.StringType,
+	"materialization": types.StringType,
+	"view_query":      types.StringType,
+	"view_sql":        types.StringType,
+}
+
+var outputPortObjectType = types.ObjectType{
+	AttrTypes: outputPortAttrTypes,
+}
+
+type supercargoInputPortModel struct {
+	Name       types.String `tfsdk:"name"`
+	URN        types.String `tfsdk:"urn"`
+	RecordName types.String `tfsdk:"record_name"`
+	TableName  types.String `tfsdk:"table_name"`
+	Source     types.String `tfsdk:"source"`
+	SchemaJSON types.String `tfsdk:"schema_json"`
+}
+
+var inputPortAttrTypes = map[string]attr.Type{
+	"name":        types.StringType,
+	"urn":         types.StringType,
+	"record_name": types.StringType,
+	"table_name":  types.StringType,
+	"source":      types.StringType,
+	"schema_json": types.StringType,
+}
+
+var inputPortObjectType = types.ObjectType{
+	AttrTypes: inputPortAttrTypes,
+}
+
+var bearerTokenRegex = regexp.MustCompile(`(?i)Bearer\s+[A-Za-z0-9_\-\.]+`)
+
+func maskBearerTokens(msg string) string {
+	return bearerTokenRegex.ReplaceAllString(msg, "Bearer [REDACTED]")
 }
 
 type supercargoSLAModel struct {
@@ -167,6 +223,83 @@ func (d *supercargoDataProductDataSource) Schema(ctx context.Context, req dataso
 					},
 				},
 			},
+			"lock_dir": schema.StringAttribute{
+				MarkdownDescription: "Optional explicit path to the compiled .supercargo/lock directory. If omitted, auto-discovered.",
+				Optional:            true,
+				Computed:            true,
+			},
+			"internal_dataset_id": schema.StringAttribute{
+				MarkdownDescription: "BigQuery dataset ID for private internal landing tables.",
+				Computed:            true,
+			},
+			"public_dataset_id": schema.StringAttribute{
+				MarkdownDescription: "BigQuery dataset ID for public authorized views.",
+				Computed:            true,
+			},
+			"outputs": schema.MapNestedAttribute{
+				MarkdownDescription: "Map of compiled output views keyed by contract URN or port name.",
+				Computed:            true,
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"name": schema.StringAttribute{
+							MarkdownDescription: "Output port name.",
+							Computed:            true,
+						},
+						"urn": schema.StringAttribute{
+							MarkdownDescription: "Output contract URN.",
+							Computed:            true,
+						},
+						"lens": schema.StringAttribute{
+							MarkdownDescription: "Relational lens applied (e.g. replica, event_log, scd2, cdc, reidentified).",
+							Computed:            true,
+						},
+						"materialization": schema.StringAttribute{
+							MarkdownDescription: "Materialization type (view or table).",
+							Computed:            true,
+						},
+						"view_query": schema.StringAttribute{
+							MarkdownDescription: "Unwrapped GoogleSQL query body for authorized view definition.",
+							Computed:            true,
+						},
+						"view_sql": schema.StringAttribute{
+							MarkdownDescription: "Full GoogleSQL CREATE VIEW DDL statement.",
+							Computed:            true,
+						},
+					},
+				},
+			},
+			"inputs": schema.MapNestedAttribute{
+				MarkdownDescription: "Map of compiled boundary input landing tables keyed by contract URN or port name.",
+				Computed:            true,
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"name": schema.StringAttribute{
+							MarkdownDescription: "Input port name.",
+							Computed:            true,
+						},
+						"urn": schema.StringAttribute{
+							MarkdownDescription: "Internal ingress contract URN.",
+							Computed:            true,
+						},
+						"record_name": schema.StringAttribute{
+							MarkdownDescription: "Input record name.",
+							Computed:            true,
+						},
+						"table_name": schema.StringAttribute{
+							MarkdownDescription: "BigQuery landing table name in the internal dataset.",
+							Computed:            true,
+						},
+						"source": schema.StringAttribute{
+							MarkdownDescription: "Ingress data source URI (e.g. pubsub://managed, dlt://...).",
+							Computed:            true,
+						},
+						"schema_json": schema.StringAttribute{
+							MarkdownDescription: "BigQuery physical schema JSON for base landing table with policy tags.",
+							Computed:            true,
+						},
+					},
+				},
+			},
 		},
 	}
 }
@@ -271,14 +404,14 @@ func (d *supercargoDataProductDataSource) Read(ctx context.Context, req datasour
 			if ok && (st.Code() == codes.PermissionDenied || st.Code() == codes.Unauthenticated) {
 				resp.Diagnostics.AddError(
 					"Error Reading Data Product",
-					fmt.Sprintf("Could not retrieve product %s: %s\n\nRemediation Hint: Verify that your identity token is valid and has permissions to access this data product.", productUrn, err),
+					fmt.Sprintf("Could not retrieve product %s: %s\n\nRemediation Hint: Verify that your identity token is valid and has permissions to access this data product.", productUrn, maskBearerTokens(err.Error())),
 				)
 				return
 			}
 			if !hasManifest {
 				resp.Diagnostics.AddError(
 					"Error Reading Data Product",
-					fmt.Sprintf("Could not retrieve product %s: %s\n\nRemediation Hint: Ensure 'sc apply' has been executed to publish the product to Supercargo Hub, or specify 'manifest_file' in the data source to allow local schema resolution.", productUrn, err),
+					fmt.Sprintf("Could not retrieve product %s: %s\n\nRemediation Hint: Ensure 'sc apply' has been executed to publish the product to Supercargo Hub, or specify 'manifest_file' in the data source to allow local schema resolution.", productUrn, maskBearerTokens(err.Error())),
 				)
 				return
 			}
@@ -433,6 +566,112 @@ func (d *supercargoDataProductDataSource) Read(ctx context.Context, req datasour
 	} else {
 		data.Contracts = types.MapNull(contractObjectType)
 	}
+
+	// Derive product slug / ID
+	productSlug := productUrn
+	if idx := strings.LastIndex(productUrn, ":"); idx >= 0 && idx < len(productUrn)-1 {
+		productSlug = productUrn[idx+1:]
+	}
+	productSlug = strings.ReplaceAll(productSlug, "-", "_")
+	data.PublicDatasetID = types.StringValue(productSlug)
+	data.InternalDatasetID = types.StringValue(productSlug + "_internal")
+
+	// Lock Directory handling
+	explicitLockDir := ""
+	if !data.LockDir.IsNull() && !data.LockDir.IsUnknown() && data.LockDir.ValueString() != "" {
+		explicitLockDir = data.LockDir.ValueString()
+	}
+
+	discoveredLockDir, foundLock, lockErr := manifest.DiscoverLockDir(manifestPath, productSlug, explicitLockDir)
+	if explicitLockDir != "" && (!foundLock || lockErr != nil) {
+		resp.Diagnostics.AddError(
+			"Explicitly Configured Lock Directory Missing",
+			fmt.Sprintf("Explicitly configured lock_dir '%s' does not exist\n\nRemediation Hint: Run 'sc build --output-dir %s' to compile relational lenses, schemas, and views before planning infrastructure, or verify the directory path.", explicitLockDir, explicitLockDir),
+		)
+		return
+	}
+
+	outputsMap := make(map[string]supercargoOutputPortModel)
+	inputsMap := make(map[string]supercargoInputPortModel)
+
+	if foundLock && discoveredLockDir != "" {
+		data.LockDir = types.StringValue(discoveredLockDir)
+
+		compiledOutputs, err := manifest.LoadCompiledOutputs(discoveredLockDir, productSlug)
+		if err != nil {
+			if strings.Contains(err.Error(), "duplicate collision-resistant collection key") {
+				resp.Diagnostics.AddError(
+					"Duplicate Collection Key",
+					fmt.Sprintf("Error: %s\n\nRemediation Hint: Output and input port names must be unique within the data product manifest.", err),
+				)
+				return
+			}
+			resp.Diagnostics.AddError("Error Loading Compiled Outputs", fmt.Sprintf("Failed to load compiled outputs from lock directory %q: %s", discoveredLockDir, err))
+			return
+		}
+
+		for k, out := range compiledOutputs {
+			mat := strings.ToLower(strings.TrimSpace(out.Materialization))
+			if mat == "" {
+				mat = "view"
+			}
+			if mat != "view" && mat != "table" {
+				resp.Diagnostics.AddError(
+					"Invalid Materialization",
+					fmt.Sprintf("Error: Unsupported materialization '%s' on output port '%s'\n\nRemediation Hint: Valid materialization types are 'view' (default) or 'table'. Check 'materialization:' in supercargo.yaml.", out.Materialization, out.Name),
+				)
+				return
+			}
+			outputsMap[k] = supercargoOutputPortModel{
+				Name:            types.StringValue(out.Name),
+				URN:             types.StringValue(out.URN),
+				Lens:            types.StringValue(out.Lens),
+				Materialization: types.StringValue(mat),
+				ViewQuery:       types.StringValue(out.ViewQuery),
+				ViewSQL:         types.StringValue(out.ViewSQL),
+			}
+		}
+
+		compiledInputs, err := manifest.LoadCompiledInputs(discoveredLockDir, productSlug)
+		if err != nil {
+			if strings.Contains(err.Error(), "duplicate collision-resistant collection key") {
+				resp.Diagnostics.AddError(
+					"Duplicate Collection Key",
+					fmt.Sprintf("Error: %s\n\nRemediation Hint: Output and input port names must be unique within the data product manifest.", err),
+				)
+				return
+			}
+			resp.Diagnostics.AddError("Error Loading Compiled Inputs", fmt.Sprintf("Failed to load compiled inputs from lock directory %q: %s", discoveredLockDir, err))
+			return
+		}
+
+		for k, in := range compiledInputs {
+			inputsMap[k] = supercargoInputPortModel{
+				Name:       types.StringValue(in.Name),
+				URN:        types.StringValue(in.URN),
+				RecordName: types.StringValue(in.RecordName),
+				TableName:  types.StringValue(in.TableName),
+				Source:     types.StringValue(in.Source),
+				SchemaJSON: types.StringValue(in.SchemaJSON),
+			}
+		}
+	} else {
+		data.LockDir = types.StringNull()
+	}
+
+	outputsVal, diags := types.MapValueFrom(ctx, outputPortObjectType, outputsMap)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	data.Outputs = outputsVal
+
+	inputsVal, diags := types.MapValueFrom(ctx, inputPortObjectType, inputsMap)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	data.Inputs = inputsVal
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }

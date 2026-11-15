@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -462,4 +463,278 @@ func TestRockify_DataproductManifestAndContracts(t *testing.T) {
 		assert.NotEmpty(t, rc.SchemaJSON, "Schema JSON must not be empty for %s", cURN)
 		assert.Equal(t, "1.0.0", rc.Version)
 	}
+}
+
+func TestExtractViewQuery(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name: "CREATE OR REPLACE VIEW standard",
+			input: `CREATE OR REPLACE VIEW ` + "`acme.orders.orders_replica`" + ` AS
+SELECT
+  _sc_sequence,
+  order_id,
+  amount
+FROM ` + "`acme.orders_internal.orders`",
+			expected: `SELECT
+  _sc_sequence,
+  order_id,
+  amount
+FROM ` + "`acme.orders_internal.orders`",
+		},
+		{
+			name: "CREATE VIEW with OPTIONS",
+			input: `CREATE VIEW ` + "`acme.orders.orders_replica`" + ` OPTIONS(description="orders replica") AS
+WITH ranked AS (
+  SELECT * FROM ` + "`acme.orders_internal.orders`" + `
+)
+SELECT * FROM ranked;`,
+			expected: `WITH ranked AS (
+  SELECT * FROM ` + "`acme.orders_internal.orders`" + `
+)
+SELECT * FROM ranked`,
+		},
+		{
+			name:     "Already unwrapped query",
+			input:    `SELECT * FROM ` + "`acme.orders_internal.orders`",
+			expected: `SELECT * FROM ` + "`acme.orders_internal.orders`",
+		},
+		{
+			name: "Lowercase create or replace view",
+			input: `create or replace view ` + "`my_project.my_ds.my_view`" + ` as
+select id, name from ` + "`my_project.my_internal.my_table`",
+			expected: `select id, name from ` + "`my_project.my_internal.my_table`",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ExtractViewQuery(tt.input)
+			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
+
+func TestDiscoverLockDir(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "dataproduct.yaml")
+	require.NoError(t, os.WriteFile(manifestPath, []byte("meta:\n  urn: urn:supercargo:hub:product:orders\n"), 0644))
+
+	t.Run("explicit missing directory returns error", func(t *testing.T) {
+		missingPath := filepath.Join(dir, "missing_lock")
+		_, found, err := DiscoverLockDir(manifestPath, "orders", missingPath)
+		assert.False(t, found)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "explicitly configured lock_dir")
+	})
+
+	t.Run("explicit present directory returns path", func(t *testing.T) {
+		presentPath := filepath.Join(dir, "custom_lock")
+		require.NoError(t, os.MkdirAll(presentPath, 0755))
+		discovered, found, err := DiscoverLockDir(manifestPath, "orders", presentPath)
+		require.NoError(t, err)
+		assert.True(t, found)
+		assert.Equal(t, presentPath, discovered)
+	})
+
+	t.Run("omitted missing directory returns graceful false", func(t *testing.T) {
+		emptyDir := t.TempDir()
+		emptyManifest := filepath.Join(emptyDir, "dataproduct.yaml")
+		require.NoError(t, os.WriteFile(emptyManifest, []byte("meta:\n  urn: urn:supercargo:hub:product:orders\n"), 0644))
+
+		discovered, found, err := DiscoverLockDir(emptyManifest, "orders", "")
+		require.NoError(t, err)
+		assert.False(t, found)
+		assert.Empty(t, discovered)
+	})
+
+	t.Run("omitted auto-discovery finds .supercargo/lock/<slug>", func(t *testing.T) {
+		slugLockDir := filepath.Join(dir, ".supercargo", "lock", "orders")
+		require.NoError(t, os.MkdirAll(slugLockDir, 0755))
+
+		discovered, found, err := DiscoverLockDir(manifestPath, "orders", "")
+		require.NoError(t, err)
+		assert.True(t, found)
+		assert.Equal(t, slugLockDir, discovered)
+	})
+}
+
+func TestLoadCompiledOutputs(t *testing.T) {
+	dir := t.TempDir()
+	viewsDir := filepath.Join(dir, "views")
+	contractsDir := filepath.Join(dir, "contracts")
+	require.NoError(t, os.MkdirAll(viewsDir, 0755))
+	require.NoError(t, os.MkdirAll(contractsDir, 0755))
+
+	viewSQL := "CREATE OR REPLACE VIEW `acme.orders.orders_replica` AS\nSELECT order_id, amount FROM `acme.orders_internal.orders`;"
+	require.NoError(t, os.WriteFile(filepath.Join(viewsDir, "orders_replica.sql"), []byte(viewSQL), 0644))
+
+	odcsYAML := `id: urn:supercargo:hub:contract:orders-orders_replica:v1
+info:
+  title: orders_replica
+  version: 1.0.0
+`
+	require.NoError(t, os.WriteFile(filepath.Join(contractsDir, "orders_replica.odcs.yaml"), []byte(odcsYAML), 0644))
+
+	outputs, err := LoadCompiledOutputs(dir, "orders")
+	require.NoError(t, err)
+	require.Len(t, outputs, 1)
+
+	expectedURN := "urn:supercargo:hub:contract:orders-orders_replica:v1"
+	out, ok := outputs[expectedURN]
+	require.True(t, ok, "outputs must contain contract URN as key")
+	assert.Equal(t, "orders_replica", out.Name)
+	assert.Equal(t, expectedURN, out.URN)
+	assert.Equal(t, "replica", out.Lens)
+	assert.Equal(t, "view", out.Materialization)
+	assert.Equal(t, "SELECT order_id, amount FROM `acme.orders_internal.orders`", out.ViewQuery)
+	assert.Equal(t, viewSQL, out.ViewSQL)
+}
+
+func TestLoadCompiledInputs(t *testing.T) {
+	dir := t.TempDir()
+	ingressDir := filepath.Join(dir, "ingress")
+	schemasDir := filepath.Join(dir, "schemas")
+	require.NoError(t, os.MkdirAll(ingressDir, 0755))
+	require.NoError(t, os.MkdirAll(schemasDir, 0755))
+
+	ingressYAML := `meta:
+  urn: urn:supercargo:hub:contract:orders-internal-stream:v1
+  description: Internal ingress contract for orders.stream
+`
+	require.NoError(t, os.WriteFile(filepath.Join(ingressDir, "stream.contract.yaml"), []byte(ingressYAML), 0644))
+
+	schemaJSON := `[
+  {
+    "name": "_sc_sequence",
+    "type": "INT64",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "order_id",
+    "type": "STRING",
+    "mode": "REQUIRED"
+  }
+]`
+	require.NoError(t, os.WriteFile(filepath.Join(schemasDir, "orders_internal.orders.schema.json"), []byte(schemaJSON), 0644))
+
+	inputs, err := LoadCompiledInputs(dir, "orders")
+	require.NoError(t, err)
+	require.Len(t, inputs, 1)
+
+	expectedURN := "urn:supercargo:hub:contract:orders-internal-stream:v1"
+	in, ok := inputs[expectedURN]
+	require.True(t, ok, "inputs must contain contract URN as key")
+	assert.Equal(t, "stream", in.Name)
+	assert.Equal(t, expectedURN, in.URN)
+	assert.Equal(t, "orders", in.RecordName)
+	assert.Equal(t, "orders", in.TableName)
+	assert.JSONEq(t, schemaJSON, in.SchemaJSON)
+}
+
+func TestLoadCompiledOutputs_AllLensesAndBridge(t *testing.T) {
+	dir := t.TempDir()
+	viewsDir := filepath.Join(dir, "views")
+	contractsDir := filepath.Join(dir, "contracts")
+	require.NoError(t, os.MkdirAll(viewsDir, 0755))
+	require.NoError(t, os.MkdirAll(contractsDir, 0755))
+
+	lenses := []struct {
+		portName     string
+		expectedLens string
+	}{
+		{portName: "orders_event_log", expectedLens: "event_log"},
+		{portName: "orders_replica", expectedLens: "replica"},
+		{portName: "orders_scd2", expectedLens: "scd2"},
+		{portName: "orders_cdc", expectedLens: "cdc"},
+		{portName: "orders_reidentified", expectedLens: "reidentified"},
+		{portName: "orders_v1", expectedLens: "bridge"},
+	}
+
+	for _, tc := range lenses {
+		sql := fmt.Sprintf("CREATE OR REPLACE VIEW `acme.orders.%s` AS\nSELECT * FROM `acme.orders_internal.orders`;", tc.portName)
+		require.NoError(t, os.WriteFile(filepath.Join(viewsDir, tc.portName+".sql"), []byte(sql), 0644))
+	}
+
+	outputs, err := LoadCompiledOutputs(dir, "orders")
+	require.NoError(t, err)
+	require.Len(t, outputs, 6)
+
+	for _, tc := range lenses {
+		expectedURN := fmt.Sprintf("urn:supercargo:hub:contract:orders-%s:v1", tc.portName)
+		out, ok := outputs[expectedURN]
+		require.True(t, ok, "missing output for %s", expectedURN)
+		assert.Equal(t, tc.portName, out.Name)
+		assert.Equal(t, tc.expectedLens, out.Lens)
+		assert.Equal(t, "view", out.Materialization)
+		assert.Equal(t, "SELECT * FROM `acme.orders_internal.orders`", out.ViewQuery)
+	}
+}
+
+func TestLoadCompiledInputs_DataplexPolicyTags(t *testing.T) {
+	dir := t.TempDir()
+	schemasDir := filepath.Join(dir, "schemas")
+	require.NoError(t, os.MkdirAll(schemasDir, 0755))
+
+	schemaJSON := `[
+  {
+    "name": "email",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "policyTags": {
+      "names": [
+        "projects/acme-prod/locations/europe-west1/taxonomies/tax_pii/policyTags/pt_confidential"
+      ]
+    }
+  }
+]`
+	require.NoError(t, os.WriteFile(filepath.Join(schemasDir, "orders_internal.customers.schema.json"), []byte(schemaJSON), 0644))
+
+	inputs, err := LoadCompiledInputs(dir, "orders")
+	require.NoError(t, err)
+	require.Len(t, inputs, 1)
+
+	expectedURN := "urn:supercargo:hub:contract:orders-internal-customers:v1"
+	in, ok := inputs[expectedURN]
+	require.True(t, ok)
+	assert.Contains(t, in.SchemaJSON, "projects/acme-prod/locations/europe-west1/taxonomies/tax_pii/policyTags/pt_confidential", "Dataplex policy tags must be preserved in schema_json")
+}
+
+func TestLoadCompiledOutputs_DuplicateKeyError(t *testing.T) {
+	dir := t.TempDir()
+	viewsDir := filepath.Join(dir, "views")
+	contractsDir := filepath.Join(dir, "contracts")
+	require.NoError(t, os.MkdirAll(viewsDir, 0755))
+	require.NoError(t, os.MkdirAll(contractsDir, 0755))
+
+	// Two views mapping to the same contract URN
+	require.NoError(t, os.WriteFile(filepath.Join(viewsDir, "orders_view_a.sql"), []byte("SELECT 1;"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(viewsDir, "orders_view_b.sql"), []byte("SELECT 2;"), 0644))
+
+	sameURN := "urn:supercargo:hub:contract:orders-duplicate:v1"
+	require.NoError(t, os.WriteFile(filepath.Join(contractsDir, "orders_view_a.odcs.yaml"), []byte("id: "+sameURN+"\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(contractsDir, "orders_view_b.odcs.yaml"), []byte("id: "+sameURN+"\n"), 0644))
+
+	_, err := LoadCompiledOutputs(dir, "orders")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate collision-resistant collection key")
+}
+
+func TestDiscoverLockDir_MultiProductWorkspace(t *testing.T) {
+	workspaceDir := t.TempDir()
+	productDir := filepath.Join(workspaceDir, "products", "billing")
+	require.NoError(t, os.MkdirAll(productDir, 0755))
+	manifestPath := filepath.Join(productDir, "dataproduct.yaml")
+	require.NoError(t, os.WriteFile(manifestPath, []byte("meta:\n  urn: urn:supercargo:hub:product:billing\n"), 0644))
+
+	slugLockDir := filepath.Join(workspaceDir, ".supercargo", "lock", "billing")
+	require.NoError(t, os.MkdirAll(slugLockDir, 0755))
+
+	discovered, found, err := DiscoverLockDir(manifestPath, "billing", "")
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.Equal(t, slugLockDir, discovered)
 }
