@@ -52,6 +52,7 @@ module "data_product" {
 | `alert_pagerduty_service_key` | `string` | (sensitive) | yes | PagerDuty integration/service key for alert routing |
 | `alert_slack_channel` | `string` | `""` | no | Slack channel for alerts (e.g. #team-alerts) |
 | `auth_enforce` | `bool` | `true` | no | Whether to enforce OIDC authentication (Shadow Mode if false) |
+| `authorized_consumers` | `list(string)` | `[]` | no | List of IAM principals (users, groups, service accounts) granted roles/bigquery.dataViewer strictly on the public dataset. |
 | `authorized_invoker_service_accounts` | `list(string)` | `[]` | no | List of service account emails authorized to invoke the gateway service |
 | `authorized_invokers` | `list(string)` | `[]` | no | List of IAM members authorized to invoke the gateway |
 | `bigquery_dataset_id` | `string` | `""` | no | The BigQuery dataset ID where the table should be created |
@@ -81,7 +82,9 @@ module "data_product" {
 | `hub_address` | `string` | *required* | no | The address of the Hub service |
 | `hub_oidc_audience` | `string` | `""` | no | The OIDC audience for the Hub service (Internal OIDC) |
 | `image` | `string` | *required* | no | The container image for The Guardian service |
+| `internal_bigquery_dataset_id` | `string` | `""` | no | The BigQuery dataset ID for private internal landing tables. Defaults to '<public_dataset_id>_internal'. |
 | `kms_address` | `string` | *required* | no | The address of the KMS (Vault) service |
+| `lock_dir` | `string` | `""` | no | Optional explicit path to the compiled .supercargo/lock directory. If omitted, auto-discovered. |
 | `log_level` | `string` | `"info"` | no | Log level for the service |
 | `manifest_file` | `string` | *required* | no | Path to the Data Product manifest YAML/JSON file |
 | `master_key_uri` | `string` | *required* | no | The URI of the Master Key in GCP KMS |
@@ -94,6 +97,7 @@ module "data_product" {
 | `pubsub_message_retention_duration` | `string` | `"600s"` | no | The duration to retain messages in subscriptions. |
 | `pubsub_minimum_backoff` | `string` | `"30s"` | no | The minimum backoff duration for retries. |
 | `region` | `string` | *required* | no | The GCP region |
+| `runner_service_accounts` | `list(string)` | `[]` | no | List of runner service account emails (e.g. dbt, ingestion jobs) granted roles/bigquery.dataEditor strictly on the internal dataset. |
 | `service_account_id` | `string` | `""` | no | Optional custom service account ID for the Gateway. If unset, defaults to 'gateway-<product_id>' with optional name_suffix. |
 | `sla_tier` | `string` | `"TIER_2"` | no | The SLA tier of the data product (TIER_1, TIER_2, or TIER_3). Calibrates alert thresholds and paging severity. |
 | `unacked_message_age_threshold_seconds` | `number` | `null` | no | Optional override for Pub/Sub unacknowledged message age alert threshold. If unset, derived from sla_tier. |
@@ -103,6 +107,7 @@ module "data_product" {
 
 | Output | Sensitive | Description |
 | :--- | :--- | :--- |
+| `authorized_view_table_ids` | no | Map of output view names to their BigQuery table IDs |
 | `bigquery_table_ids` | no | A map of contract names to BigQuery table IDs |
 | `clean_topic_id` | no | The ID of the Clean topic |
 | `contracts` | no | Map of auto-discovered or explicitly provided contracts |
@@ -120,8 +125,11 @@ module "data_product" {
 | `gateway_service_name` | no | The name of the Gateway Cloud Run service |
 | `gateway_url` | no | The URL of the deployed Cloud Run Gateway |
 | `input_subscription_ids` | no | Map of input port names to their Pub/Sub push subscription IDs |
+| `internal_dataset_id` | no | The dataset ID of the private internal BigQuery dataset |
+| `landing_table_ids` | no | Map of boundary input landing port names to their BigQuery table IDs |
 | `managed_input_topics` | no | Map of managed input port names to their created Pub/Sub topic IDs |
 | `product_urn` | no | The URN of the registered Data Product |
+| `public_dataset_id` | no | The dataset ID of the public BigQuery dataset |
 | `push_invoker_service_account_email` | no | The email of the Pub/Sub Push Invoker Service Account |
 | `raw_subscription_id` | no | The ID of the Raw Pub/Sub Push Subscription |
 | `raw_topic_id` | no | The ID of the Raw topic |
