@@ -6837,6 +6837,234 @@ func TestModules_ControlPlaneMonitoring(t *testing.T) {
 		}
 	})
 
+	t.Run("VaultSearchHashSecurityAlerts", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		mainPath := filepath.Join(modulesDir, "monitoring_control_plane", "main.tf")
+		varPath := filepath.Join(modulesDir, "monitoring_control_plane", "variables.tf")
+		outPath := filepath.Join(modulesDir, "monitoring_control_plane", "outputs.tf")
+
+		file, syntaxBody := parseHCLFileAST(t, parser, mainPath)
+		varFile, varBody := parseHCLFileAST(t, parser, varPath)
+		outFile, outBody := parseHCLFileAST(t, parser, outPath)
+
+		// 1. Assert variables in variables.tf
+		vars := make(map[string]*hclsyntax.Block)
+		for _, block := range varBody.Blocks {
+			if block.Type == "variable" && len(block.Labels) == 1 {
+				vars[block.Labels[0]] = block
+			}
+		}
+
+		expectedVars := map[string]string{
+			"enable_vault_search_hash_alerts":                 "true",
+			"vault_search_hash_volume_spike_threshold":        "50",
+			"vault_search_hash_rate_limit_cluster_threshold": "3",
+			"vault_search_hash_unauthorized_probes_threshold": "5",
+		}
+		for varName, expectedDef := range expectedVars {
+			vBlock, exists := vars[varName]
+			require.True(t, exists, "variables.tf missing variable %s", varName)
+			defAttr, hasDef := vBlock.Body.Attributes["default"]
+			require.True(t, hasDef, "%s must have default value", varName)
+			assert.Equal(t, expectedDef, getExprSource(varFile, defAttr.Expr))
+		}
+
+		// 2. Assert alert policies in main.tf
+		alerts := make(map[string]*hclsyntax.Block)
+		for _, block := range syntaxBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 && block.Labels[0] == "google_monitoring_alert_policy" {
+				alerts[block.Labels[1]] = block
+			}
+		}
+
+		expectedAlerts := []struct {
+			name                 string
+			displayNamePrefix    string
+			expectedChannelsExpr string
+			expectedThreshold    string
+			expectedPeriod       string
+			filterContains       []string
+		}{
+			{
+				name:                 "vault_search_hash_volume_spike",
+				displayNamePrefix:    "[Tier 2] [SECURITY] Vault SearchHash Volume Spike (>50 / 10m)",
+				expectedChannelsExpr: "local.tier2_alert_notification_channels",
+				expectedThreshold:    "var.vault_search_hash_volume_spike_threshold",
+				expectedPeriod:       `"600s"`,
+				filterContains: []string{
+					`resource.type = "cloud_run_revision"`,
+					`resource.labels.service_name = "${var.vault_service_name}"`,
+					`metric.type = "workload.googleapis.com/vault_search_hash_requests_total"`,
+				},
+			},
+			{
+				name:                 "vault_search_hash_rate_limit_cluster",
+				displayNamePrefix:    "[Tier 1] [SECURITY] Vault SearchHash Rate Limit Breach Cluster (>3 / 5m)",
+				expectedChannelsExpr: "local.all_alert_notification_channels",
+				expectedThreshold:    "var.vault_search_hash_rate_limit_cluster_threshold",
+				expectedPeriod:       `"300s"`,
+				filterContains: []string{
+					`resource.type = "cloud_run_revision"`,
+					`resource.labels.service_name = "${var.vault_service_name}"`,
+					`metric.type = "workload.googleapis.com/vault_search_hash_rate_limit_breaches_total"`,
+				},
+			},
+			{
+				name:                 "vault_search_hash_unauthorized_probes",
+				displayNamePrefix:    "[Tier 2] [SECURITY] Vault SearchHash Unauthorized Probes (>5 / 5m)",
+				expectedChannelsExpr: "local.tier2_alert_notification_channels",
+				expectedThreshold:    "var.vault_search_hash_unauthorized_probes_threshold",
+				expectedPeriod:       `"300s"`,
+				filterContains: []string{
+					`resource.type = "cloud_run_revision"`,
+					`resource.labels.service_name = "${var.vault_service_name}"`,
+					`metric.type = "workload.googleapis.com/vault_search_hash_requests_total"`,
+					`metric.label.status = "denied"`,
+				},
+			},
+		}
+
+		expectedCountExpr := `var.enable_control_plane_alerts && var.enable_vault_search_hash_alerts && var.vault_service_name != null && var.vault_service_name != "" ? 1 : 0`
+
+		for _, tc := range expectedAlerts {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				alert, exists := alerts[tc.name]
+				require.True(t, exists, "google_monitoring_alert_policy.%s must exist in main.tf", tc.name)
+
+				countAttr, hasCount := alert.Body.Attributes["count"]
+				require.True(t, hasCount, "%s must have count attribute", tc.name)
+				assert.Equal(t, expectedCountExpr, getExprSource(file, countAttr.Expr))
+
+				combAttr, hasComb := alert.Body.Attributes["combiner"]
+				require.True(t, hasComb)
+				assert.Equal(t, `"OR"`, getExprSource(file, combAttr.Expr))
+
+				nameAttr, hasName := alert.Body.Attributes["display_name"]
+				require.True(t, hasName)
+				assert.Contains(t, getExprSource(file, nameAttr.Expr), tc.displayNamePrefix)
+
+				chanAttr, hasChan := alert.Body.Attributes["notification_channels"]
+				require.True(t, hasChan)
+				assert.Equal(t, tc.expectedChannelsExpr, getExprSource(file, chanAttr.Expr))
+
+				// Auto close
+				var stratBlock *hclsyntax.Block
+				for _, sub := range alert.Body.Blocks {
+					if sub.Type == "alert_strategy" {
+						stratBlock = sub
+						break
+					}
+				}
+				require.NotNil(t, stratBlock, "%s must define alert_strategy block", tc.name)
+				autoCloseAttr, hasAutoClose := stratBlock.Body.Attributes["auto_close"]
+				require.True(t, hasAutoClose)
+				assert.Equal(t, `"604800s"`, getExprSource(file, autoCloseAttr.Expr))
+
+				// Documentation
+				var docBlock *hclsyntax.Block
+				for _, sub := range alert.Body.Blocks {
+					if sub.Type == "documentation" {
+						docBlock = sub
+						break
+					}
+				}
+				require.NotNil(t, docBlock, "%s must define documentation block", tc.name)
+				contentAttr, hasContent := docBlock.Body.Attributes["content"]
+				require.True(t, hasContent)
+				contentSrc := getExprSource(file, contentAttr.Expr)
+				assert.NotEmpty(t, contentSrc)
+				assert.LessOrEqual(t, len(contentSrc), 800, "Documentation for %s must be <= 800 characters", tc.name)
+				assert.Contains(t, contentSrc, "gcloud", "Documentation for %s must include CLI triage command", tc.name)
+				assert.Contains(t, contentSrc, "vault-search-hash-incident-response.md", "Documentation for %s must reference incident response runbook", tc.name)
+
+				// Conditions
+				var condBlock *hclsyntax.Block
+				for _, sub := range alert.Body.Blocks {
+					if sub.Type == "conditions" {
+						condBlock = sub
+						break
+					}
+				}
+				require.NotNil(t, condBlock, "%s must define conditions block", tc.name)
+				var threshBlock *hclsyntax.Block
+				for _, sub := range condBlock.Body.Blocks {
+					if sub.Type == "condition_threshold" {
+						threshBlock = sub
+						break
+					}
+				}
+				require.NotNil(t, threshBlock, "%s must define condition_threshold block", tc.name)
+
+				filterAttr, hasFilter := threshBlock.Body.Attributes["filter"]
+				require.True(t, hasFilter)
+				filterSrc := strings.ReplaceAll(getExprSource(file, filterAttr.Expr), `\"`, `"`)
+				for _, fc := range tc.filterContains {
+					assert.Contains(t, filterSrc, fc, "%s filter missing %s", tc.name, fc)
+				}
+
+				durAttr, hasDur := threshBlock.Body.Attributes["duration"]
+				require.True(t, hasDur)
+				assert.Equal(t, `"0s"`, getExprSource(file, durAttr.Expr))
+
+				compAttr, hasComp := threshBlock.Body.Attributes["comparison"]
+				require.True(t, hasComp)
+				assert.Equal(t, `"COMPARISON_GT"`, getExprSource(file, compAttr.Expr))
+
+				threshValAttr, hasThreshVal := threshBlock.Body.Attributes["threshold_value"]
+				require.True(t, hasThreshVal)
+				assert.Equal(t, tc.expectedThreshold, getExprSource(file, threshValAttr.Expr))
+
+				// Aggregations
+				var aggBlock *hclsyntax.Block
+				for _, sub := range threshBlock.Body.Blocks {
+					if sub.Type == "aggregations" {
+						aggBlock = sub
+						break
+					}
+				}
+				require.NotNil(t, aggBlock, "%s must define aggregations block", tc.name)
+				alignerAttr, hasAligner := aggBlock.Body.Attributes["per_series_aligner"]
+				require.True(t, hasAligner)
+				assert.Equal(t, `"ALIGN_DELTA"`, getExprSource(file, alignerAttr.Expr))
+
+				reducerAttr, hasReducer := aggBlock.Body.Attributes["cross_series_reducer"]
+				require.True(t, hasReducer)
+				assert.Equal(t, `"REDUCE_SUM"`, getExprSource(file, reducerAttr.Expr))
+
+				periodAttr, hasPeriod := aggBlock.Body.Attributes["alignment_period"]
+				require.True(t, hasPeriod)
+				assert.Equal(t, tc.expectedPeriod, getExprSource(file, periodAttr.Expr))
+
+				groupByAttr, hasGroupBy := aggBlock.Body.Attributes["group_by_fields"]
+				require.True(t, hasGroupBy)
+				assert.Contains(t, getExprSource(file, groupByAttr.Expr), "metric.label.principal")
+			})
+		}
+
+		// 3. Assert outputs in outputs.tf
+		outputs := make(map[string]*hclsyntax.Block)
+		for _, block := range outBody.Blocks {
+			if block.Type == "output" && len(block.Labels) == 1 {
+				outputs[block.Labels[0]] = block
+			}
+		}
+
+		expectedOutputs := map[string]string{
+			"vault_search_hash_volume_spike_alert_id":        "try(google_monitoring_alert_policy.vault_search_hash_volume_spike[0].id, null)",
+			"vault_search_hash_rate_limit_cluster_alert_id": "try(google_monitoring_alert_policy.vault_search_hash_rate_limit_cluster[0].id, null)",
+			"vault_search_hash_unauthorized_probes_alert_id": "try(google_monitoring_alert_policy.vault_search_hash_unauthorized_probes[0].id, null)",
+		}
+		for outName, expectedExpr := range expectedOutputs {
+			block, exists := outputs[outName]
+			require.True(t, exists, "outputs.tf missing output %s", outName)
+			valAttr, hasVal := block.Body.Attributes["value"]
+			require.True(t, hasVal)
+			assert.Equal(t, expectedExpr, getExprSource(outFile, valAttr.Expr))
+		}
+	})
+
 	t.Run("BatchJobsAndMetaTelemetryAlerts", func(t *testing.T) {
 		t.Parallel()
 		parser := hclparse.NewParser()

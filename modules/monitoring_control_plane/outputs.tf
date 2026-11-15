@@ -62,3 +62,19 @@ output "unacked_message_age_threshold_seconds" {
   description = "The active unacknowledged message age threshold in seconds derived from SLA tier"
   value       = local.unacked_age_seconds
 }
+
+output "vault_search_hash_volume_spike_alert_id" {
+  description = "Resource ID of the Vault SearchHash volume spike alert policy"
+  value       = try(google_monitoring_alert_policy.vault_search_hash_volume_spike[0].id, null)
+}
+
+output "vault_search_hash_rate_limit_cluster_alert_id" {
+  description = "Resource ID of the Vault SearchHash rate limit breach cluster alert policy"
+  value       = try(google_monitoring_alert_policy.vault_search_hash_rate_limit_cluster[0].id, null)
+}
+
+output "vault_search_hash_unauthorized_probes_alert_id" {
+  description = "Resource ID of the Vault SearchHash unauthorized probes alert policy"
+  value       = try(google_monitoring_alert_policy.vault_search_hash_unauthorized_probes[0].id, null)
+}
+
