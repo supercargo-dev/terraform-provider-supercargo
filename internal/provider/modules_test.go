@@ -6859,7 +6859,7 @@ func TestModules_ControlPlaneMonitoring(t *testing.T) {
 		expectedVars := map[string]string{
 			"enable_vault_search_hash_alerts":                 "true",
 			"vault_search_hash_volume_spike_threshold":        "50",
-			"vault_search_hash_rate_limit_cluster_threshold": "3",
+			"vault_search_hash_rate_limit_cluster_threshold":  "3",
 			"vault_search_hash_unauthorized_probes_threshold": "5",
 		}
 		for varName, expectedDef := range expectedVars {
@@ -7053,7 +7053,7 @@ func TestModules_ControlPlaneMonitoring(t *testing.T) {
 
 		expectedOutputs := map[string]string{
 			"vault_search_hash_volume_spike_alert_id":        "try(google_monitoring_alert_policy.vault_search_hash_volume_spike[0].id, null)",
-			"vault_search_hash_rate_limit_cluster_alert_id": "try(google_monitoring_alert_policy.vault_search_hash_rate_limit_cluster[0].id, null)",
+			"vault_search_hash_rate_limit_cluster_alert_id":  "try(google_monitoring_alert_policy.vault_search_hash_rate_limit_cluster[0].id, null)",
 			"vault_search_hash_unauthorized_probes_alert_id": "try(google_monitoring_alert_policy.vault_search_hash_unauthorized_probes[0].id, null)",
 		}
 		for outName, expectedExpr := range expectedOutputs {
