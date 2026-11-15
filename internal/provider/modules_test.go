@@ -453,10 +453,10 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 			"dlt_input_ports must filter startswith(port.source, 'dlt://')",
 		)
 
-		// AC-1: dlt_bigquery_dataset fallback
+		// AC-1: dlt_bigquery_dataset fallback targeting internal dataset (#1219)
 		assert.Contains(t, dltContent, "dlt_bigquery_dataset", "dlt_ports.tf must declare dlt_bigquery_dataset local")
-		assert.Contains(t, dltContent, `var.bigquery_dataset_id != "" ? var.bigquery_dataset_id : replace(local.product_id, "-", "_")`,
-			"dlt_bigquery_dataset must fallback to replace(local.product_id, \"-\", \"_\") when var.bigquery_dataset_id is empty",
+		assert.Contains(t, dltContent, `dlt_bigquery_dataset = local.internal_dataset_id`,
+			"dlt_bigquery_dataset must target local.internal_dataset_id (#1219)",
 		)
 
 		// AC-2: Collision-Resistant SA Derivation
@@ -996,14 +996,8 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 		assert.Contains(t, schedJobBlock, "google_cloud_run_v2_job_iam_member.dlt_scheduler_invoker", "scheduler job depends_on must include dlt_scheduler_invoker (AC-5)")
 		assert.Contains(t, schedJobBlock, "google_cloud_run_v2_job.dlt_jobs", "scheduler job depends_on must include google_cloud_run_v2_job.dlt_jobs (AC-5)")
 
-		// 4. Assert google_project_iam_member.dlt_runner_bq_editor (AC-6)
-		bqEditorBlock := extractHCLBlock(dltContent, `resource "google_project_iam_member" "dlt_runner_bq_editor"`)
-		require.NotEmpty(t, bqEditorBlock, "dlt_ports.tf must define resource google_project_iam_member.dlt_runner_bq_editor")
-		assert.Regexp(t, regexp.MustCompile(`count\s*=\s*length\(local\.dlt_input_ports\)\s*>\s*0\s*\?\s*1\s*:\s*0`), bqEditorBlock)
-		assert.Regexp(t, regexp.MustCompile(`project\s*=\s*var\.project_id`), bqEditorBlock)
-		assert.Regexp(t, regexp.MustCompile(`role\s*=\s*"roles/bigquery\.dataEditor"`), bqEditorBlock)
-		assert.Regexp(t, regexp.MustCompile(`member\s*=\s*"serviceAccount:\$\{local\.dlt_runner_sa_email\}"`), bqEditorBlock)
-		assert.Contains(t, bqEditorBlock, "google_service_account.dlt_runner", "bq_editor depends_on must include google_service_account.dlt_runner")
+		// 4. AC-6 / #1219: Project-level bq_editor removed from dlt_ports.tf in favor of dataset-level scoping on internal dataset
+		assert.NotContains(t, dltContent, `resource "google_project_iam_member" "dlt_runner_bq_editor"`, "dlt_ports.tf must not define project-level bq_editor (#1219)")
 
 		// 5. Assert google_project_iam_member.dlt_runner_bq_user (AC-6)
 		bqUserBlock := extractHCLBlock(dltContent, `resource "google_project_iam_member" "dlt_runner_bq_user"`)

@@ -5,8 +5,8 @@ locals {
     if(can(port.type) && port.type == "dlt") || (can(port.source) && startswith(port.source, "dlt://"))
   }
 
-  # AC-1: BigQuery dataset fallback
-  dlt_bigquery_dataset = var.bigquery_dataset_id != "" ? var.bigquery_dataset_id : replace(local.product_id, "-", "_")
+  # AC-1: BigQuery dataset fallback targeting internal private dataset (#1219)
+  dlt_bigquery_dataset = local.internal_dataset_id
 
   # AC-2: Collision-resistant Runner Service Account ID and Email
   candidate_runner_sa = var.dlt_runner_service_account_id != "" ? var.dlt_runner_service_account_id : "dlt-r-${local.product_id}${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
@@ -184,18 +184,6 @@ resource "google_cloud_scheduler_job" "dlt_schedules" {
   depends_on = [
     google_cloud_run_v2_job_iam_member.dlt_scheduler_invoker,
     google_cloud_run_v2_job.dlt_jobs,
-  ]
-}
-
-# AC-6: BigQuery Data Editor IAM Binding for DLT Runner SA
-resource "google_project_iam_member" "dlt_runner_bq_editor" {
-  count   = length(local.dlt_input_ports) > 0 ? 1 : 0
-  project = var.project_id
-  role    = "roles/bigquery.dataEditor"
-  member  = "serviceAccount:${local.dlt_runner_sa_email}"
-
-  depends_on = [
-    google_service_account.dlt_runner,
   ]
 }
 

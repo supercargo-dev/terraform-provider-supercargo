@@ -27,11 +27,40 @@ locals {
       schema = try(c.schema_json, lookup(c, "schema", null))
     }
   }
+
+  public_dataset_id   = var.bigquery_dataset_id != "" ? var.bigquery_dataset_id : replace(local.product_id, "-", "_")
+  internal_dataset_id = var.internal_bigquery_dataset_id != "" ? var.internal_bigquery_dataset_id : "${local.public_dataset_id}_internal"
+
+  public_output_views = {
+    for k, v in try(data.supercargo_data_product.this.outputs, {}) : k => v
+    if lookup(v, "materialization", "view") == "view"
+  }
+  internal_input_tables = try(data.supercargo_data_product.this.inputs, {})
+
+  # Deterministic runner identities bypassing child module outputs
+  gateway_sa_id    = var.service_account_id != "" ? var.service_account_id : "gateway-${local.product_id}${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
+  gateway_sa_email = "${local.gateway_sa_id}@${var.project_id}.iam.gserviceaccount.com"
+
+  all_runner_emails = compact(concat(
+    [local.gateway_sa_email],
+    length(local.dlt_input_ports) > 0 ? [local.dlt_runner_sa_email] : [],
+    var.runner_service_accounts
+  ))
+
+  all_runner_members = toset([
+    for sa in local.all_runner_emails :
+    startswith(trimspace(sa), "serviceAccount:") ? trimspace(sa) : "serviceAccount:${trimspace(sa)}"
+  ])
+
+  all_consumer_members = toset([
+    for c in var.authorized_consumers : trimspace(c)
+  ])
 }
 
 data "supercargo_data_product" "this" {
   manifest_file = var.manifest_file
   project       = var.project_id
+  lock_dir      = var.lock_dir
 }
 
 module "gateway" {
@@ -54,7 +83,7 @@ module "gateway" {
   master_key_uri                      = var.master_key_uri
   hub_oidc_audience                   = var.hub_oidc_audience
   vault_oidc_audience                 = var.vault_oidc_audience
-  bigquery_dataset_id                 = var.bigquery_dataset_id
+  bigquery_dataset_id                 = local.internal_dataset_id
   auth_enforce                        = var.auth_enforce
   force_deploy_trigger                = var.force_deploy_trigger
   custom_audiences                    = var.custom_audiences
@@ -82,3 +111,74 @@ module "gateway" {
 
   contracts = local.gateway_contracts
 }
+
+resource "google_bigquery_dataset" "internal" {
+  project                    = var.project_id
+  dataset_id                 = local.internal_dataset_id
+  location                   = var.region
+  delete_contents_on_destroy = !var.bigquery_deletion_protection
+}
+
+resource "google_bigquery_dataset" "public" {
+  project                    = var.project_id
+  dataset_id                 = local.public_dataset_id
+  location                   = var.region
+  delete_contents_on_destroy = !var.bigquery_deletion_protection
+}
+
+resource "google_bigquery_dataset_access" "internal_views_delegation" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.internal.dataset_id
+
+  dataset {
+    dataset {
+      project_id = var.project_id
+      dataset_id = google_bigquery_dataset.public.dataset_id
+    }
+    target_types = ["VIEWS"]
+  }
+}
+
+resource "google_bigquery_table" "inputs" {
+  for_each            = local.internal_input_tables
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.internal.dataset_id
+  table_id            = try(each.value.table_name, each.value.record_name, each.value.name)
+  deletion_protection = var.bigquery_deletion_protection
+  schema              = each.value.schema_json
+}
+
+resource "google_bigquery_table" "outputs" {
+  for_each            = local.public_output_views
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.public.dataset_id
+  table_id            = each.value.name
+  deletion_protection = var.bigquery_deletion_protection
+
+  view {
+    query          = each.value.view_query
+    use_legacy_sql = false
+  }
+
+  depends_on = [
+    google_bigquery_dataset_access.internal_views_delegation,
+    google_bigquery_table.inputs
+  ]
+}
+
+resource "google_bigquery_dataset_iam_member" "runners_data_editor" {
+  for_each   = local.all_runner_members
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.internal.dataset_id
+  role       = "roles/bigquery.dataEditor"
+  member     = each.value
+}
+
+resource "google_bigquery_dataset_iam_member" "consumers_data_viewer" {
+  for_each   = local.all_consumer_members
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.public.dataset_id
+  role       = "roles/bigquery.dataViewer"
+  member     = each.value
+}
+

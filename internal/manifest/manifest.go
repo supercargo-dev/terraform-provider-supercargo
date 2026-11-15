@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	hubv1 "github.com/supercargo-dev/core/gen/go/hub/v1"
@@ -501,3 +502,417 @@ func normalizeBQMode(m string) string {
 		return m
 	}
 }
+
+// CompiledOutputPort represents a compiled public output view and its associated contract metadata.
+type CompiledOutputPort struct {
+	Name            string `json:"name"`
+	URN             string `json:"urn"`
+	Lens            string `json:"lens"`
+	Materialization string `json:"materialization"`
+	ViewQuery       string `json:"view_query"`
+	ViewSQL         string `json:"view_sql"`
+}
+
+// CompiledInputPort represents a compiled boundary input landing table and its physical schema.
+type CompiledInputPort struct {
+	Name       string `json:"name"`
+	URN        string `json:"urn"`
+	RecordName string `json:"record_name"`
+	TableName  string `json:"table_name"`
+	Source     string `json:"source"`
+	SchemaJSON string `json:"schema_json"`
+}
+
+var createViewRegex = regexp.MustCompile(`(?is)^\s*CREATE\s+(?:OR\s+REPLACE\s+)?VIEW\s+.*?\s+AS\s+(.*)$`)
+
+// ExtractViewQuery extracts the pure query body from a CREATE [OR REPLACE] VIEW DDL statement.
+func ExtractViewQuery(viewSQL string) string {
+	trimmed := strings.TrimSpace(viewSQL)
+	if strings.HasPrefix(strings.ToUpper(trimmed), "SELECT") || strings.HasPrefix(strings.ToUpper(trimmed), "WITH") {
+		return strings.TrimRight(trimmed, "; \t\r\n")
+	}
+
+	matches := createViewRegex.FindStringSubmatch(trimmed)
+	if len(matches) > 1 {
+		return strings.TrimRight(strings.TrimSpace(matches[1]), "; \t\r\n")
+	}
+
+	return strings.TrimRight(trimmed, "; \t\r\n")
+}
+
+// DiscoverLockDir locates the compiled .supercargo/lock directory.
+// If explicitLockDir is non-empty, its existence is strictly verified.
+// If omitted, candidate locations relative to manifestPath or workspace root are checked.
+func DiscoverLockDir(manifestPath, productSlug, explicitLockDir string) (string, bool, error) {
+	if explicitLockDir != "" {
+		target := explicitLockDir
+		if !filepath.IsAbs(target) && manifestPath != "" {
+			target = filepath.Join(filepath.Dir(manifestPath), explicitLockDir)
+		}
+		target = filepath.Clean(target)
+		if fi, err := os.Stat(target); err == nil && fi.IsDir() {
+			return target, true, nil
+		}
+		if fi, err := os.Stat(filepath.Clean(explicitLockDir)); err == nil && fi.IsDir() {
+			return filepath.Clean(explicitLockDir), true, nil
+		}
+		return "", false, fmt.Errorf("explicitly configured lock_dir %q does not exist", explicitLockDir)
+	}
+
+	manifestDir := "."
+	if manifestPath != "" {
+		manifestDir = filepath.Dir(manifestPath)
+	}
+	manifestDir = filepath.Clean(manifestDir)
+
+	var searchDirs []string
+	if productSlug != "" {
+		searchDirs = append(searchDirs,
+			filepath.Join(manifestDir, ".supercargo", "lock", productSlug),
+		)
+	}
+	searchDirs = append(searchDirs,
+		filepath.Join(manifestDir, ".supercargo", "lock"),
+	)
+
+	curr := manifestDir
+	for i := 0; i < 4; i++ {
+		parent := filepath.Dir(curr)
+		if parent == curr {
+			break
+		}
+		curr = parent
+		if productSlug != "" {
+			searchDirs = append(searchDirs, filepath.Join(curr, ".supercargo", "lock", productSlug))
+		}
+		searchDirs = append(searchDirs, filepath.Join(curr, ".supercargo", "lock"))
+	}
+
+	for _, cand := range searchDirs {
+		candClean := filepath.Clean(cand)
+		if fi, err := os.Stat(candClean); err == nil && fi.IsDir() {
+			return candClean, true, nil
+		}
+	}
+
+	return "", false, nil
+}
+
+// LoadCompiledOutputs reads compiled view SQL files and ODCS contracts from the lock directory.
+func LoadCompiledOutputs(lockDir, productSlug string) (map[string]*CompiledOutputPort, error) {
+	viewsDir := filepath.Join(lockDir, "views")
+	if fi, err := os.Stat(viewsDir); err != nil || !fi.IsDir() {
+		return make(map[string]*CompiledOutputPort), nil
+	}
+
+	type odpsPort struct {
+		Name            string `yaml:"name"`
+		Lens            string `yaml:"lens"`
+		Materialization string `yaml:"materialization"`
+	}
+	type odpsDoc struct {
+		ID          string     `yaml:"id"`
+		OutputPorts []odpsPort `yaml:"output_ports"`
+	}
+
+	odpsPorts := make(map[string]odpsPort)
+	odpsPath := filepath.Join(lockDir, "dataproduct.odps.yaml")
+	if data, err := os.ReadFile(odpsPath); err == nil {
+		var doc odpsDoc
+		if err := yaml.Unmarshal(data, &doc); err == nil {
+			for _, p := range doc.OutputPorts {
+				odpsPorts[p.Name] = p
+			}
+		}
+	}
+
+	contractsDir := filepath.Join(lockDir, "contracts")
+	contractURNs := make(map[string]string)
+	if entries, err := os.ReadDir(contractsDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			if strings.HasSuffix(name, ".odcs.yaml") || strings.HasSuffix(name, ".yaml") {
+				portName := strings.TrimSuffix(strings.TrimSuffix(name, ".odcs.yaml"), ".yaml")
+				cData, err := os.ReadFile(filepath.Join(contractsDir, name))
+				if err == nil {
+					var raw struct {
+						ID   string `yaml:"id"`
+						Meta struct {
+							URN string `yaml:"urn"`
+							ID  string `yaml:"id"`
+						} `yaml:"meta"`
+					}
+					if err := yaml.Unmarshal(cData, &raw); err == nil {
+						urn := raw.ID
+						if urn == "" {
+							urn = raw.Meta.URN
+						}
+						if urn == "" {
+							urn = raw.Meta.ID
+						}
+						if urn != "" {
+							contractURNs[portName] = urn
+						}
+					}
+				}
+			}
+		}
+	}
+
+	entries, err := os.ReadDir(viewsDir)
+	if err != nil {
+		return nil, fmt.Errorf("reading views directory %q: %w", viewsDir, err)
+	}
+
+	outputs := make(map[string]*CompiledOutputPort, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
+			continue
+		}
+		portName := strings.TrimSuffix(e.Name(), ".sql")
+		filePath := filepath.Join(viewsDir, e.Name())
+		sqlBytes, err := os.ReadFile(filePath)
+		if err != nil {
+			return nil, fmt.Errorf("reading view file %q: %w", filePath, err)
+		}
+
+		viewSQL := string(sqlBytes)
+		viewQuery := ExtractViewQuery(viewSQL)
+
+		lens := ""
+		mat := "view"
+		if op, ok := odpsPorts[portName]; ok {
+			lens = op.Lens
+			if op.Materialization != "" {
+				mat = op.Materialization
+			}
+		}
+		if lens == "" {
+			lens = inferLensFromName(portName)
+		}
+
+		urn := contractURNs[portName]
+		if urn == "" {
+			urn = fmt.Sprintf("urn:supercargo:hub:contract:%s-%s:v1", productSlug, portName)
+		}
+
+		mapKey := urn
+		if _, exists := outputs[mapKey]; exists {
+			return nil, fmt.Errorf("duplicate collision-resistant collection key %q", mapKey)
+		}
+
+		outputs[mapKey] = &CompiledOutputPort{
+			Name:            portName,
+			URN:             urn,
+			Lens:            lens,
+			Materialization: mat,
+			ViewQuery:       viewQuery,
+			ViewSQL:         viewSQL,
+		}
+	}
+
+	return outputs, nil
+}
+
+func inferLensFromName(name string) string {
+	lower := strings.ToLower(name)
+	switch {
+	case strings.HasSuffix(lower, "_replica"):
+		return "replica"
+	case strings.HasSuffix(lower, "_event_log"):
+		return "event_log"
+	case strings.HasSuffix(lower, "_scd2"):
+		return "scd2"
+	case strings.HasSuffix(lower, "_cdc"):
+		return "cdc"
+	case strings.HasSuffix(lower, "_reidentified"):
+		return "reidentified"
+	default:
+		return "replica"
+	}
+}
+
+// LoadCompiledInputs reads ingress contracts and BigQuery schemas from the lock directory.
+func LoadCompiledInputs(lockDir, productSlug string) (map[string]*CompiledInputPort, error) {
+	schemasDir := filepath.Join(lockDir, "schemas")
+	ingressDir := filepath.Join(lockDir, "ingress")
+
+	inputs := make(map[string]*CompiledInputPort)
+
+	type odpsInputPort struct {
+		Name   string `yaml:"name"`
+		Source string `yaml:"source"`
+	}
+	type odpsDoc struct {
+		InputPorts []odpsInputPort `yaml:"input_ports"`
+	}
+
+	odpsInputs := make(map[string]odpsInputPort)
+	odpsPath := filepath.Join(lockDir, "dataproduct.odps.yaml")
+	if data, err := os.ReadFile(odpsPath); err == nil {
+		var doc odpsDoc
+		if err := yaml.Unmarshal(data, &doc); err == nil {
+			for _, in := range doc.InputPorts {
+				odpsInputs[in.Name] = in
+			}
+		}
+	}
+
+	type ingressContractInfo struct {
+		URN        string
+		RecordName string
+	}
+	ingressInfo := make(map[string]ingressContractInfo)
+	if entries, err := os.ReadDir(ingressDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() || (!strings.HasSuffix(e.Name(), ".contract.yaml") && !strings.HasSuffix(e.Name(), ".yaml")) {
+				continue
+			}
+			portName := strings.TrimSuffix(strings.TrimSuffix(e.Name(), ".contract.yaml"), ".yaml")
+			cData, err := os.ReadFile(filepath.Join(ingressDir, e.Name()))
+			if err == nil {
+				var raw struct {
+					Meta struct {
+						URN       string `yaml:"urn"`
+						ID        string `yaml:"id"`
+						DataAsset string `yaml:"data_asset"`
+					} `yaml:"meta"`
+					ID         string `yaml:"id"`
+					RecordName string `yaml:"record_name"`
+					TableName  string `yaml:"table_name"`
+				}
+				_ = yaml.Unmarshal(cData, &raw)
+				urn := raw.ID
+				if urn == "" {
+					urn = raw.Meta.URN
+				}
+				if urn == "" {
+					urn = raw.Meta.ID
+				}
+				recName := raw.RecordName
+				if recName == "" {
+					recName = raw.TableName
+				}
+				if recName == "" {
+					recName = raw.Meta.DataAsset
+				}
+				ingressInfo[portName] = ingressContractInfo{
+					URN:        urn,
+					RecordName: recName,
+				}
+			}
+		}
+	}
+
+	schemaFiles := make(map[string]string)
+	if entries, err := os.ReadDir(schemasDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".schema.json") {
+				continue
+			}
+			base := strings.TrimSuffix(e.Name(), ".schema.json")
+			recordName := base
+			prefix := fmt.Sprintf("%s_internal.", productSlug)
+			if strings.HasPrefix(base, prefix) {
+				recordName = strings.TrimPrefix(base, prefix)
+			}
+			sBytes, err := os.ReadFile(filepath.Join(schemasDir, e.Name()))
+			if err == nil {
+				schemaFiles[recordName] = string(sBytes)
+				schemaFiles[base] = string(sBytes)
+			}
+		}
+	}
+
+	if len(ingressInfo) > 0 {
+		for portName, info := range ingressInfo {
+			recordName := info.RecordName
+			if recordName == "" {
+				if _, ok := schemaFiles[portName]; ok {
+					recordName = portName
+				} else {
+					for rec := range schemaFiles {
+						if !strings.Contains(rec, "_internal.") {
+							recordName = rec
+							break
+						}
+					}
+				}
+			}
+			if recordName == "" {
+				recordName = portName
+			}
+			schemaJSON := schemaFiles[recordName]
+			if schemaJSON == "" {
+				schemaJSON = schemaFiles[fmt.Sprintf("%s_internal.%s", productSlug, recordName)]
+			}
+			if schemaJSON == "" {
+				for _, sj := range schemaFiles {
+					schemaJSON = sj
+					break
+				}
+			}
+
+			urn := info.URN
+			if urn == "" {
+				urn = fmt.Sprintf("urn:supercargo:hub:contract:%s-internal-%s:v1", productSlug, portName)
+			}
+
+			source := "managed"
+			if op, ok := odpsInputs[portName]; ok && op.Source != "" {
+				source = op.Source
+			}
+
+			mapKey := urn
+			if _, exists := inputs[mapKey]; exists {
+				return nil, fmt.Errorf("duplicate collision-resistant collection key %q", mapKey)
+			}
+
+			inputs[mapKey] = &CompiledInputPort{
+				Name:       portName,
+				URN:        urn,
+				RecordName: recordName,
+				TableName:  recordName,
+				Source:     source,
+				SchemaJSON: schemaJSON,
+			}
+		}
+	} else if len(schemaFiles) > 0 {
+		seen := make(map[string]struct{})
+		for recName, schemaJSON := range schemaFiles {
+			if strings.Contains(recName, "_internal.") {
+				continue
+			}
+			if _, ok := seen[recName]; ok {
+				continue
+			}
+			seen[recName] = struct{}{}
+
+			urn := fmt.Sprintf("urn:supercargo:hub:contract:%s-internal-%s:v1", productSlug, recName)
+			source := "managed"
+			if op, ok := odpsInputs[recName]; ok && op.Source != "" {
+				source = op.Source
+			}
+
+			mapKey := urn
+			if _, exists := inputs[mapKey]; exists {
+				return nil, fmt.Errorf("duplicate collision-resistant collection key %q", mapKey)
+			}
+
+			inputs[mapKey] = &CompiledInputPort{
+				Name:       recName,
+				URN:        urn,
+				RecordName: recName,
+				TableName:  recName,
+				Source:     source,
+				SchemaJSON: schemaJSON,
+			}
+		}
+	}
+
+	return inputs, nil
+}
+

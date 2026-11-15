@@ -34,6 +34,11 @@ func newTestConfigModel(manifestFile, id, version, project string) supercargoDat
 		Location:              types.StringNull(),
 		PartitioningField:     types.StringNull(),
 		PartitionExpirationMs: types.Int64Null(),
+		LockDir:               types.StringNull(),
+		InternalDatasetID:     types.StringNull(),
+		PublicDatasetID:       types.StringNull(),
+		Outputs:               types.MapNull(outputPortObjectType),
+		Inputs:                types.MapNull(inputPortObjectType),
 	}
 	if manifestFile != "" {
 		m.ManifestFile = types.StringValue(manifestFile)
