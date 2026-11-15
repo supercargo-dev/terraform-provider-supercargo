@@ -47,6 +47,7 @@ module "monitoring_control_plane" {
 | `enable_control_plane_alerts` | `bool` | `true` | no | Whether to provision Cloud Monitoring alert policies for control plane services and pipelines |
 | `enable_dashboards` | `bool` | `true` | no | Whether to provision the turnkey persona dashboards |
 | `enable_slos` | `bool` | `true` | no | Whether to provision Custom Services, SLOs, and burn-rate alert policies |
+| `enable_vault_search_hash_alerts` | `bool` | `true` | no | Whether to provision Cloud Monitoring alert policies for Vault SearchHash anomalies |
 | `environment` | `string` | `"dev"` | no | The deployment environment (dev, staging, prod) |
 | `events_push_subscription_name` | `string` | `"hub-events-push"` | no | Pub/Sub subscription name for hub events push |
 | `firestore_database_id` | `string` | `"(default)"` | no | Firestore database ID |
@@ -96,6 +97,9 @@ module "monitoring_control_plane" {
   ]` | no | List of operational telemetry BigQuery streaming subscriptions monitored for lag |
 | `unacked_message_age_threshold_seconds` | `number` | `null` | no | Optional override for Pub/Sub unacknowledged message age alert threshold. If unset, derived from sla_tier. |
 | `vault_max_instances` | `number` | `10` | no | Max instances configured for Vault Cloud Run service |
+| `vault_search_hash_rate_limit_cluster_threshold` | `number` | `3` | no | Threshold for Vault SearchHash rate limit breach cluster alert (>3 breaches / 5m) |
+| `vault_search_hash_unauthorized_probes_threshold` | `number` | `5` | no | Threshold for Vault SearchHash unauthorized probes alert (>5 denied / 5m) |
+| `vault_search_hash_volume_spike_threshold` | `number` | `50` | no | Threshold for Vault SearchHash volume spike alert (>50 requests / 10m) |
 | `vault_service_name` | `string` | `"vault"` | no | Cloud Run service name for Vault |
 
 ## Module Outputs
@@ -115,6 +119,9 @@ module "monitoring_control_plane" {
 | `vault_availability_slo_id` | no | Resource ID of the Vault availability SLO |
 | `vault_custom_service_id` | no | Custom service ID for Supercargo Vault |
 | `vault_latency_slo_id` | no | Resource ID of the Vault latency SLO |
+| `vault_search_hash_rate_limit_cluster_alert_id` | no | Resource ID of the Vault SearchHash rate limit breach cluster alert policy |
+| `vault_search_hash_unauthorized_probes_alert_id` | no | Resource ID of the Vault SearchHash unauthorized probes alert policy |
+| `vault_search_hash_volume_spike_alert_id` | no | Resource ID of the Vault SearchHash volume spike alert policy |
 
 ## Implementation
 - Source Code: `modules/monitoring_control_plane`
