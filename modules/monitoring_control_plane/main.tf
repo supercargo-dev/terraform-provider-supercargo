@@ -835,3 +835,144 @@ resource "google_monitoring_alert_policy" "telemetry_dlq_backlog" {
     auto_close = "604800s"
   }
 }
+
+# --- Vault SearchHash Anomaly Detection & Security Alert Policies ---
+
+# 1. Vault SearchHash Volume Spike Alert (P2 / Tier 2)
+resource "google_monitoring_alert_policy" "vault_search_hash_volume_spike" {
+  count        = var.enable_control_plane_alerts && var.enable_vault_search_hash_alerts && var.vault_service_name != null && var.vault_service_name != "" ? 1 : 0
+  project      = var.project_id
+  display_name = "[Tier 2] [SECURITY] Vault SearchHash Volume Spike (>50 / 10m)${local.name_suffix_display}"
+  combiner     = "OR"
+
+  conditions {
+    display_name = "Vault SearchHash Request Volume Exceeds Threshold"
+    condition_threshold {
+      filter          = "resource.type = \"cloud_run_revision\" AND resource.labels.service_name = \"${var.vault_service_name}\" AND metric.type = \"workload.googleapis.com/vault_search_hash_requests_total\""
+      duration        = "0s"
+      comparison      = "COMPARISON_GT"
+      threshold_value = var.vault_search_hash_volume_spike_threshold
+      trigger {
+        count = 1
+      }
+      aggregations {
+        alignment_period     = "600s"
+        per_series_aligner   = "ALIGN_DELTA"
+        cross_series_reducer = "REDUCE_SUM"
+        group_by_fields      = ["metric.label.principal"]
+      }
+    }
+  }
+
+  documentation {
+    content   = <<-EOT
+      ## [Tier 2] Vault SearchHash Request Volume Spike
+      - **Service**: `${var.vault_service_name}`
+
+      ### Triage CLI Command
+      ```bash
+      gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=${var.vault_service_name} AND jsonPayload.procedure=/vault.v1.VaultService/SearchHash" --limit=20
+      ```
+      See runbook: docs/catalog/vault-search-hash-incident-response.md
+    EOT
+    mime_type = "text/markdown"
+  }
+
+  notification_channels = local.tier2_alert_notification_channels
+  alert_strategy {
+    auto_close = "604800s"
+  }
+}
+
+# 2. Vault SearchHash Rate Limit Breach Cluster Alert (P1 / Tier 1)
+resource "google_monitoring_alert_policy" "vault_search_hash_rate_limit_cluster" {
+  count        = var.enable_control_plane_alerts && var.enable_vault_search_hash_alerts && var.vault_service_name != null && var.vault_service_name != "" ? 1 : 0
+  project      = var.project_id
+  display_name = "[Tier 1] [SECURITY] Vault SearchHash Rate Limit Breach Cluster (>3 / 5m)${local.name_suffix_display}"
+  combiner     = "OR"
+
+  conditions {
+    display_name = "Vault SearchHash Rate Limit Breaches Exceed Threshold"
+    condition_threshold {
+      filter          = "resource.type = \"cloud_run_revision\" AND resource.labels.service_name = \"${var.vault_service_name}\" AND metric.type = \"workload.googleapis.com/vault_search_hash_rate_limit_breaches_total\""
+      duration        = "0s"
+      comparison      = "COMPARISON_GT"
+      threshold_value = var.vault_search_hash_rate_limit_cluster_threshold
+      trigger {
+        count = 1
+      }
+      aggregations {
+        alignment_period     = "300s"
+        per_series_aligner   = "ALIGN_DELTA"
+        cross_series_reducer = "REDUCE_SUM"
+        group_by_fields      = ["metric.label.principal"]
+      }
+    }
+  }
+
+  documentation {
+    content   = <<-EOT
+      ## [Tier 1] Vault SearchHash Rate Limit Breach Cluster Detected
+      - **Service**: `${var.vault_service_name}`
+
+      ### Triage CLI Command
+      ```bash
+      gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=${var.vault_service_name} AND jsonPayload.msg=~'search hash rate limit exceeded'" --limit=20
+      ```
+      See runbook: docs/catalog/vault-search-hash-incident-response.md
+    EOT
+    mime_type = "text/markdown"
+  }
+
+  notification_channels = local.all_alert_notification_channels
+  alert_strategy {
+    auto_close = "604800s"
+  }
+}
+
+# 3. Vault SearchHash Unauthorized Probes Alert (P2 / Tier 2)
+resource "google_monitoring_alert_policy" "vault_search_hash_unauthorized_probes" {
+  count        = var.enable_control_plane_alerts && var.enable_vault_search_hash_alerts && var.vault_service_name != null && var.vault_service_name != "" ? 1 : 0
+  project      = var.project_id
+  display_name = "[Tier 2] [SECURITY] Vault SearchHash Unauthorized Probes (>5 / 5m)${local.name_suffix_display}"
+  combiner     = "OR"
+
+  conditions {
+    display_name = "Vault SearchHash Denied Requests Exceed Threshold"
+    condition_threshold {
+      filter          = "resource.type = \"cloud_run_revision\" AND resource.labels.service_name = \"${var.vault_service_name}\" AND metric.type = \"workload.googleapis.com/vault_search_hash_requests_total\" AND metric.label.status = \"denied\""
+      duration        = "0s"
+      comparison      = "COMPARISON_GT"
+      threshold_value = var.vault_search_hash_unauthorized_probes_threshold
+      trigger {
+        count = 1
+      }
+      aggregations {
+        alignment_period     = "300s"
+        per_series_aligner   = "ALIGN_DELTA"
+        cross_series_reducer = "REDUCE_SUM"
+        group_by_fields      = ["metric.label.principal"]
+      }
+    }
+  }
+
+  documentation {
+    content   = <<-EOT
+      ## [Tier 2] Vault SearchHash Unauthorized Probes Detected
+      - **Service**: `${var.vault_service_name}`
+
+      ### Triage CLI Command
+      ```bash
+      gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=${var.vault_service_name} AND (jsonPayload.msg=~'unauthorized search hash access attempt' OR httpRequest.status=401)" --limit=20
+      ```
+      See runbook: docs/catalog/vault-search-hash-incident-response.md
+    EOT
+    mime_type = "text/markdown"
+  }
+
+  notification_channels = local.tier2_alert_notification_channels
+  alert_strategy {
+    auto_close = "604800s"
+  }
+}
+

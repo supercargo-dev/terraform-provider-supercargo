@@ -296,3 +296,28 @@ variable "unacked_message_age_threshold_seconds" {
   type        = number
   default     = null
 }
+
+variable "enable_vault_search_hash_alerts" {
+  description = "Whether to provision Cloud Monitoring alert policies for Vault SearchHash anomalies"
+  type        = bool
+  default     = true
+}
+
+variable "vault_search_hash_volume_spike_threshold" {
+  description = "Threshold for Vault SearchHash volume spike alert (>50 requests / 10m)"
+  type        = number
+  default     = 50
+}
+
+variable "vault_search_hash_rate_limit_cluster_threshold" {
+  description = "Threshold for Vault SearchHash rate limit breach cluster alert (>3 breaches / 5m)"
+  type        = number
+  default     = 3
+}
+
+variable "vault_search_hash_unauthorized_probes_threshold" {
+  description = "Threshold for Vault SearchHash unauthorized probes alert (>5 denied / 5m)"
+  type        = number
+  default     = 5
+}
+
