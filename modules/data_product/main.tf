@@ -48,13 +48,13 @@ locals {
   ))
 
   all_runner_members = toset([
-    for sa in local.all_runner_emails :
-    startswith(trimspace(sa), "serviceAccount:") ? trimspace(sa) : "serviceAccount:${trimspace(sa)}"
+    for sa in compact([for r in local.all_runner_emails : trimspace(r)]) :
+    startswith(sa, "serviceAccount:") ? sa : "serviceAccount:${sa}"
   ])
 
-  all_consumer_members = toset([
+  all_consumer_members = toset(compact([
     for c in var.authorized_consumers : trimspace(c)
-  ])
+  ]))
 }
 
 data "supercargo_data_product" "this" {

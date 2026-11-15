@@ -411,7 +411,7 @@ func (d *supercargoDataProductDataSource) Read(ctx context.Context, req datasour
 			if !hasManifest {
 				resp.Diagnostics.AddError(
 					"Error Reading Data Product",
-					fmt.Sprintf("Could not retrieve product %s: %s\n\nRemediation Hint: Ensure 'sc apply' has been executed to publish the product to Supercargo Hub, or specify 'manifest_file' in the data source to allow local schema resolution.", productUrn, err),
+					fmt.Sprintf("Could not retrieve product %s: %s\n\nRemediation Hint: Ensure 'sc apply' has been executed to publish the product to Supercargo Hub, or specify 'manifest_file' in the data source to allow local schema resolution.", productUrn, maskBearerTokens(err.Error())),
 				)
 				return
 			}

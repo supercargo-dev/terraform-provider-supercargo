@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	hubv1 "github.com/supercargo-dev/core/gen/go/hub/v1"
@@ -829,6 +830,12 @@ func LoadCompiledInputs(lockDir, productSlug string) (map[string]*CompiledInputP
 		}
 	}
 
+	schemaKeys := make([]string, 0, len(schemaFiles))
+	for k := range schemaFiles {
+		schemaKeys = append(schemaKeys, k)
+	}
+	sort.Strings(schemaKeys)
+
 	if len(ingressInfo) > 0 {
 		for portName, info := range ingressInfo {
 			recordName := info.RecordName
@@ -836,7 +843,7 @@ func LoadCompiledInputs(lockDir, productSlug string) (map[string]*CompiledInputP
 				if _, ok := schemaFiles[portName]; ok {
 					recordName = portName
 				} else {
-					for rec := range schemaFiles {
+					for _, rec := range schemaKeys {
 						if !strings.Contains(rec, "_internal.") {
 							recordName = rec
 							break
@@ -852,8 +859,8 @@ func LoadCompiledInputs(lockDir, productSlug string) (map[string]*CompiledInputP
 				schemaJSON = schemaFiles[fmt.Sprintf("%s_internal.%s", productSlug, recordName)]
 			}
 			if schemaJSON == "" {
-				for _, sj := range schemaFiles {
-					schemaJSON = sj
+				for _, k := range schemaKeys {
+					schemaJSON = schemaFiles[k]
 					break
 				}
 			}
