@@ -786,7 +786,7 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 					key:              "raw_orders",
 					source:           "dlt://sql_database",
 					table:            "orders",
-					contractUrn:      "urn:sc:contract:orders:v1",
+					contractUrn:      "urn:supercargo:hub:contract:orders:v1",
 					cursorField:      "updated_at",
 					primaryKey:       "id",
 					writeDisposition: "merge",
@@ -794,8 +794,8 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 				},
 				wantContain: []string{
 					"--source", "dlt://sql_database",
-					"--contract-urn", "urn:sc:contract:orders:v1",
-					"--product-urn", "urn:sc:product:sales:v1",
+					"--contract-urn", "urn:supercargo:hub:contract:orders:v1",
+					"--product-urn", "urn:supercargo:hub:product:sales:v1",
 					"--table", "orders",
 					"--cursor-field", "updated_at",
 					"--primary-key", "id",
@@ -809,7 +809,7 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 				port: dltPort{
 					key:         "customers_sync",
 					source:      "dlt://sql_database",
-					contractUrn: "urn:sc:contract:customers:v1",
+					contractUrn: "urn:supercargo:hub:contract:customers:v1",
 				},
 				wantContain: []string{
 					"--source", "dlt://sql_database",
@@ -824,12 +824,12 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 					key:    "nested_contract_port",
 					source: "dlt://sql_database",
 					contract: map[string]string{
-						"urn": "urn:sc:contract:nested_orders:v1",
+						"urn": "urn:supercargo:hub:contract:nested_orders:v1",
 					},
 				},
 				wantContain: []string{
 					"--source", "dlt://sql_database",
-					"--contract-urn", "urn:sc:contract:nested_orders:v1",
+					"--contract-urn", "urn:supercargo:hub:contract:nested_orders:v1",
 					"--pipeline-name", "dlt_sales_nested_contract_port",
 				},
 				wantAbsent: []string{"--entrypoint"},
@@ -839,11 +839,11 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 				port: dltPort{
 					key:      "direct_contract_port",
 					source:   "dlt://rest_api",
-					contract: "urn:sc:contract:direct_orders:v1",
+					contract: "urn:supercargo:hub:contract:direct_orders:v1",
 				},
 				wantContain: []string{
 					"--source", "dlt://rest_api",
-					"--contract-urn", "urn:sc:contract:direct_orders:v1",
+					"--contract-urn", "urn:supercargo:hub:contract:direct_orders:v1",
 					"--pipeline-name", "dlt_sales_direct_contract_port",
 				},
 				wantAbsent: []string{"--entrypoint"},
@@ -853,16 +853,16 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 				port: dltPort{
 					key:         "override_port",
 					source:      "dlt://rest_api",
-					contractUrn: "urn:sc:contract:override:v1",
+					contractUrn: "urn:supercargo:hub:contract:override:v1",
 					contract: map[string]string{
-						"urn": "urn:sc:contract:ignored:v1",
+						"urn": "urn:supercargo:hub:contract:ignored:v1",
 					},
 				},
 				wantContain: []string{
 					"--source", "dlt://rest_api",
-					"--contract-urn", "urn:sc:contract:override:v1",
+					"--contract-urn", "urn:supercargo:hub:contract:override:v1",
 				},
-				wantAbsent: []string{"urn:sc:contract:ignored:v1"},
+				wantAbsent: []string{"urn:supercargo:hub:contract:ignored:v1"},
 			},
 			{
 				name: "omitting contract and contract_urn falls back to port key",
@@ -881,11 +881,11 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 				port: dltPort{
 					key:         "tenant_orders",
 					source:      "dlt://rest_api",
-					contractUrn: "urn:sc:contract:tenant_orders:v1",
+					contractUrn: "urn:supercargo:hub:contract:tenant_orders:v1",
 				},
 				wantContain: []string{
 					"--source", "dlt://rest_api",
-					"--contract-urn", "urn:sc:contract:tenant_orders:v1",
+					"--contract-urn", "urn:supercargo:hub:contract:tenant_orders:v1",
 					"--pipeline-name", "dlt_sales_tenant_orders_dev_feature_1",
 				},
 				wantAbsent: []string{"--entrypoint"},
@@ -896,7 +896,7 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 					key:         "gcs_events",
 					source:      "dlt://filesystem",
 					table:       "events_raw",
-					contractUrn: "urn:sc:contract:events:v1",
+					contractUrn: "urn:supercargo:hub:contract:events:v1",
 				},
 				wantContain: []string{
 					"--source", "dlt://filesystem",
@@ -909,12 +909,12 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 				port: dltPort{
 					key:              "stripe_charges",
 					source:           "dlt://rest_api",
-					contractUrn:      "urn:sc:contract:stripe:v1",
+					contractUrn:      "urn:supercargo:hub:contract:stripe:v1",
 					writeDisposition: "append",
 				},
 				wantContain: []string{
 					"--source", "dlt://rest_api",
-					"--contract-urn", "urn:sc:contract:stripe:v1",
+					"--contract-urn", "urn:supercargo:hub:contract:stripe:v1",
 					"--write-disposition", "append",
 				},
 				wantAbsent: []string{"--table", "--entrypoint"},
@@ -924,7 +924,7 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 				port: dltPort{
 					key:         "custom_feed",
 					source:      "dlt://custom",
-					contractUrn: "urn:sc:contract:custom:v1",
+					contractUrn: "urn:supercargo:hub:contract:custom:v1",
 					entrypoint:  "pipelines/feed.py:load_data",
 				},
 				wantContain: []string{
@@ -939,7 +939,7 @@ func TestModules_DataProduct_DLTIngress(t *testing.T) {
 			tc := tc
 			t.Run("ArgMatrix/"+tc.name, func(t *testing.T) {
 				t.Parallel()
-				args := synthesizeArgs("sales", "urn:sc:product:sales:v1", "sales_bronze", tc.nameSuffix, tc.port)
+				args := synthesizeArgs("sales", "urn:supercargo:hub:product:sales:v1", "sales_bronze", tc.nameSuffix, tc.port)
 				for _, expected := range tc.wantContain {
 					assert.Contains(t, args, expected, "synthesized args should contain %q", expected)
 				}
