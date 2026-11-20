@@ -2,8 +2,8 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -33,6 +33,8 @@ type supercargoDataProductDataSourceModel struct {
 	ID                    types.String        `tfsdk:"id"`
 	Version               types.String        `tfsdk:"version"`
 	ManifestFile          types.String        `tfsdk:"manifest_file"`
+	IngestionEngine       types.String        `tfsdk:"ingestion_engine"`
+	IncludeDLTMetadata    types.Bool          `tfsdk:"include_dlt_metadata"`
 	Project               types.String        `tfsdk:"project"`
 	URN                   types.String        `tfsdk:"urn"`
 	Location              types.String        `tfsdk:"location"`
@@ -92,12 +94,6 @@ var inputPortObjectType = types.ObjectType{
 	AttrTypes: inputPortAttrTypes,
 }
 
-var bearerTokenRegex = regexp.MustCompile(`(?i)Bearer\s+[A-Za-z0-9_\-\.]+`)
-
-func maskBearerTokens(msg string) string {
-	return bearerTokenRegex.ReplaceAllString(msg, "Bearer [REDACTED]")
-}
-
 type supercargoSLAModel struct {
 	Tier      types.String `tfsdk:"tier"`
 	Rto       types.String `tfsdk:"rto"`
@@ -145,6 +141,14 @@ func (d *supercargoDataProductDataSource) Schema(ctx context.Context, req dataso
 			},
 			"manifest_file": schema.StringAttribute{
 				MarkdownDescription: "Path to the local product.yaml manifest file.",
+				Optional:            true,
+			},
+			"ingestion_engine": schema.StringAttribute{
+				MarkdownDescription: "BigQuery ingestion engine override: 'streaming' (default) or 'dlt' (maps repeated fields to JSON NULLABLE). If omitted, inferred per port from manifest and contract metadata.",
+				Optional:            true,
+			},
+			"include_dlt_metadata": schema.BoolAttribute{
+				MarkdownDescription: "Whether to append _dlt_load_id and _dlt_id STRING REQUIRED columns to generated contract schemas. Defaults to false.",
 				Optional:            true,
 			},
 			"project": schema.StringAttribute{
@@ -328,6 +332,12 @@ func (d *supercargoDataProductDataSource) Read(ctx context.Context, req datasour
 		return
 	}
 
+	explicitOpts, optDiags := parseProviderSchemaOptions(data.IngestionEngine, data.IncludeDLTMetadata)
+	resp.Diagnostics.Append(optDiags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	hasID := !data.ID.IsNull() && !data.ID.IsUnknown() && data.ID.ValueString() != ""
 	hasManifest := !data.ManifestFile.IsNull() && !data.ManifestFile.IsUnknown() && data.ManifestFile.ValueString() != ""
 
@@ -437,15 +447,58 @@ func (d *supercargoDataProductDataSource) Read(ctx context.Context, req datasour
 		return
 	}
 
-	contractsMap := make(map[string]supercargoContractModel)
+	var manifestExtras manifest.ManifestExtras
+	if hasManifest {
+		manifestExtras = manifest.LoadManifestExtras(manifestPath)
+	}
+
+	contractsMap := make(map[string]supercargoContractModel, len(activeContracts))
 	if len(activeContracts) > 0 {
+		outPortByContractURN := make(map[string]*hubv1.OutputPort, len(activeManifest.OutputPorts))
+		for _, op := range activeManifest.OutputPorts {
+			if op != nil && op.Contract != nil && op.Contract.Urn != "" {
+				if _, exists := outPortByContractURN[op.Contract.Urn]; !exists {
+					outPortByContractURN[op.Contract.Urn] = op
+				}
+			}
+		}
+		inPortByContractURN := make(map[string]*hubv1.InputPort, len(activeManifest.InputPorts))
+		for _, ip := range activeManifest.InputPorts {
+			if ip == nil {
+				continue
+			}
+			inURN := ip.ContractUrn
+			if ip.Contract != nil && ip.Contract.Urn != "" {
+				inURN = ip.Contract.Urn
+			}
+			if inURN != "" {
+				if _, exists := inPortByContractURN[inURN]; !exists {
+					inPortByContractURN[inURN] = ip
+				}
+			}
+		}
+
 		for _, c := range activeContracts {
 			if c == nil || c.Meta == nil {
 				continue
 			}
-			schemaJSON, err := protoToSchemaJSON(c.Schema)
+			outPort := outPortByContractURN[c.Meta.Urn]
+			inPort := inPortByContractURN[c.Meta.Urn]
+			portOpts, err := manifest.ResolvePortSchemaOptions(activeManifest, outPort, inPort, c.Meta.Labels, c.Meta.Urn, explicitOpts, manifestExtras)
 			if err != nil {
-				schemaJSON = ""
+				resp.Diagnostics.AddError(
+					"Invalid Ingestion Engine",
+					fmt.Sprintf("Contract %s: %s\n\nRemediation Hint: Set ingestion_engine (or supercargo.ingestion_engine label) to 'streaming' or 'dlt'.", c.Meta.Urn, maskBearerTokens(err.Error())),
+				)
+				return
+			}
+			schemaJSON, err := manifest.ProtoFieldsToBigQueryJSON(c.Schema, portOpts)
+			if err != nil {
+				resp.Diagnostics.AddError(
+					"Error Translating Contract Schema",
+					fmt.Sprintf("Contract %s: %s", c.Meta.Urn, maskBearerTokens(err.Error())),
+				)
+				return
 			}
 			contractsMap[c.Meta.Urn] = supercargoContractModel{
 				ID:          types.StringValue(c.Meta.Urn),
@@ -459,8 +512,16 @@ func (d *supercargoDataProductDataSource) Read(ctx context.Context, req datasour
 
 	// If Hub didn't return contracts and manifest_file is provided, resolve locally
 	if len(contractsMap) == 0 && hasManifest && localManifest != nil {
-		resolved, err := manifest.ResolveContracts(manifestPath, localManifest)
-		if err == nil && len(resolved) > 0 {
+		resolved, err := manifest.ResolveContractsWithOptions(manifestPath, localManifest, explicitOpts)
+		if err != nil {
+			if !errors.Is(err, manifest.ErrMissingContractAndSchema) {
+				resp.Diagnostics.AddError(
+					"Error Resolving Local Contracts",
+					maskBearerTokens(err.Error()),
+				)
+				return
+			}
+		} else if len(resolved) > 0 {
 			for k, rc := range resolved {
 				contractsMap[k] = supercargoContractModel{
 					ID:          types.StringValue(rc.URN),

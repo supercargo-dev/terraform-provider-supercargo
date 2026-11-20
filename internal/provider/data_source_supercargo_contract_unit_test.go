@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"sync/atomic"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	hubv1 "github.com/supercargo-dev/core/gen/go/hub/v1"
+	"github.com/supercargo-dev/terraform-provider-supercargo/internal/manifest"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -412,5 +414,196 @@ func TestSupercargoContractDataSource_Read_Unconfigured(t *testing.T) {
 		d.Read(ctx, req, &resp)
 		require.True(t, resp.Diagnostics.HasError())
 		assert.Contains(t, resp.Diagnostics.Errors()[0].Summary(), "Provider Not Configured")
+	})
+}
+
+func TestSupercargoContractDataSource_DLT_AttributesLabelsAndFieldsParity(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("schema exposes optional ingestion_engine and include_dlt_metadata", func(t *testing.T) {
+		d := NewSupercargoContractDataSource()
+		var resp datasource.SchemaResponse
+		d.Schema(ctx, datasource.SchemaRequest{}, &resp)
+		require.False(t, resp.Diagnostics.HasError())
+
+		engAttr := resp.Schema.Attributes["ingestion_engine"]
+		require.NotNil(t, engAttr)
+		assert.True(t, engAttr.IsOptional())
+		assert.False(t, engAttr.IsComputed())
+
+		metaAttr := resp.Schema.Attributes["include_dlt_metadata"]
+		require.NotNil(t, metaAttr)
+		assert.True(t, metaAttr.IsOptional())
+		assert.False(t, metaAttr.IsComputed())
+	})
+
+	dltSchema := []*hubv1.Field{
+		{Name: "issue_id", Type: hubv1.DataType_DATA_TYPE_INT64, Mode: hubv1.FieldMode_FIELD_MODE_REQUIRED},
+		{Name: "labels", Type: hubv1.DataType_DATA_TYPE_STRING, Mode: hubv1.FieldMode_FIELD_MODE_REPEATED, Description: "issue labels"},
+		{Name: "embedding", Type: hubv1.DataType_DATA_TYPE_VECTOR, Mode: hubv1.FieldMode_FIELD_MODE_NULLABLE, Description: "vector embedding"},
+		{
+			Name:        "reviewers",
+			Type:        hubv1.DataType_DATA_TYPE_STRUCT,
+			Mode:        hubv1.FieldMode_FIELD_MODE_REPEATED,
+			Description: "repeated struct",
+			Fields: []*hubv1.Field{
+				{Name: "login", Type: hubv1.DataType_DATA_TYPE_STRING, Mode: hubv1.FieldMode_FIELD_MODE_REQUIRED},
+			},
+		},
+		{
+			Name: "metadata",
+			Type: hubv1.DataType_DATA_TYPE_STRUCT,
+			Mode: hubv1.FieldMode_FIELD_MODE_NULLABLE,
+			Fields: []*hubv1.Field{
+				{Name: "tags", Type: hubv1.DataType_DATA_TYPE_STRING, Mode: hubv1.FieldMode_FIELD_MODE_REPEATED},
+			},
+		},
+	}
+
+	t.Run("explicit ingestion_engine dlt with include_dlt_metadata true preserves schema_json and fields parity", func(t *testing.T) {
+		mockSrv, providerData, _ := startMockHubServer(t)
+		d := &supercargoContractDataSource{client: providerData}
+		var dsSchemaResp datasource.SchemaResponse
+		d.Schema(ctx, datasource.SchemaRequest{}, &dsSchemaResp)
+
+		mockSrv.mu.Lock()
+		mockSrv.GetContractHook = func(ctx context.Context, req *hubv1.GetContractRequest) (*hubv1.GetContractResponse, error) {
+			return &hubv1.GetContractResponse{
+				Contract: &hubv1.DataContract{
+					Meta:   &hubv1.Meta{Urn: req.ContractUrn, Version: "v1.0.0", OwnerTeam: "platform"},
+					Schema: dltSchema,
+				},
+			}, nil
+		}
+		mockSrv.mu.Unlock()
+
+		cfgModel := supercargoContractDataSourceModel{
+			ID:                 types.StringValue("urn:supercargo:hub:contract:github-issues"),
+			IngestionEngine:    types.StringValue("dlt"),
+			IncludeDLTMetadata: types.BoolValue(true),
+		}
+		var resp datasource.ReadResponse
+		resp.State = newTestDataSourceState(ctx, t, dsSchemaResp.Schema, cfgModel)
+		d.Read(ctx, datasource.ReadRequest{Config: newTestDataSourceConfig(ctx, t, dsSchemaResp.Schema, cfgModel)}, &resp)
+		require.False(t, resp.Diagnostics.HasError(), "unexpected diagnostics: %v", resp.Diagnostics)
+
+		var state supercargoContractDataSourceModel
+		require.False(t, resp.State.Get(ctx, &state).HasError())
+
+		var parsed []manifest.BQFieldJSON
+		require.NoError(t, json.Unmarshal([]byte(state.SchemaJSON.ValueString()), &parsed))
+		require.Len(t, parsed, 7)
+		assert.Equal(t, manifest.BQFieldJSON{Name: "labels", Type: "JSON", Mode: "NULLABLE", Description: "issue labels"}, parsed[1])
+		assert.Equal(t, manifest.BQFieldJSON{Name: "embedding", Type: "FLOAT", Mode: "REPEATED", Description: "vector embedding"}, parsed[2])
+		assert.Equal(t, manifest.BQFieldJSON{Name: "reviewers", Type: "JSON", Mode: "NULLABLE", Description: "repeated struct"}, parsed[3])
+		require.Len(t, parsed[4].Fields, 1)
+		assert.Equal(t, manifest.BQFieldJSON{Name: "tags", Type: "JSON", Mode: "NULLABLE"}, parsed[4].Fields[0])
+		assert.Equal(t, "_dlt_load_id", parsed[5].Name)
+		assert.Equal(t, "REQUIRED", parsed[5].Mode)
+		assert.Equal(t, "_dlt_id", parsed[6].Name)
+
+		// Flattened fields must stop recursion on collapsed reviewers JSON and include _dlt_* columns
+		expectedFields := []struct {
+			name string
+			typ  string
+			mode string
+		}{
+			{"issue_id", "INT64", "REQUIRED"},
+			{"labels", "JSON", "NULLABLE"},
+			{"embedding", "FLOAT", "REPEATED"},
+			{"reviewers", "JSON", "NULLABLE"},
+			{"metadata", "RECORD", "NULLABLE"},
+			{"metadata.tags", "JSON", "NULLABLE"},
+			{"_dlt_load_id", "STRING", "REQUIRED"},
+			{"_dlt_id", "STRING", "REQUIRED"},
+		}
+		require.Len(t, state.Fields, len(expectedFields))
+		for i, exp := range expectedFields {
+			assert.Equal(t, exp.name, state.Fields[i].Name.ValueString())
+			assert.Equal(t, exp.typ, state.Fields[i].Type.ValueString())
+			assert.Equal(t, exp.mode, state.Fields[i].Mode.ValueString())
+		}
+	})
+
+	t.Run("omitted ingestion_engine inspects contract.Meta.Labels", func(t *testing.T) {
+		mockSrv, providerData, _ := startMockHubServer(t)
+		d := &supercargoContractDataSource{client: providerData}
+		var dsSchemaResp datasource.SchemaResponse
+		d.Schema(ctx, datasource.SchemaRequest{}, &dsSchemaResp)
+
+		mockSrv.mu.Lock()
+		mockSrv.GetContractHook = func(ctx context.Context, req *hubv1.GetContractRequest) (*hubv1.GetContractResponse, error) {
+			return &hubv1.GetContractResponse{
+				Contract: &hubv1.DataContract{
+					Meta: &hubv1.Meta{
+						Urn:       req.ContractUrn,
+						Version:   "v1.0.0",
+						OwnerTeam: "platform",
+						Labels:    map[string]string{"supercargo.ingestion_engine": "dlt"},
+					},
+					Schema: []*hubv1.Field{
+						{Name: "labels", Type: hubv1.DataType_DATA_TYPE_STRING, Mode: hubv1.FieldMode_FIELD_MODE_REPEATED},
+					},
+				},
+			}, nil
+		}
+		mockSrv.mu.Unlock()
+
+		cfgModel := supercargoContractDataSourceModel{
+			ID: types.StringValue("urn:supercargo:hub:contract:labeled"),
+		}
+		var resp datasource.ReadResponse
+		resp.State = newTestDataSourceState(ctx, t, dsSchemaResp.Schema, cfgModel)
+		d.Read(ctx, datasource.ReadRequest{Config: newTestDataSourceConfig(ctx, t, dsSchemaResp.Schema, cfgModel)}, &resp)
+		require.False(t, resp.Diagnostics.HasError(), "unexpected diagnostics: %v", resp.Diagnostics)
+
+		var state supercargoContractDataSourceModel
+		require.False(t, resp.State.Get(ctx, &state).HasError())
+		var parsed []manifest.BQFieldJSON
+		require.NoError(t, json.Unmarshal([]byte(state.SchemaJSON.ValueString()), &parsed))
+		require.Len(t, parsed, 1)
+		assert.Equal(t, "JSON", parsed[0].Type)
+		assert.Equal(t, "NULLABLE", parsed[0].Mode)
+		require.Len(t, state.Fields, 1)
+		assert.Equal(t, "JSON", state.Fields[0].Type.ValueString())
+		assert.Equal(t, "NULLABLE", state.Fields[0].Mode.ValueString())
+	})
+
+	t.Run("invalid ingestion_engine and Unauthenticated Hub error mask Bearer tokens", func(t *testing.T) {
+		mockSrv, providerData, _ := startMockHubServer(t)
+		var calls atomic.Int64
+		mockSrv.mu.Lock()
+		mockSrv.GetContractHook = func(ctx context.Context, req *hubv1.GetContractRequest) (*hubv1.GetContractResponse, error) {
+			calls.Add(1)
+			return nil, status.Error(codes.Unauthenticated, "rejected Bearer secret-contract-jwt")
+		}
+		mockSrv.mu.Unlock()
+
+		d := &supercargoContractDataSource{client: providerData}
+		var dsSchemaResp datasource.SchemaResponse
+		d.Schema(ctx, datasource.SchemaRequest{}, &dsSchemaResp)
+
+		badEng := supercargoContractDataSourceModel{
+			ID:              types.StringValue("urn:supercargo:hub:contract:test"),
+			IngestionEngine: types.StringValue("Bearer secret-attr-tok"),
+		}
+		var badResp datasource.ReadResponse
+		d.Read(ctx, datasource.ReadRequest{Config: newTestDataSourceConfig(ctx, t, dsSchemaResp.Schema, badEng)}, &badResp)
+		require.True(t, badResp.Diagnostics.HasError())
+		assert.Equal(t, int64(0), calls.Load())
+		assert.Equal(t, "Invalid Ingestion Engine", badResp.Diagnostics.Errors()[0].Summary())
+		assert.Contains(t, badResp.Diagnostics.Errors()[0].Detail(), "Bearer [REDACTED]")
+		assert.NotContains(t, badResp.Diagnostics.Errors()[0].Detail(), "secret-attr-tok")
+
+		unauth := supercargoContractDataSourceModel{
+			ID: types.StringValue("urn:supercargo:hub:contract:test"),
+		}
+		var unauthResp datasource.ReadResponse
+		d.Read(ctx, datasource.ReadRequest{Config: newTestDataSourceConfig(ctx, t, dsSchemaResp.Schema, unauth)}, &unauthResp)
+		require.True(t, unauthResp.Diagnostics.HasError())
+		assert.Equal(t, int64(1), calls.Load())
+		assert.Contains(t, unauthResp.Diagnostics.Errors()[0].Detail(), "Bearer [REDACTED]")
+		assert.NotContains(t, unauthResp.Diagnostics.Errors()[0].Detail(), "secret-contract-jwt")
 	})
 }

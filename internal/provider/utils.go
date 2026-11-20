@@ -1,24 +1,16 @@
 package provider
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	hubv1 "github.com/supercargo-dev/core/gen/go/hub/v1"
+	"github.com/supercargo-dev/terraform-provider-supercargo/internal/manifest"
 )
 
 const maxRecursionDepth = 100
-
-// bqField represents a field in a BigQuery JSON schema.
-type bqField struct {
-	Name        string     `json:"name"`
-	Type        string     `json:"type"`
-	Mode        string     `json:"mode"`
-	Description string     `json:"description,omitempty"`
-	Fields      []*bqField `json:"fields,omitempty"`
-}
 
 // ContractFieldModel represents a flattened field for Terraform state.
 type ContractFieldModel struct {
@@ -26,6 +18,32 @@ type ContractFieldModel struct {
 	Type        types.String `tfsdk:"type"`
 	Mode        types.String `tfsdk:"mode"`
 	Description types.String `tfsdk:"description"`
+}
+
+func maskBearerTokens(msg string) string {
+	return manifest.ScrubBearerTokens(msg)
+}
+
+func parseProviderSchemaOptions(ingestionEngineAttr types.String, includeDLTMetadataAttr types.Bool) (manifest.SchemaOptions, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	var opts manifest.SchemaOptions
+
+	if !ingestionEngineAttr.IsNull() && !ingestionEngineAttr.IsUnknown() {
+		raw := ingestionEngineAttr.ValueString()
+		parsed, err := manifest.ParseIngestionEngine(raw)
+		if err != nil {
+			diags.AddError(
+				"Invalid Ingestion Engine",
+				fmt.Sprintf("%s\n\nRemediation Hint: Set ingestion_engine to 'streaming' (default) or 'dlt'.", maskBearerTokens(err.Error())),
+			)
+			return opts, diags
+		}
+		opts.IngestionEngine = parsed
+	}
+	if !includeDLTMetadataAttr.IsNull() && !includeDLTMetadataAttr.IsUnknown() {
+		opts.IncludeDLTMetadata = includeDLTMetadataAttr.ValueBool()
+	}
+	return opts, diags
 }
 
 func mapProtoType(t hubv1.DataType) (string, error) {
@@ -58,6 +76,8 @@ func mapProtoType(t hubv1.DataType) (string, error) {
 		return "RECORD", nil
 	case hubv1.DataType_DATA_TYPE_JSON:
 		return "JSON", nil
+	case hubv1.DataType_DATA_TYPE_VECTOR:
+		return "FLOAT", nil
 	case hubv1.DataType_DATA_TYPE_UNSPECIFIED:
 		return "", fmt.Errorf("data type is unspecified")
 	default:
@@ -85,43 +105,22 @@ func checkRecursionLimit(path []string) error {
 	return nil
 }
 
-func protoToBQFields(fields []*hubv1.Field, path []string) ([]*bqField, error) {
-	if err := checkRecursionLimit(path); err != nil {
-		return nil, err
-	}
-	out := make([]*bqField, 0, len(fields))
-	for _, f := range fields {
-		if f == nil {
-			continue
-		}
-		bqType, err := mapProtoType(f.Type)
-		if err != nil {
-			return nil, fmt.Errorf("field %q: %w", f.Name, err)
-		}
-
-		bq := &bqField{
-			Name:        f.Name,
-			Type:        bqType,
-			Mode:        mapProtoMode(f.Mode),
-			Description: f.Description,
-		}
-		if len(f.Fields) > 0 {
-			subFields, err := protoToBQFields(f.Fields, append(path, f.Name))
-			if err != nil {
-				return nil, err
-			}
-			bq.Fields = subFields
-		}
-		out = append(out, bq)
-	}
-	return out, nil
+func flattenFields(fields []*hubv1.Field, prefix string, path []string) ([]ContractFieldModel, error) {
+	return flattenFieldsWithOptions(fields, prefix, path, manifest.SchemaOptions{})
 }
 
-func flattenFields(fields []*hubv1.Field, prefix string, path []string) ([]ContractFieldModel, error) {
+func flattenFieldsWithOptions(fields []*hubv1.Field, prefix string, path []string, opts manifest.SchemaOptions) ([]ContractFieldModel, error) {
+	if len(path) == 0 {
+		parsedEngine, err := manifest.ParseIngestionEngine(string(opts.IngestionEngine))
+		if err != nil {
+			return nil, err
+		}
+		opts.IngestionEngine = parsedEngine
+	}
 	if err := checkRecursionLimit(path); err != nil {
 		return nil, err
 	}
-	result := make([]ContractFieldModel, 0, len(fields))
+	result := make([]ContractFieldModel, 0, len(fields)+2)
 	for _, f := range fields {
 		if f == nil {
 			continue
@@ -129,6 +128,26 @@ func flattenFields(fields []*hubv1.Field, prefix string, path []string) ([]Contr
 		name := f.Name
 		if prefix != "" {
 			name = prefix + "." + f.Name
+		}
+
+		origMode := mapProtoMode(f.Mode)
+		if opts.IngestionEngine == manifest.IngestionEngineDLT && origMode == "REPEATED" {
+			result = append(result, ContractFieldModel{
+				Name:        types.StringValue(name),
+				Type:        types.StringValue("JSON"),
+				Mode:        types.StringValue("NULLABLE"),
+				Description: types.StringValue(f.Description),
+			})
+			continue
+		}
+		if f.Type == hubv1.DataType_DATA_TYPE_VECTOR {
+			result = append(result, ContractFieldModel{
+				Name:        types.StringValue(name),
+				Type:        types.StringValue("FLOAT"),
+				Mode:        types.StringValue("REPEATED"),
+				Description: types.StringValue(f.Description),
+			})
+			continue
 		}
 
 		bqType, err := mapProtoType(f.Type)
@@ -139,28 +158,47 @@ func flattenFields(fields []*hubv1.Field, prefix string, path []string) ([]Contr
 		result = append(result, ContractFieldModel{
 			Name:        types.StringValue(name),
 			Type:        types.StringValue(bqType),
-			Mode:        types.StringValue(mapProtoMode(f.Mode)),
+			Mode:        types.StringValue(origMode),
 			Description: types.StringValue(f.Description),
 		})
 		if len(f.Fields) > 0 {
-			subFields, err := flattenFields(f.Fields, name, append(path, f.Name))
+			subFields, err := flattenFieldsWithOptions(f.Fields, name, append(path, f.Name), opts)
 			if err != nil {
 				return nil, err
 			}
 			result = append(result, subFields...)
 		}
 	}
-	return result, nil
-}
 
-func protoToSchemaJSON(fields []*hubv1.Field) (string, error) {
-	bqFields, err := protoToBQFields(fields, []string{})
-	if err != nil {
-		return "", err
+	if prefix == "" && len(path) == 0 && opts.IncludeDLTMetadata {
+		hasLoadID := false
+		hasID := false
+		for _, f := range fields {
+			if f == nil {
+				continue
+			}
+			if strings.EqualFold(f.Name, "_dlt_load_id") {
+				hasLoadID = true
+			} else if strings.EqualFold(f.Name, "_dlt_id") {
+				hasID = true
+			}
+		}
+		if !hasLoadID {
+			result = append(result, ContractFieldModel{
+				Name:        types.StringValue("_dlt_load_id"),
+				Type:        types.StringValue("STRING"),
+				Mode:        types.StringValue("REQUIRED"),
+				Description: types.StringValue("DLT load identifier"),
+			})
+		}
+		if !hasID {
+			result = append(result, ContractFieldModel{
+				Name:        types.StringValue("_dlt_id"),
+				Type:        types.StringValue("STRING"),
+				Mode:        types.StringValue("REQUIRED"),
+				Description: types.StringValue("DLT row identifier"),
+			})
+		}
 	}
-	bytes, err := json.MarshalIndent(bqFields, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(bytes), nil
+	return result, nil
 }
