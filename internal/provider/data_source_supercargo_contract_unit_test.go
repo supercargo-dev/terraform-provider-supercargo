@@ -607,3 +607,72 @@ func TestSupercargoContractDataSource_DLT_AttributesLabelsAndFieldsParity(t *tes
 		assert.NotContains(t, unauthResp.Diagnostics.Errors()[0].Detail(), "secret-contract-jwt")
 	})
 }
+
+func TestFlattenFieldsWithOptions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("multi-level nested struct preserves descriptions and DLT rules", func(t *testing.T) {
+		fields := []*hubv1.Field{
+			{
+				Name:        "outer",
+				Type:        hubv1.DataType_DATA_TYPE_STRUCT,
+				Mode:        hubv1.FieldMode_FIELD_MODE_NULLABLE,
+				Description: "outer struct",
+				Fields: []*hubv1.Field{
+					{
+						Name:        "inner",
+						Type:        hubv1.DataType_DATA_TYPE_STRUCT,
+						Mode:        hubv1.FieldMode_FIELD_MODE_NULLABLE,
+						Description: "inner struct",
+						Fields: []*hubv1.Field{
+							{Name: "leaf", Type: hubv1.DataType_DATA_TYPE_STRING, Mode: hubv1.FieldMode_FIELD_MODE_REQUIRED, Description: "leaf str"},
+							{Name: "arr", Type: hubv1.DataType_DATA_TYPE_INT64, Mode: hubv1.FieldMode_FIELD_MODE_REPEATED, Description: "repeated int"},
+						},
+					},
+				},
+			},
+		}
+
+		got, err := flattenFieldsWithOptions(fields, manifest.SchemaOptions{
+			IngestionEngine:    manifest.IngestionEngineDLT,
+			IncludeDLTMetadata: true,
+		})
+		require.NoError(t, err)
+		require.Len(t, got, 6)
+
+		assert.Equal(t, ContractFieldModel{
+			Name:        types.StringValue("outer"),
+			Type:        types.StringValue("RECORD"),
+			Mode:        types.StringValue("NULLABLE"),
+			Description: types.StringValue("outer struct"),
+		}, got[0])
+		assert.Equal(t, ContractFieldModel{
+			Name:        types.StringValue("outer.inner"),
+			Type:        types.StringValue("RECORD"),
+			Mode:        types.StringValue("NULLABLE"),
+			Description: types.StringValue("inner struct"),
+		}, got[1])
+		assert.Equal(t, ContractFieldModel{
+			Name:        types.StringValue("outer.inner.leaf"),
+			Type:        types.StringValue("STRING"),
+			Mode:        types.StringValue("REQUIRED"),
+			Description: types.StringValue("leaf str"),
+		}, got[2])
+		assert.Equal(t, ContractFieldModel{
+			Name:        types.StringValue("outer.inner.arr"),
+			Type:        types.StringValue("JSON"),
+			Mode:        types.StringValue("NULLABLE"),
+			Description: types.StringValue("repeated int"),
+		}, got[3])
+		assert.Equal(t, "_dlt_load_id", got[4].Name.ValueString())
+		assert.Equal(t, "_dlt_id", got[5].Name.ValueString())
+	})
+
+	t.Run("propagates error from manifest.ProtoFieldsToBigQueryFields", func(t *testing.T) {
+		_, err := flattenFieldsWithOptions([]*hubv1.Field{
+			{Name: "bad", Type: hubv1.DataType_DATA_TYPE_UNSPECIFIED},
+		}, manifest.SchemaOptions{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unspecified")
+	})
+}

@@ -203,7 +203,7 @@ func (d *supercargoContractDataSource) Read(ctx context.Context, req datasource.
 	data.SchemaJSON = types.StringValue(schemaJSON)
 
 	// Populate flattened fields list
-	fields, err := flattenFieldsWithOptions(contract.Schema, "", []string{}, contractOpts)
+	fields, err := flattenFieldsWithOptions(contract.Schema, contractOpts)
 	if err != nil {
 		resp.Diagnostics.AddError("Error flattening schema fields", maskBearerTokens(err.Error()))
 		return
