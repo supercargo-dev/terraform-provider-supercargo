@@ -18,6 +18,8 @@ tags: [terraform, data-source, okf]
 | `fields.*.name` | `string` | no | no | yes | no | - |
 | `fields.*.type` | `string` | no | no | yes | no | - |
 | `id` | `string` | yes | no | no | no | The URN of the Data Contract. |
+| `include_dlt_metadata` | `bool` | no | yes | no | no | Whether to append _dlt_load_id and _dlt_id STRING REQUIRED columns to schema_json and fields. Defaults to false. |
+| `ingestion_engine` | `string` | no | yes | no | no | BigQuery ingestion engine mode: 'streaming' (default) or 'dlt' (maps repeated fields to JSON NULLABLE). If omitted, checks contract labels. |
 | `owner_team` | `string` | no | no | yes | no | The team that owns this contract. |
 | `schema_json` | `string` | no | no | yes | no | The generated BigQuery JSON schema definition. |
 | `urn` | `string` | no | no | yes | no | The exact URN of the contract. |
