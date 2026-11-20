@@ -45,7 +45,7 @@ type ManifestExtras struct {
 	TransformTargets map[string]bool
 }
 
-var bearerTokenRegex = regexp.MustCompile(`(?i)Bearer\s+[^\s"',;]+`)
+var bearerTokenRegex = regexp.MustCompile(`(?i)\bbearer\s+[^\s"',;]+`)
 
 // ScrubBearerTokens redacts bearer credentials in diagnostic and error strings.
 func ScrubBearerTokens(msg string) string {
