@@ -2,13 +2,13 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	hubv1 "github.com/supercargo-dev/core/gen/go/hub/v1"
+	"github.com/supercargo-dev/terraform-provider-supercargo/internal/manifest"
 )
 
 var _ datasource.DataSource = &supercargoContractDataSource{}
@@ -23,12 +23,14 @@ type supercargoContractDataSource struct {
 }
 
 type supercargoContractDataSourceModel struct {
-	ID         types.String         `tfsdk:"id"`
-	Version    types.String         `tfsdk:"version"`
-	URN        types.String         `tfsdk:"urn"`
-	OwnerTeam  types.String         `tfsdk:"owner_team"`
-	SchemaJSON types.String         `tfsdk:"schema_json"`
-	Fields     []ContractFieldModel `tfsdk:"fields"`
+	ID                 types.String         `tfsdk:"id"`
+	Version            types.String         `tfsdk:"version"`
+	IngestionEngine    types.String         `tfsdk:"ingestion_engine"`
+	IncludeDLTMetadata types.Bool           `tfsdk:"include_dlt_metadata"`
+	URN                types.String         `tfsdk:"urn"`
+	OwnerTeam          types.String         `tfsdk:"owner_team"`
+	SchemaJSON         types.String         `tfsdk:"schema_json"`
+	Fields             []ContractFieldModel `tfsdk:"fields"`
 }
 
 func (d *supercargoContractDataSource) Metadata(ctx context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -46,6 +48,14 @@ func (d *supercargoContractDataSource) Schema(ctx context.Context, req datasourc
 				MarkdownDescription: "The version of the Data Contract. If omitted, the latest active version will be retrieved.",
 				Optional:            true,
 				Computed:            true,
+			},
+			"ingestion_engine": schema.StringAttribute{
+				MarkdownDescription: "BigQuery ingestion engine mode: 'streaming' (default) or 'dlt' (maps repeated fields to JSON NULLABLE). If omitted, checks contract labels.",
+				Optional:            true,
+			},
+			"include_dlt_metadata": schema.BoolAttribute{
+				MarkdownDescription: "Whether to append _dlt_load_id and _dlt_id STRING REQUIRED columns to schema_json and fields. Defaults to false.",
+				Optional:            true,
 			},
 			"urn": schema.StringAttribute{
 				MarkdownDescription: "The exact URN of the contract.",
@@ -124,6 +134,12 @@ func (d *supercargoContractDataSource) Read(ctx context.Context, req datasource.
 		return
 	}
 
+	explicitOpts, optDiags := parseProviderSchemaOptions(data.IngestionEngine, data.IncludeDLTMetadata)
+	resp.Diagnostics.Append(optDiags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	// Fetch from Hub using gRPC client
 	version := ""
 	if !data.Version.IsNull() && !data.Version.IsUnknown() {
@@ -142,7 +158,7 @@ func (d *supercargoContractDataSource) Read(ctx context.Context, req datasource.
 		}
 		resp.Diagnostics.AddError(
 			"Error fetching contract from Hub",
-			fmt.Sprintf("Could not retrieve contract %s (version: %s): %s", data.ID.ValueString(), v, err),
+			fmt.Sprintf("Could not retrieve contract %s (version: %s): %s", data.ID.ValueString(), v, maskBearerTokens(err.Error())),
 		)
 		return
 	}
@@ -169,23 +185,27 @@ func (d *supercargoContractDataSource) Read(ctx context.Context, req datasource.
 	data.Version = types.StringValue(contract.Meta.Version)
 	data.OwnerTeam = types.StringValue(contract.Meta.OwnerTeam)
 
+	contractOpts, err := manifest.ResolvePortSchemaOptions(nil, nil, nil, contract.Meta.Labels, contract.Meta.Urn, explicitOpts)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Invalid Ingestion Engine",
+			fmt.Sprintf("%s\n\nRemediation Hint: Set ingestion_engine (or supercargo.ingestion_engine label) to 'streaming' or 'dlt'.", maskBearerTokens(err.Error())),
+		)
+		return
+	}
+
 	// Translate to BigQuery JSON
-	bqFields, err := protoToBQFields(contract.Schema, []string{})
+	schemaJSON, err := manifest.ProtoFieldsToBigQueryJSON(contract.Schema, contractOpts)
 	if err != nil {
-		resp.Diagnostics.AddError("Error translating schema to BigQuery format", err.Error())
+		resp.Diagnostics.AddError("Error translating schema to BigQuery format", maskBearerTokens(err.Error()))
 		return
 	}
-	schemaBytes, err := json.MarshalIndent(bqFields, "", "  ")
-	if err != nil {
-		resp.Diagnostics.AddError("Error marshaling BigQuery schema", err.Error())
-		return
-	}
-	data.SchemaJSON = types.StringValue(string(schemaBytes))
+	data.SchemaJSON = types.StringValue(schemaJSON)
 
 	// Populate flattened fields list
-	fields, err := flattenFields(contract.Schema, "", []string{})
+	fields, err := flattenFieldsWithOptions(contract.Schema, contractOpts)
 	if err != nil {
-		resp.Diagnostics.AddError("Error flattening schema fields", err.Error())
+		resp.Diagnostics.AddError("Error flattening schema fields", maskBearerTokens(err.Error()))
 		return
 	}
 	data.Fields = fields

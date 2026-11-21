@@ -1,24 +1,13 @@
 package provider
 
 import (
-	"encoding/json"
 	"fmt"
-	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	hubv1 "github.com/supercargo-dev/core/gen/go/hub/v1"
+	"github.com/supercargo-dev/terraform-provider-supercargo/internal/manifest"
 )
-
-const maxRecursionDepth = 100
-
-// bqField represents a field in a BigQuery JSON schema.
-type bqField struct {
-	Name        string     `json:"name"`
-	Type        string     `json:"type"`
-	Mode        string     `json:"mode"`
-	Description string     `json:"description,omitempty"`
-	Fields      []*bqField `json:"fields,omitempty"`
-}
 
 // ContractFieldModel represents a flattened field for Terraform state.
 type ContractFieldModel struct {
@@ -28,139 +17,56 @@ type ContractFieldModel struct {
 	Description types.String `tfsdk:"description"`
 }
 
-func mapProtoType(t hubv1.DataType) (string, error) {
-	switch t {
-	case hubv1.DataType_DATA_TYPE_STRING:
-		return "STRING", nil
-	case hubv1.DataType_DATA_TYPE_BYTES:
-		return "BYTES", nil
-	case hubv1.DataType_DATA_TYPE_INT64:
-		return "INT64", nil
-	case hubv1.DataType_DATA_TYPE_FLOAT64:
-		return "FLOAT64", nil
-	case hubv1.DataType_DATA_TYPE_BOOL:
-		return "BOOL", nil
-	case hubv1.DataType_DATA_TYPE_TIMESTAMP:
-		return "TIMESTAMP", nil
-	case hubv1.DataType_DATA_TYPE_DATE:
-		return "DATE", nil
-	case hubv1.DataType_DATA_TYPE_TIME:
-		return "TIME", nil
-	case hubv1.DataType_DATA_TYPE_DATETIME:
-		return "DATETIME", nil
-	case hubv1.DataType_DATA_TYPE_GEOGRAPHY:
-		return "GEOGRAPHY", nil
-	case hubv1.DataType_DATA_TYPE_NUMERIC:
-		return "NUMERIC", nil
-	case hubv1.DataType_DATA_TYPE_BIGNUMERIC:
-		return "BIGNUMERIC", nil
-	case hubv1.DataType_DATA_TYPE_STRUCT:
-		return "RECORD", nil
-	case hubv1.DataType_DATA_TYPE_JSON:
-		return "JSON", nil
-	case hubv1.DataType_DATA_TYPE_UNSPECIFIED:
-		return "", fmt.Errorf("data type is unspecified")
-	default:
-		return "", fmt.Errorf("unsupported or unknown hubv1.DataType: %d", t)
-	}
+func maskBearerTokens(msg string) string {
+	return manifest.ScrubBearerTokens(msg)
 }
 
-func mapProtoMode(m hubv1.FieldMode) string {
-	switch m {
-	case hubv1.FieldMode_FIELD_MODE_REQUIRED:
-		return "REQUIRED"
-	case hubv1.FieldMode_FIELD_MODE_REPEATED:
-		return "REPEATED"
-	case hubv1.FieldMode_FIELD_MODE_NULLABLE:
-		return "NULLABLE"
-	default:
-		return "NULLABLE"
-	}
-}
+func parseProviderSchemaOptions(ingestionEngineAttr types.String, includeDLTMetadataAttr types.Bool) (manifest.SchemaOptions, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	var opts manifest.SchemaOptions
 
-func checkRecursionLimit(path []string) error {
-	if len(path) > maxRecursionDepth {
-		return fmt.Errorf("max recursion depth (%d) reached: %s", maxRecursionDepth, strings.Join(path, " -> "))
-	}
-	return nil
-}
-
-func protoToBQFields(fields []*hubv1.Field, path []string) ([]*bqField, error) {
-	if err := checkRecursionLimit(path); err != nil {
-		return nil, err
-	}
-	out := make([]*bqField, 0, len(fields))
-	for _, f := range fields {
-		if f == nil {
-			continue
-		}
-		bqType, err := mapProtoType(f.Type)
+	if !ingestionEngineAttr.IsNull() && !ingestionEngineAttr.IsUnknown() {
+		raw := ingestionEngineAttr.ValueString()
+		parsed, err := manifest.ParseIngestionEngine(raw)
 		if err != nil {
-			return nil, fmt.Errorf("field %q: %w", f.Name, err)
+			diags.AddError(
+				"Invalid Ingestion Engine",
+				fmt.Sprintf("%s\n\nRemediation Hint: Set ingestion_engine to 'streaming' (default) or 'dlt'.", maskBearerTokens(err.Error())),
+			)
+			return opts, diags
 		}
-
-		bq := &bqField{
-			Name:        f.Name,
-			Type:        bqType,
-			Mode:        mapProtoMode(f.Mode),
-			Description: f.Description,
-		}
-		if len(f.Fields) > 0 {
-			subFields, err := protoToBQFields(f.Fields, append(path, f.Name))
-			if err != nil {
-				return nil, err
-			}
-			bq.Fields = subFields
-		}
-		out = append(out, bq)
+		opts.IngestionEngine = parsed
 	}
-	return out, nil
+	if !includeDLTMetadataAttr.IsNull() && !includeDLTMetadataAttr.IsUnknown() {
+		opts.IncludeDLTMetadata = includeDLTMetadataAttr.ValueBool()
+	}
+	return opts, diags
 }
 
-func flattenFields(fields []*hubv1.Field, prefix string, path []string) ([]ContractFieldModel, error) {
-	if err := checkRecursionLimit(path); err != nil {
+func flattenFieldsWithOptions(fields []*hubv1.Field, opts manifest.SchemaOptions) ([]ContractFieldModel, error) {
+	bqFields, err := manifest.ProtoFieldsToBigQueryFields(fields, opts)
+	if err != nil {
 		return nil, err
 	}
-	result := make([]ContractFieldModel, 0, len(fields))
-	for _, f := range fields {
-		if f == nil {
-			continue
-		}
+	return flattenBQFields(bqFields, ""), nil
+}
+
+func flattenBQFields(bqFields []manifest.BQFieldJSON, prefix string) []ContractFieldModel {
+	result := make([]ContractFieldModel, 0, len(bqFields))
+	for _, f := range bqFields {
 		name := f.Name
 		if prefix != "" {
 			name = prefix + "." + f.Name
 		}
-
-		bqType, err := mapProtoType(f.Type)
-		if err != nil {
-			return nil, fmt.Errorf("field %q: %w", name, err)
-		}
-
 		result = append(result, ContractFieldModel{
 			Name:        types.StringValue(name),
-			Type:        types.StringValue(bqType),
-			Mode:        types.StringValue(mapProtoMode(f.Mode)),
+			Type:        types.StringValue(f.Type),
+			Mode:        types.StringValue(f.Mode),
 			Description: types.StringValue(f.Description),
 		})
 		if len(f.Fields) > 0 {
-			subFields, err := flattenFields(f.Fields, name, append(path, f.Name))
-			if err != nil {
-				return nil, err
-			}
-			result = append(result, subFields...)
+			result = append(result, flattenBQFields(f.Fields, name)...)
 		}
 	}
-	return result, nil
-}
-
-func protoToSchemaJSON(fields []*hubv1.Field) (string, error) {
-	bqFields, err := protoToBQFields(fields, []string{})
-	if err != nil {
-		return "", err
-	}
-	bytes, err := json.MarshalIndent(bqFields, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(bytes), nil
+	return result
 }
