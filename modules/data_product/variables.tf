@@ -346,6 +346,86 @@ variable "runner_service_accounts" {
   default     = []
 }
 
+variable "enable_pam_entitlements" {
+  description = "Whether to provision GCP Privileged Access Manager (PAM) JIT entitlements for sensitive, reidentified, or role-restricted output ports."
+  type        = bool
+  default     = true
+}
+
+variable "pam_location" {
+  description = "GCP PAM location ('global' or a regional identifier such as 'us-central1')."
+  type        = string
+  default     = "global"
+  validation {
+    condition     = can(regex("^(global|[a-z]+-[a-z]+[0-9]+)$", var.pam_location))
+    error_message = "pam_location must be 'global' or a valid GCP region identifier matching ^(global|[a-z]+-[a-z]+[0-9]+)$."
+  }
+}
+
+variable "pam_max_request_duration" {
+  description = "Maximum GCP PAM grant duration in seconds (bounded between 900s and 3600s)."
+  type        = string
+  default     = "3600s"
+  validation {
+    condition     = can(regex("^[0-9]+s$", var.pam_max_request_duration)) && tonumber(trimsuffix(var.pam_max_request_duration, "s")) >= 900 && tonumber(trimsuffix(var.pam_max_request_duration, "s")) <= 3600
+    error_message = "pam_max_request_duration must be an integer seconds string between 900s and 3600s (inclusive)."
+  }
+}
+
+variable "pam_eligible_consumers" {
+  description = "List of IAM principals (user:, group:, serviceAccount:, domain:) eligible to request PAM JIT access to sensitive data product output ports."
+  type        = list(string)
+  default     = []
+  validation {
+    condition = alltrue([
+      for m in var.pam_eligible_consumers : can(regex("^(user|group|serviceAccount|domain):.+$", trimspace(m)))
+    ])
+    error_message = "Every entry in pam_eligible_consumers must start with user:, group:, serviceAccount:, or domain:."
+  }
+}
+
+variable "pam_approvers" {
+  description = "List of IAM principals (user:, group:, serviceAccount:, domain:) authorized to approve PAM JIT access requests."
+  type        = list(string)
+  default     = []
+  validation {
+    condition = alltrue([
+      for m in var.pam_approvers : can(regex("^(user|group|serviceAccount|domain):.+$", trimspace(m)))
+    ])
+    error_message = "Every entry in pam_approvers must start with user:, group:, serviceAccount:, or domain:."
+  }
+}
+
+variable "enable_reidentified_kms_pam" {
+  description = "Whether to include roles/cloudkms.cryptoKeyDecrypter on var.master_key_uri inside PAM JIT entitlements for reidentified ports (opt-in for direct-decrypt BigQuery/CMEK deployments)."
+  type        = bool
+  default     = false
+}
+
+variable "conditional_consumer_grants" {
+  description = "Map of time-bounded conditional IAM grants applied to compiled public BigQuery output views with request.time < timestamp(expiration)."
+  type = map(object({
+    members    = list(string)
+    expiration = string
+    role       = optional(string, "roles/bigquery.dataViewer")
+  }))
+  default = {}
+  validation {
+    condition = alltrue([
+      for k, g in var.conditional_consumer_grants : (
+        can(regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$", g.expiration)) &&
+        can(formatdate("", g.expiration)) &&
+        contains(["roles/bigquery.dataViewer", "roles/bigquery.metadataViewer"], coalesce(g.role, "roles/bigquery.dataViewer")) &&
+        length(g.members) > 0 &&
+        alltrue([
+          for m in g.members : can(regex("^(user|group|serviceAccount|domain):.+$", trimspace(m)))
+        ])
+      )
+    ])
+    error_message = "Each conditional_consumer_grants entry requires an RFC3339 expiration timestamp, an allowed role (roles/bigquery.dataViewer or roles/bigquery.metadataViewer), and non-empty members prefixed with user:, group:, serviceAccount:, or domain:."
+  }
+}
+
 
 
 

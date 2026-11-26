@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	hubv1 "github.com/supercargo-dev/core/gen/go/hub/v1"
+	"github.com/supercargo-dev/core/pkg/validation"
 	"google.golang.org/protobuf/encoding/protojson"
 	"gopkg.in/yaml.v3"
 )
@@ -1078,12 +1079,32 @@ func normalizeBQMode(m string) string {
 
 // CompiledOutputPort represents a compiled public output view and its associated contract metadata.
 type CompiledOutputPort struct {
-	Name            string `json:"name"`
-	URN             string `json:"urn"`
-	Lens            string `json:"lens"`
-	Materialization string `json:"materialization"`
-	ViewQuery       string `json:"view_query"`
-	ViewSQL         string `json:"view_sql"`
+	Name                string   `json:"name"`
+	URN                 string   `json:"urn"`
+	Lens                string   `json:"lens"`
+	Materialization     string   `json:"materialization"`
+	ViewQuery           string   `json:"view_query"`
+	ViewSQL             string   `json:"view_sql"`
+	Sensitivity         string   `json:"sensitivity,omitempty"`
+	AuthorizedRoles     []string `json:"authorized_roles,omitempty"`
+	FirstLevelApprovers []string `json:"first_level_approvers,omitempty"`
+}
+
+// CompiledPAMEntitlement represents deterministic plan-time GCP PAM entitlement
+// and Terms of Use metadata compiled from lockfile ODPS and ODCS contracts.
+type CompiledPAMEntitlement struct {
+	EntitlementID       string   `json:"entitlement_id"`
+	PortName            string   `json:"port_name"`
+	PortURN             string   `json:"port_urn"`
+	Lens                string   `json:"lens"`
+	Sensitivity         string   `json:"sensitivity"`
+	AuthorizedRoles     []string `json:"authorized_roles"`
+	FirstLevelApprovers []string `json:"first_level_approvers"`
+	RequiresPAM         bool     `json:"requires_pam"`
+	RequiresKMSDecrypt  bool     `json:"requires_kms_decrypt"`
+	TermsPurpose        string   `json:"terms_purpose"`
+	TermsUsage          string   `json:"terms_usage"`
+	TermsLimitations    string   `json:"terms_limitations"`
 }
 
 // CompiledInputPort represents a compiled boundary input landing table and its physical schema.
@@ -1171,6 +1192,312 @@ func DiscoverLockDir(manifestPath, productSlug, explicitLockDir string) (string,
 	return "", false, nil
 }
 
+type odpsOutputPort struct {
+	Name            string `yaml:"name"`
+	Lens            string `yaml:"lens"`
+	Materialization string `yaml:"materialization"`
+	ContractURN     string `yaml:"contract_urn"`
+	ContractURNCam  string `yaml:"contractUrn"`
+}
+
+func (p *odpsOutputPort) effectiveContractURN() string {
+	if strings.TrimSpace(p.ContractURNCam) != "" {
+		return strings.TrimSpace(p.ContractURNCam)
+	}
+	return strings.TrimSpace(p.ContractURN)
+}
+
+func readODPSOutputPorts(lockDir string) (string, []odpsOutputPort, map[string]odpsOutputPort) {
+	type odpsDoc struct {
+		ID             string           `yaml:"id"`
+		OutputPorts    []odpsOutputPort `yaml:"output_ports"`
+		OutputPortsCam []odpsOutputPort `yaml:"outputPorts"`
+	}
+
+	byName := make(map[string]odpsOutputPort)
+	var ordered []odpsOutputPort
+	var productSlug string
+
+	odpsPath := filepath.Join(lockDir, "dataproduct.odps.yaml")
+	data, err := os.ReadFile(odpsPath)
+	if err != nil {
+		return "", nil, byName
+	}
+	var doc odpsDoc
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return "", nil, byName
+	}
+	if doc.ID != "" {
+		slug := doc.ID
+		if idx := strings.LastIndex(doc.ID, ":"); idx >= 0 && idx < len(doc.ID)-1 {
+			slug = doc.ID[idx+1:]
+		}
+		productSlug = strings.TrimSpace(slug)
+	}
+
+	all := make([]odpsOutputPort, 0, len(doc.OutputPortsCam)+len(doc.OutputPorts))
+	all = append(all, doc.OutputPortsCam...)
+	all = append(all, doc.OutputPorts...)
+	for _, p := range all {
+		p.Name = strings.TrimSpace(p.Name)
+		if p.Name == "" {
+			continue
+		}
+		if _, exists := byName[p.Name]; !exists {
+			byName[p.Name] = p
+			ordered = append(ordered, p)
+		}
+	}
+	return productSlug, ordered, byName
+}
+
+type odcsTermsDescription struct {
+	Purpose     string `yaml:"purpose"`
+	Usage       string `yaml:"usage"`
+	Limitations string `yaml:"limitations"`
+}
+
+func (d *odcsTermsDescription) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		if value.Tag == "!!null" {
+			*d = odcsTermsDescription{}
+			return nil
+		}
+		var s string
+		if err := value.Decode(&s); err != nil {
+			return err
+		}
+		d.Purpose = s
+		return nil
+	}
+	type rawDesc odcsTermsDescription
+	var raw rawDesc
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+	*d = odcsTermsDescription(raw)
+	return nil
+}
+
+type compiledContractMeta struct {
+	PortName            string
+	URN                 string
+	Lens                string
+	Sensitivity         string
+	AuthorizedRoles     []string
+	FirstLevelApprovers []string
+	TermsPurpose        string
+	TermsUsage          string
+	TermsLimitations    string
+}
+
+func hasIAMPrincipalPrefix(raw string) bool {
+	lower := strings.ToLower(strings.TrimSpace(raw))
+	return strings.HasPrefix(lower, "user:") ||
+		strings.HasPrefix(lower, "group:") ||
+		strings.HasPrefix(lower, "serviceaccount:") ||
+		strings.HasPrefix(lower, "domain:")
+}
+
+func normalizeSensitivityTier(raw string) (string, int) {
+	norm := strings.ToUpper(strings.TrimSpace(raw))
+	norm = strings.TrimPrefix(norm, "SENSITIVITY_LEVEL_")
+	switch norm {
+	case "PUBLIC":
+		return "PUBLIC", 1
+	case "INTERNAL":
+		return "INTERNAL", 2
+	case "CONFIDENTIAL":
+		return "CONFIDENTIAL", 3
+	case "RESTRICTED":
+		return "RESTRICTED", 4
+	default:
+		return "", 0
+	}
+}
+
+func parseCompiledContractMeta(data []byte, filePortName string, rejectBilateralIAM bool) (compiledContractMeta, error) {
+	type odcsProperty struct {
+		Classification string         `yaml:"classification"`
+		Tags           []string       `yaml:"tags"`
+		Properties     []odcsProperty `yaml:"properties"`
+	}
+	type odcsSchemaObj struct {
+		Properties []odcsProperty `yaml:"properties"`
+	}
+	type odcsRole struct {
+		Role                string `yaml:"role"`
+		Access              string `yaml:"access"`
+		FirstLevelApprovers string `yaml:"firstLevelApprovers"`
+	}
+	type odcsServer struct {
+		Roles []odcsRole `yaml:"roles"`
+	}
+	type odcsCustomProp struct {
+		Property string `yaml:"property"`
+		Value    any    `yaml:"value"`
+	}
+	type rawODCS struct {
+		ID          string               `yaml:"id"`
+		Name        string               `yaml:"name"`
+		Description odcsTermsDescription `yaml:"description"`
+		TermsOfUse  odcsTermsDescription `yaml:"terms_of_use"`
+		Meta        struct {
+			URN    string            `yaml:"urn"`
+			ID     string            `yaml:"id"`
+			Labels map[string]string `yaml:"labels"`
+		} `yaml:"meta"`
+		Roles            []odcsRole       `yaml:"roles"`
+		Servers          []odcsServer     `yaml:"servers"`
+		CustomProperties []odcsCustomProp `yaml:"customProperties"`
+		Schema           []odcsSchemaObj  `yaml:"schema"`
+	}
+
+	var doc rawODCS
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return compiledContractMeta{}, fmt.Errorf("parsing ODCS contract YAML: %s", ScrubBearerTokens(err.Error()))
+	}
+
+	urn := strings.TrimSpace(doc.ID)
+	if urn == "" {
+		urn = strings.TrimSpace(doc.Meta.URN)
+	}
+	if urn == "" {
+		urn = strings.TrimSpace(doc.Meta.ID)
+	}
+
+	portName := strings.TrimSpace(doc.Name)
+	if portName == "" {
+		portName = strings.TrimSpace(filePortName)
+	}
+
+	maxSens := ""
+	maxRank := 0
+	considerSens := func(raw string) {
+		if tier, rank := normalizeSensitivityTier(raw); rank > maxRank {
+			maxSens = tier
+			maxRank = rank
+		}
+	}
+
+	lens := ""
+	for _, cp := range doc.CustomProperties {
+		prop := strings.ToLower(strings.TrimSpace(cp.Property))
+		valStr := strings.TrimSpace(fmt.Sprint(cp.Value))
+		if cp.Value == nil {
+			valStr = ""
+		}
+		switch prop {
+		case "x-sc-sensitivity", "supercargo.sensitivity", "sensitivity":
+			considerSens(valStr)
+		case "x-sc-lens", "supercargo.lens", "lens":
+			if lens == "" && valStr != "" {
+				lens = strings.ToLower(valStr)
+			}
+		}
+	}
+	for _, k := range []string{"x-sc-sensitivity", "supercargo.sensitivity", "sensitivity"} {
+		considerSens(doc.Meta.Labels[k])
+	}
+	for _, k := range []string{"x-sc-lens", "supercargo.lens", "lens"} {
+		if lens == "" && strings.TrimSpace(doc.Meta.Labels[k]) != "" {
+			lens = strings.ToLower(strings.TrimSpace(doc.Meta.Labels[k]))
+		}
+	}
+
+	var walkProps func([]odcsProperty)
+	walkProps = func(props []odcsProperty) {
+		for _, p := range props {
+			considerSens(p.Classification)
+			for _, tag := range p.Tags {
+				if strings.EqualFold(strings.TrimSpace(tag), "pii:true") {
+					considerSens("CONFIDENTIAL")
+				}
+			}
+			if len(p.Properties) > 0 {
+				walkProps(p.Properties)
+			}
+		}
+	}
+	for _, obj := range doc.Schema {
+		walkProps(obj.Properties)
+	}
+
+	rolesCap := len(doc.Roles)
+	for _, srv := range doc.Servers {
+		rolesCap += len(srv.Roles)
+	}
+	rolesInput := make([]odcsRole, 0, rolesCap)
+	rolesInput = append(rolesInput, doc.Roles...)
+	for _, srv := range doc.Servers {
+		if len(srv.Roles) > 0 {
+			rolesInput = append(rolesInput, srv.Roles...)
+		}
+	}
+
+	roleSet := make(map[string]struct{}, len(rolesInput))
+	approverSet := make(map[string]struct{}, len(rolesInput))
+	for _, r := range rolesInput {
+		roleVal := strings.TrimSpace(r.Role)
+		if roleVal != "" {
+			if hasIAMPrincipalPrefix(roleVal) {
+				if rejectBilateralIAM {
+					return compiledContractMeta{}, fmt.Errorf("[E_BILATERAL_GRANT_PROHIBITED] bilateral IAM principal %q is prohibited in ODCS roles[] for port %q", ScrubBearerTokens(roleVal), ScrubBearerTokens(portName))
+				}
+			} else {
+				roleSet[roleVal] = struct{}{}
+			}
+		}
+		appVal := strings.TrimSpace(r.FirstLevelApprovers)
+		if appVal != "" {
+			if hasIAMPrincipalPrefix(appVal) {
+				if rejectBilateralIAM {
+					return compiledContractMeta{}, fmt.Errorf("[E_BILATERAL_GRANT_PROHIBITED] bilateral IAM principal %q is prohibited in ODCS firstLevelApprovers for port %q", ScrubBearerTokens(appVal), ScrubBearerTokens(portName))
+				}
+			} else {
+				approverSet[appVal] = struct{}{}
+			}
+		}
+	}
+
+	authorizedRoles := make([]string, 0, len(roleSet))
+	for r := range roleSet {
+		authorizedRoles = append(authorizedRoles, r)
+	}
+	sort.Strings(authorizedRoles)
+
+	firstLevelApprovers := make([]string, 0, len(approverSet))
+	for a := range approverSet {
+		firstLevelApprovers = append(firstLevelApprovers, a)
+	}
+	sort.Strings(firstLevelApprovers)
+
+	purpose := strings.TrimSpace(doc.Description.Purpose)
+	if purpose == "" {
+		purpose = strings.TrimSpace(doc.TermsOfUse.Purpose)
+	}
+	usage := strings.TrimSpace(doc.Description.Usage)
+	if usage == "" {
+		usage = strings.TrimSpace(doc.TermsOfUse.Usage)
+	}
+	limitations := strings.TrimSpace(doc.Description.Limitations)
+	if limitations == "" {
+		limitations = strings.TrimSpace(doc.TermsOfUse.Limitations)
+	}
+
+	return compiledContractMeta{
+		PortName:            portName,
+		URN:                 urn,
+		Lens:                lens,
+		Sensitivity:         maxSens,
+		AuthorizedRoles:     authorizedRoles,
+		FirstLevelApprovers: firstLevelApprovers,
+		TermsPurpose:        purpose,
+		TermsUsage:          usage,
+		TermsLimitations:    limitations,
+	}, nil
+}
+
 // LoadCompiledOutputs reads compiled view SQL files and ODCS contracts from the lock directory.
 func LoadCompiledOutputs(lockDir, productSlug string) (map[string]*CompiledOutputPort, error) {
 	viewsDir := filepath.Join(lockDir, "views")
@@ -1178,29 +1505,10 @@ func LoadCompiledOutputs(lockDir, productSlug string) (map[string]*CompiledOutpu
 		return make(map[string]*CompiledOutputPort), nil
 	}
 
-	type odpsPort struct {
-		Name            string `yaml:"name"`
-		Lens            string `yaml:"lens"`
-		Materialization string `yaml:"materialization"`
-	}
-	type odpsDoc struct {
-		ID          string     `yaml:"id"`
-		OutputPorts []odpsPort `yaml:"output_ports"`
-	}
-
-	odpsPorts := make(map[string]odpsPort)
-	odpsPath := filepath.Join(lockDir, "dataproduct.odps.yaml")
-	if data, err := os.ReadFile(odpsPath); err == nil {
-		var doc odpsDoc
-		if err := yaml.Unmarshal(data, &doc); err == nil {
-			for _, p := range doc.OutputPorts {
-				odpsPorts[p.Name] = p
-			}
-		}
-	}
+	_, _, odpsPorts := readODPSOutputPorts(lockDir)
 
 	contractsDir := filepath.Join(lockDir, "contracts")
-	contractURNs := make(map[string]string)
+	contractMetas := make(map[string]compiledContractMeta)
 	if entries, err := os.ReadDir(contractsDir); err == nil {
 		for _, e := range entries {
 			if e.IsDir() {
@@ -1211,24 +1519,8 @@ func LoadCompiledOutputs(lockDir, productSlug string) (map[string]*CompiledOutpu
 				portName := strings.TrimSuffix(strings.TrimSuffix(name, ".odcs.yaml"), ".yaml")
 				cData, err := os.ReadFile(filepath.Join(contractsDir, name))
 				if err == nil {
-					var raw struct {
-						ID   string `yaml:"id"`
-						Meta struct {
-							URN string `yaml:"urn"`
-							ID  string `yaml:"id"`
-						} `yaml:"meta"`
-					}
-					if err := yaml.Unmarshal(cData, &raw); err == nil {
-						urn := raw.ID
-						if urn == "" {
-							urn = raw.Meta.URN
-						}
-						if urn == "" {
-							urn = raw.Meta.ID
-						}
-						if urn != "" {
-							contractURNs[portName] = urn
-						}
+					if meta, err := parseCompiledContractMeta(cData, portName, false); err == nil {
+						contractMetas[portName] = meta
 					}
 				}
 			}
@@ -1257,19 +1549,27 @@ func LoadCompiledOutputs(lockDir, productSlug string) (map[string]*CompiledOutpu
 
 		lens := ""
 		mat := "view"
+		urn := ""
 		if op, ok := odpsPorts[portName]; ok {
 			lens = op.Lens
 			if op.Materialization != "" {
 				mat = op.Materialization
 			}
+			urn = op.effectiveContractURN()
+		}
+
+		meta := contractMetas[portName]
+		if urn == "" {
+			urn = meta.URN
+		}
+		if urn == "" {
+			urn = fmt.Sprintf("urn:supercargo:hub:contract:%s-%s:v1", productSlug, portName)
+		}
+		if lens == "" {
+			lens = meta.Lens
 		}
 		if lens == "" {
 			lens = inferLensFromName(portName)
-		}
-
-		urn := contractURNs[portName]
-		if urn == "" {
-			urn = fmt.Sprintf("urn:supercargo:hub:contract:%s-%s:v1", productSlug, portName)
 		}
 
 		mapKey := urn
@@ -1278,16 +1578,162 @@ func LoadCompiledOutputs(lockDir, productSlug string) (map[string]*CompiledOutpu
 		}
 
 		outputs[mapKey] = &CompiledOutputPort{
-			Name:            portName,
-			URN:             urn,
-			Lens:            lens,
-			Materialization: mat,
-			ViewQuery:       viewQuery,
-			ViewSQL:         viewSQL,
+			Name:                portName,
+			URN:                 urn,
+			Lens:                lens,
+			Materialization:     mat,
+			ViewQuery:           viewQuery,
+			ViewSQL:             viewSQL,
+			Sensitivity:         meta.Sensitivity,
+			AuthorizedRoles:     meta.AuthorizedRoles,
+			FirstLevelApprovers: meta.FirstLevelApprovers,
 		}
 	}
 
 	return outputs, nil
+}
+
+// LoadCompiledPAMEntitlements reads dataproduct.odps.yaml and contracts/*.odcs.yaml
+// directly from lockDir so both view-backed AND transform-backed outputs (without views/*.sql)
+// produce deterministic plan-time PAM entitlement metadata keyed by port slug.
+func LoadCompiledPAMEntitlements(lockDir, productSlug string) (map[string]CompiledPAMEntitlement, error) {
+	if strings.TrimSpace(lockDir) == "" {
+		return make(map[string]CompiledPAMEntitlement), nil
+	}
+	if fi, err := os.Stat(lockDir); err != nil || !fi.IsDir() {
+		return make(map[string]CompiledPAMEntitlement), nil
+	}
+
+	odpsSlug, odpsOrdered, _ := readODPSOutputPorts(lockDir)
+	effectiveSlug := strings.TrimSpace(productSlug)
+	if effectiveSlug == "" {
+		effectiveSlug = odpsSlug
+	}
+
+	contractsDir := filepath.Join(lockDir, "contracts")
+	contractsByPort := make(map[string]compiledContractMeta)
+	contractsByURN := make(map[string]compiledContractMeta)
+	var contractOrder []string
+
+	if entries, err := os.ReadDir(contractsDir); err == nil {
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].Name() < entries[j].Name()
+		})
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			if !strings.HasSuffix(name, ".odcs.yaml") && !strings.HasSuffix(name, ".yaml") {
+				continue
+			}
+			filePortName := strings.TrimSuffix(strings.TrimSuffix(name, ".odcs.yaml"), ".yaml")
+			cData, err := os.ReadFile(filepath.Join(contractsDir, name))
+			if err != nil {
+				return nil, fmt.Errorf("reading contract file %q: %s", ScrubBearerTokens(filepath.Join(contractsDir, name)), ScrubBearerTokens(err.Error()))
+			}
+			meta, err := parseCompiledContractMeta(cData, filePortName, true)
+			if err != nil {
+				return nil, errors.New(ScrubBearerTokens(err.Error()))
+			}
+			contractsByPort[filePortName] = meta
+			if meta.PortName != "" && meta.PortName != filePortName {
+				contractsByPort[meta.PortName] = meta
+			}
+			if meta.URN != "" {
+				contractsByURN[meta.URN] = meta
+			}
+			contractOrder = append(contractOrder, filePortName)
+		}
+	}
+
+	entitlements := make(map[string]CompiledPAMEntitlement, len(odpsOrdered)+len(contractOrder))
+	matchedPorts := make(map[string]bool, len(odpsOrdered)+len(contractOrder))
+	matchedURNs := make(map[string]bool, len(odpsOrdered)+len(contractOrder))
+
+	buildEntry := func(portName, odpsLens, odpsURN string, meta compiledContractMeta) CompiledPAMEntitlement {
+		urn := strings.TrimSpace(odpsURN)
+		if urn == "" {
+			urn = meta.URN
+		}
+		if urn == "" && effectiveSlug != "" {
+			urn = fmt.Sprintf("urn:supercargo:hub:contract:%s-%s:v1", effectiveSlug, portName)
+		}
+
+		lens := strings.ToLower(strings.TrimSpace(odpsLens))
+		if lens == "" {
+			lens = strings.ToLower(strings.TrimSpace(meta.Lens))
+		}
+		if lens == "" && strings.HasSuffix(strings.ToLower(portName), "_reidentified") {
+			lens = "reidentified"
+		}
+
+		roles := meta.AuthorizedRoles
+		if roles == nil {
+			roles = []string{}
+		}
+		approvers := meta.FirstLevelApprovers
+		if approvers == nil {
+			approvers = []string{}
+		}
+
+		sensitivity := meta.Sensitivity
+		requiresKMS := lens == "reidentified"
+		requiresPAM := requiresKMS || sensitivity == "CONFIDENTIAL" || sensitivity == "RESTRICTED" || len(roles) > 0
+
+		entitlementID := validation.SanitizePAMIdentifier("sc-" + effectiveSlug + "-" + portName)
+
+		return CompiledPAMEntitlement{
+			EntitlementID:       entitlementID,
+			PortName:            portName,
+			PortURN:             urn,
+			Lens:                lens,
+			Sensitivity:         sensitivity,
+			AuthorizedRoles:     roles,
+			FirstLevelApprovers: approvers,
+			RequiresPAM:         requiresPAM,
+			RequiresKMSDecrypt:  requiresKMS,
+			TermsPurpose:        meta.TermsPurpose,
+			TermsUsage:          meta.TermsUsage,
+			TermsLimitations:    meta.TermsLimitations,
+		}
+	}
+
+	for _, op := range odpsOrdered {
+		opURN := op.effectiveContractURN()
+		meta, ok := contractsByPort[op.Name]
+		if !ok && opURN != "" {
+			meta, ok = contractsByURN[opURN]
+		}
+		entry := buildEntry(op.Name, op.Lens, opURN, meta)
+		entitlements[op.Name] = entry
+		matchedPorts[op.Name] = true
+		if entry.PortURN != "" {
+			matchedURNs[entry.PortURN] = true
+		}
+	}
+
+	for _, filePortName := range contractOrder {
+		meta := contractsByPort[filePortName]
+		portName := meta.PortName
+		if portName == "" {
+			portName = filePortName
+		}
+		if matchedPorts[portName] || matchedPorts[filePortName] {
+			continue
+		}
+		if meta.URN != "" && matchedURNs[meta.URN] {
+			continue
+		}
+		entry := buildEntry(portName, "", "", meta)
+		entitlements[portName] = entry
+		matchedPorts[portName] = true
+		if entry.PortURN != "" {
+			matchedURNs[entry.PortURN] = true
+		}
+	}
+
+	return entitlements, nil
 }
 
 func inferLensFromName(name string) string {

@@ -42,6 +42,8 @@ module "vault" {
 | `crypto_key_name` | `string` | `"supercargo-vault-master-key"` | no | The name of the Cloud KMS CryptoKey for the Vault master key. Defaults to 'supercargo-vault-master-key'. |
 | `custom_audiences` | `list(string)` | `[]` | no | List of custom audiences to accept for OIDC |
 | `enable_monitoring` | `bool` | `true` | no | Whether to enable Cloud Monitoring alerts for Vault |
+| `enable_search_hash_pam` | `bool` | `false` | no | Whether to provision a GCP PAM JIT entitlement for Vault SearchHash operations. |
+| `enforce_search_justification` | `bool` | `true` | no | Whether Vault SearchHash requires an explicit ticket_id justification on every request. |
 | `force_deploy_trigger` | `string` | `"static"` | no | A value that, when changed, triggers a new Cloud Run revision (e.g. git SHA or image digest). Use 'latest' or a fixed value for idempotency. |
 | `gateway_service_account_email` | `string` | *required* | no | The service account email of the Ingestion Gateway |
 | `image` | `string` | *required* | no | The container image to deploy |
@@ -54,6 +56,11 @@ module "vault" {
 | `project_id` | `string` | *required* | no | The GCP project ID |
 | `project_number` | `string` | *required* | no | The GCP Project Number |
 | `region` | `string` | `"europe-west1"` | no | The GCP region |
+| `search_hash_allowed_roles` | `list(string)` | `[]` | no | Optional list of Vault RBAC roles/principals permitted to call SearchHash (when empty, Vault defaults to privacyOfficer/complianceAuditor). |
+| `search_hash_pam_approvers` | `list(string)` | `[]` | no | List of IAM principals (user:, group:, serviceAccount:, domain:) authorized to approve Vault SearchHash PAM JIT requests. |
+| `search_hash_pam_location` | `string` | `"global"` | no | GCP PAM location ('global' or a regional identifier such as 'us-central1') for the Vault SearchHash entitlement. |
+| `search_hash_pam_max_duration` | `string` | `"3600s"` | no | Maximum GCP PAM grant duration in seconds (bounded between 900s and 3600s) for Vault SearchHash. |
+| `search_hash_pam_requesters` | `list(string)` | `[]` | no | List of IAM principals (user:, group:, serviceAccount:, domain:) eligible to request PAM JIT access for Vault SearchHash. |
 | `service_name` | `string` | `"vault"` | no | The name of the Cloud Run service |
 | `sla_tier` | `string` | `"TIER_1"` | no | The SLA tier (TIER_1, TIER_2, TIER_3) |
 | `telemetry_identity_salt` | `string` | `"supercargo-default-salt"` | no | Identity salt for vault operational telemetry hashing |
@@ -64,6 +71,9 @@ module "vault" {
 | Output | Sensitive | Description |
 | :--- | :--- | :--- |
 | `master_key_id` | no | - |
+| `search_hash_pam_console_url` | no | GCP Console PAM entitlement deep-link for Vault SearchHash JIT access (null when disabled) |
+| `search_hash_pam_entitlement_id` | no | Provisioned GCP PAM entitlement ID for Vault SearchHash JIT access (null when disabled) |
+| `search_hash_pam_gcloud_command` | no | Ready-to-run gcloud beta pam grants create command for Vault SearchHash JIT access (null when disabled) |
 | `service_account_email` | no | - |
 | `service_name` | no | - |
 | `service_url` | no | - |

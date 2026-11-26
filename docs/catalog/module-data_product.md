@@ -57,6 +57,7 @@ module "data_product" {
 | `authorized_invokers` | `list(string)` | `[]` | no | List of IAM members authorized to invoke the gateway |
 | `bigquery_dataset_id` | `string` | `""` | no | The BigQuery dataset ID where the table should be created |
 | `bigquery_deletion_protection` | `bool` | `true` | no | Whether to enable deletion protection on BigQuery tables |
+| `conditional_consumer_grants` | `map(object({ members = list(string) expiration = string role = optional(string, "roles/bigquery.dataViewer") }))` | `{}` | no | Map of time-bounded conditional IAM grants applied to compiled public BigQuery output views with request.time < timestamp(expiration). |
 | `container_cpu` | `string` | `"1"` | no | The CPU limit for the container. |
 | `container_memory` | `string` | `"512Mi"` | no | The memory limit for the container. |
 | `contracts` | `map(object({ version = string schema_json = string commit_sha = string content_hash = string }))` | `{}` | no | Map of contracts to register and provision |
@@ -77,6 +78,8 @@ module "data_product" {
 | `enable_dlq_alerts` | `bool` | `true` | no | Whether to enable Cloud Monitoring alert policies for DLQ |
 | `enable_infrastructure_alerts` | `bool` | `true` | no | Whether to provision Cloud Monitoring alert policies for Cloud Run, Pub/Sub, DLT jobs, and BigQuery sinks |
 | `enable_monitoring_dashboard` | `bool` | `true` | no | Whether to provision the turnkey Cloud Monitoring Dashboard for this data product |
+| `enable_pam_entitlements` | `bool` | `true` | no | Whether to provision GCP Privileged Access Manager (PAM) JIT entitlements for sensitive, reidentified, or role-restricted output ports. |
+| `enable_reidentified_kms_pam` | `bool` | `false` | no | Whether to include roles/cloudkms.cryptoKeyDecrypter on var.master_key_uri inside PAM JIT entitlements for reidentified ports (opt-in for direct-decrypt BigQuery/CMEK deployments). |
 | `force_deploy_trigger` | `string` | `"static"` | no | A value that, when changed, triggers a new Cloud Run revision (e.g. git SHA or image digest). Use 'latest' or a fixed value for idempotency. |
 | `gateway_audience` | `string` | `""` | no | - |
 | `hub_address` | `string` | *required* | no | The address of the Hub service |
@@ -90,6 +93,10 @@ module "data_product" {
 | `master_key_uri` | `string` | *required* | no | The URI of the Master Key in GCP KMS |
 | `max_instances` | `number` | `3` | no | The maximum number of instances for the Gateway service |
 | `name_suffix` | `string` | `""` | no | Optional deterministic suffix appended to resource names for environment/branch disambiguation. Defaults to empty. |
+| `pam_approvers` | `list(string)` | `[]` | no | List of IAM principals (user:, group:, serviceAccount:, domain:) authorized to approve PAM JIT access requests. |
+| `pam_eligible_consumers` | `list(string)` | `[]` | no | List of IAM principals (user:, group:, serviceAccount:, domain:) eligible to request PAM JIT access to sensitive data product output ports. |
+| `pam_location` | `string` | `"global"` | no | GCP PAM location ('global' or a regional identifier such as 'us-central1'). |
+| `pam_max_request_duration` | `string` | `"3600s"` | no | Maximum GCP PAM grant duration in seconds (bounded between 900s and 3600s). |
 | `project_id` | `string` | *required* | no | The GCP project ID |
 | `pubsub_expiration_policy_ttl` | `string` | `"1209600s"` | no | The TTL for idle subscriptions to auto-delete. |
 | `pubsub_max_delivery_attempts` | `number` | `5` | no | The maximum number of delivery attempts for a message. |
@@ -128,6 +135,9 @@ module "data_product" {
 | `internal_dataset_id` | no | The dataset ID of the private internal BigQuery dataset |
 | `landing_table_ids` | no | Map of boundary input landing port names to their BigQuery table IDs |
 | `managed_input_topics` | no | Map of managed input port names to their created Pub/Sub topic IDs |
+| `pam_console_urls` | no | Map of output port slugs to GCP Console PAM entitlement deep-links |
+| `pam_entitlement_ids` | no | Map of output port slugs to provisioned GCP PAM entitlement IDs |
+| `pam_gcloud_commands` | no | Map of output port slugs to ready-to-run gcloud beta pam grants create commands |
 | `product_urn` | no | The URN of the registered Data Product |
 | `public_dataset_id` | no | The dataset ID of the public BigQuery dataset |
 | `push_invoker_service_account_email` | no | The email of the Pub/Sub Push Invoker Service Account |

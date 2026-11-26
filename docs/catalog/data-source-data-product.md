@@ -35,12 +35,28 @@ Retrieves metadata, BigQuery physical configuration, service identities, SLA, an
 | `lock_dir` | `string` | no | yes | yes | no | Optional explicit path to the compiled .supercargo/lock directory. If omitted, auto-discovered. |
 | `manifest_file` | `string` | no | yes | no | no | Path to the local product.yaml manifest file. |
 | `outputs` | `map(object)` | no | no | yes | no | Map of compiled output views keyed by contract URN or port name. |
+| `outputs.*.authorized_roles` | `list(string)` | no | no | yes | no | Producer-declared governance roles authorized to access this output port. |
+| `outputs.*.first_level_approvers` | `list(string)` | no | no | yes | no | Producer governance approver team names from ODCS roles[].firstLevelApprovers. |
 | `outputs.*.lens` | `string` | no | no | yes | no | Relational lens applied (e.g. replica, event_log, scd2, cdc, reidentified). |
 | `outputs.*.materialization` | `string` | no | no | yes | no | Materialization type (view or table). |
 | `outputs.*.name` | `string` | no | no | yes | no | Output port name. |
+| `outputs.*.sensitivity` | `string` | no | no | yes | no | Resolved maximum sensitivity tier (PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED). |
 | `outputs.*.urn` | `string` | no | no | yes | no | Output contract URN. |
 | `outputs.*.view_query` | `string` | no | no | yes | no | Unwrapped GoogleSQL query body for authorized view definition. |
 | `outputs.*.view_sql` | `string` | no | no | yes | no | Full GoogleSQL CREATE VIEW DDL statement. |
+| `pam_entitlements` | `map(object)` | no | no | yes | no | Deterministic plan-time GCP PAM entitlement metadata keyed by output port slug (includes both view-backed and transform-backed outputs). |
+| `pam_entitlements.*.authorized_roles` | `list(string)` | no | no | yes | no | Producer-declared governance roles. |
+| `pam_entitlements.*.entitlement_id` | `string` | no | no | yes | no | Sanitized GCP PAM entitlement ID matching core/pkg/validation.SanitizePAMIdentifier. |
+| `pam_entitlements.*.first_level_approvers` | `list(string)` | no | no | yes | no | Producer governance approver team names. |
+| `pam_entitlements.*.lens` | `string` | no | no | yes | no | Relational lens applied (if any). |
+| `pam_entitlements.*.port_name` | `string` | no | no | yes | no | Output port slug. |
+| `pam_entitlements.*.port_urn` | `string` | no | no | yes | no | Output contract URN. |
+| `pam_entitlements.*.requires_kms_decrypt` | `bool` | no | no | yes | no | True when lens == 'reidentified'. |
+| `pam_entitlements.*.requires_pam` | `bool` | no | no | yes | no | True when lens == 'reidentified', sensitivity is CONFIDENTIAL/RESTRICTED, or authorized_roles is non-empty. |
+| `pam_entitlements.*.sensitivity` | `string` | no | no | yes | no | Resolved maximum sensitivity tier. |
+| `pam_entitlements.*.terms_limitations` | `string` | no | no | yes | no | ODCS description.limitations / terms_of_use.limitations. |
+| `pam_entitlements.*.terms_purpose` | `string` | no | no | yes | no | ODCS description.purpose / terms_of_use.purpose. |
+| `pam_entitlements.*.terms_usage` | `string` | no | no | yes | no | ODCS description.usage / terms_of_use.usage. |
 | `partition_expiration_ms` | `int64` | no | no | yes | no | BigQuery partition expiration in milliseconds. |
 | `partitioning_field` | `string` | no | no | yes | no | BigQuery partitioning field resolved from the Data Product output ports. |
 | `project` | `string` | no | yes | yes | no | GCP Project ID override. |
