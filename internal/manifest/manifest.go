@@ -1355,7 +1355,7 @@ func parseCompiledContractMeta(data []byte, filePortName string, rejectBilateral
 
 	var doc rawODCS
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return compiledContractMeta{}, fmt.Errorf("parsing ODCS contract YAML: %w", err)
+		return compiledContractMeta{}, fmt.Errorf("parsing ODCS contract YAML: %s", ScrubBearerTokens(err.Error()))
 	}
 
 	urn := strings.TrimSpace(doc.ID)
@@ -1423,12 +1423,15 @@ func parseCompiledContractMeta(data []byte, filePortName string, rejectBilateral
 		walkProps(obj.Properties)
 	}
 
-	rolesInput := doc.Roles
-	if len(rolesInput) == 0 {
-		for _, srv := range doc.Servers {
-			if len(srv.Roles) > 0 {
-				rolesInput = append(rolesInput, srv.Roles...)
-			}
+	rolesCap := len(doc.Roles)
+	for _, srv := range doc.Servers {
+		rolesCap += len(srv.Roles)
+	}
+	rolesInput := make([]odcsRole, 0, rolesCap)
+	rolesInput = append(rolesInput, doc.Roles...)
+	for _, srv := range doc.Servers {
+		if len(srv.Roles) > 0 {
+			rolesInput = append(rolesInput, srv.Roles...)
 		}
 	}
 
@@ -1627,11 +1630,11 @@ func LoadCompiledPAMEntitlements(lockDir, productSlug string) (map[string]Compil
 			filePortName := strings.TrimSuffix(strings.TrimSuffix(name, ".odcs.yaml"), ".yaml")
 			cData, err := os.ReadFile(filepath.Join(contractsDir, name))
 			if err != nil {
-				return nil, fmt.Errorf("reading contract file %q: %w", filepath.Join(contractsDir, name), err)
+				return nil, fmt.Errorf("reading contract file %q: %s", ScrubBearerTokens(filepath.Join(contractsDir, name)), ScrubBearerTokens(err.Error()))
 			}
 			meta, err := parseCompiledContractMeta(cData, filePortName, true)
 			if err != nil {
-				return nil, err
+				return nil, errors.New(ScrubBearerTokens(err.Error()))
 			}
 			contractsByPort[filePortName] = meta
 			if meta.PortName != "" && meta.PortName != filePortName {

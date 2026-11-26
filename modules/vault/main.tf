@@ -1,5 +1,6 @@
 locals {
-  vault_audience = var.oidc_audience != "" ? var.oidc_audience : "supercargo-vault"
+  vault_audience                   = var.oidc_audience != "" ? var.oidc_audience : "supercargo-vault"
+  vault_search_hash_entitlement_id = replace(substr(replace(replace(lower("sc-vault-search-hash${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"), "/[^a-z0-9-]/", "-"), "/-+/", "-"), 0, 63), "/-+$/", "")
 }
 
 resource "google_project_service" "vault_apis" {
@@ -346,7 +347,7 @@ resource "google_privileged_access_manager_entitlement" "vault_search_hash_jit" 
 
   parent               = "projects/${var.project_id}"
   location             = var.search_hash_pam_location
-  entitlement_id       = substr(replace(lower("sc-vault-search-hash${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"), "_", "-"), 0, 63)
+  entitlement_id       = local.vault_search_hash_entitlement_id
   max_request_duration = var.search_hash_pam_max_duration
 
   requester_justification_config {
@@ -354,7 +355,7 @@ resource "google_privileged_access_manager_entitlement" "vault_search_hash_jit" 
   }
 
   eligible_users {
-    principals = var.search_hash_pam_requesters
+    principals = [for m in var.search_hash_pam_requesters : trimspace(m)]
   }
 
   privileged_access {
@@ -375,7 +376,7 @@ resource "google_privileged_access_manager_entitlement" "vault_search_hash_jit" 
       steps {
         approvals_needed = 1
         approvers {
-          principals = var.search_hash_pam_approvers
+          principals = [for m in var.search_hash_pam_approvers : trimspace(m)]
         }
       }
     }

@@ -9,11 +9,11 @@ locals {
   conditional_consumer_table_bindings_list = flatten([
     for grant_key, grant in var.conditional_consumer_grants : [
       for output_key, out in local.public_output_views : [
-        for member in grant.members : {
-          key        = "${grant_key}:${output_key}:${trimspace(member)}"
+        for member in distinct([for m in grant.members : trimspace(m)]) : {
+          key        = "${grant_key}:${output_key}:${member}"
           grant_key  = grant_key
           output_key = output_key
-          member     = trimspace(member)
+          member     = member
           role       = coalesce(grant.role, "roles/bigquery.dataViewer")
           expiration = grant.expiration
         }
@@ -40,7 +40,7 @@ resource "google_privileged_access_manager_entitlement" "port_jit" {
   }
 
   eligible_users {
-    principals = var.pam_eligible_consumers
+    principals = [for m in var.pam_eligible_consumers : trimspace(m)]
   }
 
   privileged_access {
@@ -50,7 +50,7 @@ resource "google_privileged_access_manager_entitlement" "port_jit" {
 
       role_bindings {
         role                 = "roles/bigquery.dataViewer"
-        condition_expression = "resource.name.startsWith(\"projects/${var.project_id}/datasets/${google_bigquery_dataset.public.dataset_id}\")"
+        condition_expression = "resource.name == \"projects/${var.project_id}/datasets/${google_bigquery_dataset.public.dataset_id}\" || resource.name.startsWith(\"projects/${var.project_id}/datasets/${google_bigquery_dataset.public.dataset_id}/\")"
       }
 
       dynamic "role_bindings" {
@@ -69,7 +69,7 @@ resource "google_privileged_access_manager_entitlement" "port_jit" {
       steps {
         approvals_needed = 1
         approvers {
-          principals = var.pam_approvers
+          principals = [for m in var.pam_approvers : trimspace(m)]
         }
       }
     }

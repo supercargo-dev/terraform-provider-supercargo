@@ -314,4 +314,43 @@ func TestLoadCompiledPAMEntitlements_ZeroBilateralIAMPrincipals(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("servers[].roles inspected for bilateral IAM even when top-level roles is non-empty", func(t *testing.T) {
+		t.Parallel()
+		lockDir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(lockDir, "contracts"), 0755))
+		require.NoError(t, os.WriteFile(filepath.Join(lockDir, "dataproduct.odps.yaml"), []byte("outputPorts:\n  - name: orders_reidentified\n"), 0644))
+		contractYAML := `id: urn:supercargo:hub:contract:orders-orders_reidentified:v1
+roles:
+  - role: fraud_analyst
+    firstLevelApprovers: risk-team
+servers:
+  - server: bigquery
+    roles:
+      - role: user:sneaky@example.com Bearer secret-srv-token
+        firstLevelApprovers: risk-team
+`
+		require.NoError(t, os.WriteFile(filepath.Join(lockDir, "contracts", "orders_reidentified.odcs.yaml"), []byte(contractYAML), 0644))
+
+		_, err := LoadCompiledPAMEntitlements(lockDir, "orders")
+		require.Error(t, err, "bilateral IAM principal in servers[].roles must fail closed even when doc.Roles is non-empty")
+		assert.Contains(t, err.Error(), "[E_BILATERAL_GRANT_PROHIBITED]")
+		assert.NotContains(t, err.Error(), "secret-srv-token")
+		assert.Contains(t, err.Error(), "Bearer [REDACTED]")
+	})
+
+	t.Run("malformed YAML unmarshal error scrubs bearer token", func(t *testing.T) {
+		t.Parallel()
+		lockDir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(lockDir, "contracts"), 0755))
+		require.NoError(t, os.WriteFile(filepath.Join(lockDir, "dataproduct.odps.yaml"), []byte("outputPorts:\n  - name: orders_reidentified\n"), 0644))
+		// Induce a yaml.TypeError with a scalar that cannot unmarshal into struct rawODCS, carrying a Bearer token
+		malformedYAML := "\"Bearer sec123\"\n"
+		require.NoError(t, os.WriteFile(filepath.Join(lockDir, "contracts", "orders_reidentified.odcs.yaml"), []byte(malformedYAML), 0644))
+
+		_, err := LoadCompiledPAMEntitlements(lockDir, "orders")
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), "sec123")
+		assert.Contains(t, err.Error(), "Bearer [REDACTED]")
+	})
 }

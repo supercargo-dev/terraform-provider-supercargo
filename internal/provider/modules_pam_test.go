@@ -71,7 +71,7 @@ func TestModules_DataProduct_PAMEntitlementsAndConditions(t *testing.T) {
 				assert.Contains(t, exprToString(pamFile.Bytes, block.Body.Attributes["entitlement_id"].Expr), "each.value.entitlement_id")
 				assert.Contains(t, exprToString(pamFile.Bytes, block.Body.Attributes["max_request_duration"].Expr), "var.pam_max_request_duration")
 
-				var hasUnstructured, hasEligibleUsers, hasGCPAccess, hasManualApprovals, hasPrecondition bool
+				var hasUnstructured, hasEligibleUsers, hasGCPAccess, hasBQDataViewer, hasManualApprovals, hasPrecondition bool
 				for _, sub := range block.Body.Blocks {
 					switch sub.Type {
 					case "requester_justification_config":
@@ -82,13 +82,30 @@ func TestModules_DataProduct_PAMEntitlementsAndConditions(t *testing.T) {
 						}
 					case "eligible_users":
 						hasEligibleUsers = true
-						assert.Contains(t, exprToString(pamFile.Bytes, sub.Body.Attributes["principals"].Expr), "var.pam_eligible_consumers")
+						principalsExpr := exprToString(pamFile.Bytes, sub.Body.Attributes["principals"].Expr)
+						assert.Contains(t, principalsExpr, "var.pam_eligible_consumers")
+						assert.Contains(t, principalsExpr, "trimspace(")
 					case "privileged_access":
 						for _, gcp := range sub.Body.Blocks {
 							if gcp.Type == "gcp_iam_access" {
 								hasGCPAccess = true
 								assert.Contains(t, exprToString(pamFile.Bytes, gcp.Body.Attributes["resource_type"].Expr), "cloudresourcemanager.googleapis.com/Project")
 								assert.Contains(t, exprToString(pamFile.Bytes, gcp.Body.Attributes["resource"].Expr), "//cloudresourcemanager.googleapis.com/projects/${var.project_id}")
+								for _, rb := range gcp.Body.Blocks {
+									if rb.Type == "role_bindings" {
+										if roleAttr, ok := rb.Body.Attributes["role"]; ok &&
+											exprToString(pamFile.Bytes, roleAttr.Expr) == `"roles/bigquery.dataViewer"` {
+											hasBQDataViewer = true
+											cond := exprToString(pamFile.Bytes, rb.Body.Attributes["condition_expression"].Expr)
+											// Positive assertions: must allow exact public dataset OR child paths under public dataset/
+											assert.Contains(t, cond, `resource.name == \"projects/${var.project_id}/datasets/${google_bigquery_dataset.public.dataset_id}\"`)
+											assert.Contains(t, cond, `resource.name.startsWith(\"projects/${var.project_id}/datasets/${google_bigquery_dataset.public.dataset_id}/\")`)
+											assert.Contains(t, cond, "||")
+											// Negative boundary assertion: must NOT use un-delimited prefix which would escalate into ${public_dataset_id}_internal
+											assert.NotContains(t, cond, `startsWith(\"projects/${var.project_id}/datasets/${google_bigquery_dataset.public.dataset_id}\")`)
+										}
+									}
+								}
 							}
 						}
 					case "approval_workflow":
@@ -96,6 +113,17 @@ func TestModules_DataProduct_PAMEntitlementsAndConditions(t *testing.T) {
 							if ma.Type == "manual_approvals" {
 								hasManualApprovals = true
 								assert.Contains(t, exprToString(pamFile.Bytes, ma.Body.Attributes["require_approver_justification"].Expr), "true")
+								for _, step := range ma.Body.Blocks {
+									if step.Type == "steps" {
+										for _, app := range step.Body.Blocks {
+											if app.Type == "approvers" {
+												appPrincipals := exprToString(pamFile.Bytes, app.Body.Attributes["principals"].Expr)
+												assert.Contains(t, appPrincipals, "var.pam_approvers")
+												assert.Contains(t, appPrincipals, "trimspace(")
+											}
+										}
+									}
+								}
 							}
 						}
 					case "lifecycle":
@@ -110,6 +138,7 @@ func TestModules_DataProduct_PAMEntitlementsAndConditions(t *testing.T) {
 				assert.True(t, hasUnstructured, "port_jit must require unstructured justification")
 				assert.True(t, hasEligibleUsers, "port_jit must configure eligible_users")
 				assert.True(t, hasGCPAccess, "port_jit must configure privileged_access.gcp_iam_access")
+				assert.True(t, hasBQDataViewer, "port_jit must configure roles/bigquery.dataViewer role_binding")
 				assert.True(t, hasManualApprovals, "port_jit must configure approval_workflow.manual_approvals")
 				assert.True(t, hasPrecondition, "port_jit must enforce lifecycle precondition on var.pam_approvers")
 			}
@@ -122,6 +151,19 @@ func TestModules_DataProduct_PAMEntitlementsAndConditions(t *testing.T) {
 	})
 
 	t.Run("pam.tf declares google_bigquery_table_iam_member.conditional_consumers and zero dataset condition blocks", func(t *testing.T) {
+		var hasDistinctTrimmedMembers bool
+		for _, block := range pamBody.Blocks {
+			if block.Type == "locals" {
+				if attr, ok := block.Body.Attributes["conditional_consumer_table_bindings_list"]; ok {
+					expr := exprToString(pamFile.Bytes, attr.Expr)
+					if assert.Contains(t, expr, "distinct([for m in grant.members : trimspace(m)])") {
+						hasDistinctTrimmedMembers = true
+					}
+				}
+			}
+		}
+		assert.True(t, hasDistinctTrimmedMembers, "conditional_consumer_table_bindings_list must trim and deduplicate grant.members")
+
 		var foundTableMember bool
 		for _, block := range pamBody.Blocks {
 			if block.Type == "resource" && len(block.Labels) == 2 &&
@@ -197,18 +239,20 @@ func TestModules_DataProduct_PAMEntitlementsAndConditions(t *testing.T) {
 		assert.Contains(t, grantsCond, "roles/bigquery.metadataViewer")
 		assert.Contains(t, grantsCond, "^(user|group|serviceAccount|domain):")
 		assert.Contains(t, grantsCond, "[0-9]{4}-[0-9]{2}-[0-9]{2}T")
+		assert.Contains(t, grantsCond, `can(formatdate("", g.expiration))`)
 	})
 
 	t.Run("outputs.tf exposes pam_entitlement_ids, pam_gcloud_commands, and pam_console_urls", func(t *testing.T) {
-		outputs := make(map[string]bool)
+		outputs := make(map[string]string)
 		for _, block := range outputsBody.Blocks {
 			if block.Type == "output" && len(block.Labels) == 1 {
-				outputs[block.Labels[0]] = true
+				outputs[block.Labels[0]] = exprToString(outputsFile.Bytes, block.Body.Attributes["value"].Expr)
 			}
 		}
-		assert.True(t, outputs["pam_entitlement_ids"])
-		assert.True(t, outputs["pam_gcloud_commands"])
-		assert.True(t, outputs["pam_console_urls"])
+		assert.Contains(t, outputs, "pam_entitlement_ids")
+		assert.Contains(t, outputs, "pam_gcloud_commands")
+		assert.Contains(t, outputs, "pam_console_urls")
+		assert.Contains(t, outputs["pam_gcloud_commands"], `tonumber(trimsuffix(var.pam_max_request_duration, "s")) < 1800 ? var.pam_max_request_duration : "1800s"`)
 	})
 }
 
@@ -248,6 +292,22 @@ func TestModules_Vault_SearchHashPAM(t *testing.T) {
 	})
 
 	t.Run("vault main.tf declares vault_search_hash_jit PAM entitlement", func(t *testing.T) {
+		var hasLocalEntitlementID bool
+		for _, block := range mainBody.Blocks {
+			if block.Type == "locals" {
+				if attr, ok := block.Body.Attributes["vault_search_hash_entitlement_id"]; ok {
+					hasLocalEntitlementID = true
+					expr := exprToString(mainFile.Bytes, attr.Expr)
+					assert.Contains(t, expr, "lower(")
+					assert.Contains(t, expr, "[^a-z0-9-]")
+					assert.Contains(t, expr, "-+")
+					assert.Contains(t, expr, "63")
+					assert.Contains(t, expr, "-+$")
+				}
+			}
+		}
+		assert.True(t, hasLocalEntitlementID, "local.vault_search_hash_entitlement_id must be defined in vault/main.tf")
+
 		var found bool
 		for _, block := range mainBody.Blocks {
 			if block.Type == "resource" && len(block.Labels) == 2 &&
@@ -255,9 +315,10 @@ func TestModules_Vault_SearchHashPAM(t *testing.T) {
 				block.Labels[1] == "vault_search_hash_jit" {
 				found = true
 				assert.Contains(t, exprToString(mainFile.Bytes, block.Body.Attributes["for_each"].Expr), "var.enable_search_hash_pam")
+				assert.Equal(t, "local.vault_search_hash_entitlement_id", exprToString(mainFile.Bytes, block.Body.Attributes["entitlement_id"].Expr))
 				assert.Contains(t, exprToString(mainFile.Bytes, block.Body.Attributes["max_request_duration"].Expr), "var.search_hash_pam_max_duration")
 
-				var hasUnstructured, hasManualApprovals, hasPrecondition, hasRunInvoker bool
+				var hasUnstructured, hasEligibleUsers, hasManualApprovals, hasPrecondition, hasRunInvoker bool
 				for _, sub := range block.Body.Blocks {
 					switch sub.Type {
 					case "requester_justification_config":
@@ -266,6 +327,11 @@ func TestModules_Vault_SearchHashPAM(t *testing.T) {
 								hasUnstructured = true
 							}
 						}
+					case "eligible_users":
+						hasEligibleUsers = true
+						reqExpr := exprToString(mainFile.Bytes, sub.Body.Attributes["principals"].Expr)
+						assert.Contains(t, reqExpr, "var.search_hash_pam_requesters")
+						assert.Contains(t, reqExpr, "trimspace(")
 					case "privileged_access":
 						for _, gcp := range sub.Body.Blocks {
 							if gcp.Type == "gcp_iam_access" {
@@ -285,6 +351,17 @@ func TestModules_Vault_SearchHashPAM(t *testing.T) {
 						for _, ma := range sub.Body.Blocks {
 							if ma.Type == "manual_approvals" {
 								hasManualApprovals = true
+								for _, step := range ma.Body.Blocks {
+									if step.Type == "steps" {
+										for _, app := range step.Body.Blocks {
+											if app.Type == "approvers" {
+												appExpr := exprToString(mainFile.Bytes, app.Body.Attributes["principals"].Expr)
+												assert.Contains(t, appExpr, "var.search_hash_pam_approvers")
+												assert.Contains(t, appExpr, "trimspace(")
+											}
+										}
+									}
+								}
 							}
 						}
 					case "lifecycle":
@@ -297,6 +374,7 @@ func TestModules_Vault_SearchHashPAM(t *testing.T) {
 					}
 				}
 				assert.True(t, hasUnstructured)
+				assert.True(t, hasEligibleUsers)
 				assert.True(t, hasRunInvoker)
 				assert.True(t, hasManualApprovals)
 				assert.True(t, hasPrecondition)
@@ -324,14 +402,18 @@ func TestModules_Vault_SearchHashPAM(t *testing.T) {
 			assert.True(t, varsByName[v], "vault variables.tf missing %s", v)
 		}
 
-		outputs := make(map[string]bool)
+		outputs := make(map[string]string)
 		for _, block := range outputsBody.Blocks {
 			if block.Type == "output" && len(block.Labels) == 1 {
-				outputs[block.Labels[0]] = true
+				outputs[block.Labels[0]] = exprToString(outputsFile.Bytes, block.Body.Attributes["value"].Expr)
 			}
 		}
-		assert.True(t, outputs["search_hash_pam_entitlement_id"])
-		assert.True(t, outputs["search_hash_pam_gcloud_command"])
-		assert.True(t, outputs["search_hash_pam_console_url"])
+		assert.Contains(t, outputs, "search_hash_pam_entitlement_id")
+		assert.Contains(t, outputs, "search_hash_pam_gcloud_command")
+		assert.Contains(t, outputs, "search_hash_pam_console_url")
+		assert.Contains(t, outputs["search_hash_pam_entitlement_id"], "local.vault_search_hash_entitlement_id")
+		assert.Contains(t, outputs["search_hash_pam_gcloud_command"], "local.vault_search_hash_entitlement_id")
+		assert.Contains(t, outputs["search_hash_pam_console_url"], "local.vault_search_hash_entitlement_id")
+		assert.Contains(t, outputs["search_hash_pam_gcloud_command"], `tonumber(trimsuffix(var.search_hash_pam_max_duration, "s")) < 1800 ? var.search_hash_pam_max_duration : "1800s"`)
 	})
 }

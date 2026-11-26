@@ -147,7 +147,7 @@ output "pam_gcloud_commands" {
   description = "Map of output port slugs to ready-to-run gcloud beta pam grants create commands"
   value = {
     for k, v in google_privileged_access_manager_entitlement.port_jit :
-    k => "gcloud beta pam grants create --entitlement=${v.entitlement_id} --requested-duration=1800s --justification=\"TICKET-123: reason\" --location=${var.pam_location} --project=${var.project_id}"
+    k => "gcloud beta pam grants create --entitlement=${v.entitlement_id} --requested-duration=${tonumber(trimsuffix(var.pam_max_request_duration, "s")) < 1800 ? var.pam_max_request_duration : "1800s"} --justification=\"TICKET-123: reason\" --location=${var.pam_location} --project=${var.project_id}"
   }
 }
 

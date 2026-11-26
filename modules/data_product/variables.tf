@@ -414,6 +414,7 @@ variable "conditional_consumer_grants" {
     condition = alltrue([
       for k, g in var.conditional_consumer_grants : (
         can(regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$", g.expiration)) &&
+        can(formatdate("", g.expiration)) &&
         contains(["roles/bigquery.dataViewer", "roles/bigquery.metadataViewer"], coalesce(g.role, "roles/bigquery.dataViewer")) &&
         length(g.members) > 0 &&
         alltrue([
