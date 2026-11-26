@@ -253,6 +253,26 @@ resource "google_cloud_run_v2_service" "vault" {
       }
 
       env {
+        name  = "VAULT_ENFORCE_SEARCH_JUSTIFICATION"
+        value = var.enforce_search_justification ? "true" : "false"
+      }
+
+      env {
+        name  = "ENFORCE_SEARCH_JUSTIFICATION"
+        value = var.enforce_search_justification ? "true" : "false"
+      }
+
+      env {
+        name  = "VAULT_SEARCH_HASH_ENFORCE_RBAC"
+        value = "true"
+      }
+
+      env {
+        name  = "VAULT_SEARCH_HASH_ALLOWED_ROLES"
+        value = join(",", var.search_hash_allowed_roles)
+      }
+
+      env {
         name = "VAULT_MASTER_KEY"
         value_source {
           secret_key_ref {
@@ -319,5 +339,53 @@ resource "google_cloud_run_v2_service_iam_member" "additional_invokers" {
   name     = google_cloud_run_v2_service.vault.name
   role     = "roles/run.invoker"
   member   = each.value
+}
+
+resource "google_privileged_access_manager_entitlement" "vault_search_hash_jit" {
+  for_each = var.enable_search_hash_pam && length(var.search_hash_pam_requesters) > 0 ? toset(["search_hash"]) : toset([])
+
+  parent               = "projects/${var.project_id}"
+  location             = var.search_hash_pam_location
+  entitlement_id       = substr(replace(lower("sc-vault-search-hash${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"), "_", "-"), 0, 63)
+  max_request_duration = var.search_hash_pam_max_duration
+
+  requester_justification_config {
+    unstructured {}
+  }
+
+  eligible_users {
+    principals = var.search_hash_pam_requesters
+  }
+
+  privileged_access {
+    gcp_iam_access {
+      resource_type = "cloudresourcemanager.googleapis.com/Project"
+      resource      = "//cloudresourcemanager.googleapis.com/projects/${var.project_id}"
+
+      role_bindings {
+        role                 = "roles/run.invoker"
+        condition_expression = "resource.name == \"projects/${var.project_id}/locations/${var.region}/services/${google_cloud_run_v2_service.vault.name}\""
+      }
+    }
+  }
+
+  approval_workflow {
+    manual_approvals {
+      require_approver_justification = true
+      steps {
+        approvals_needed = 1
+        approvers {
+          principals = var.search_hash_pam_approvers
+        }
+      }
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = length(var.search_hash_pam_approvers) > 0
+      error_message = "var.search_hash_pam_approvers must contain at least one IAM principal (user:, group:, serviceAccount:, domain:) when enable_search_hash_pam is true and search_hash_pam_requesters is non-empty."
+    }
+  }
 }
 

@@ -33,7 +33,7 @@ locals {
 
   public_output_views = {
     for k, v in try(data.supercargo_data_product.this.outputs, {}) : k => v
-    if lookup(v, "materialization", "view") == "view"
+    if lookup(v, "materialization", "view") == "view" && trimspace(lookup(v, "view_query", "")) != ""
   }
   internal_input_tables = try(data.supercargo_data_product.this.inputs, {})
 

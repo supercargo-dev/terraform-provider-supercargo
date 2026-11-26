@@ -48,28 +48,69 @@ type supercargoDataProductDataSourceModel struct {
 	PublicDatasetID       types.String        `tfsdk:"public_dataset_id"`
 	Outputs               types.Map           `tfsdk:"outputs"`
 	Inputs                types.Map           `tfsdk:"inputs"`
+	PAMEntitlements       types.Map           `tfsdk:"pam_entitlements"`
 }
 
 type supercargoOutputPortModel struct {
-	Name            types.String `tfsdk:"name"`
-	URN             types.String `tfsdk:"urn"`
-	Lens            types.String `tfsdk:"lens"`
-	Materialization types.String `tfsdk:"materialization"`
-	ViewQuery       types.String `tfsdk:"view_query"`
-	ViewSQL         types.String `tfsdk:"view_sql"`
+	Name                types.String `tfsdk:"name"`
+	URN                 types.String `tfsdk:"urn"`
+	Lens                types.String `tfsdk:"lens"`
+	Materialization     types.String `tfsdk:"materialization"`
+	ViewQuery           types.String `tfsdk:"view_query"`
+	ViewSQL             types.String `tfsdk:"view_sql"`
+	Sensitivity         types.String `tfsdk:"sensitivity"`
+	AuthorizedRoles     types.List   `tfsdk:"authorized_roles"`
+	FirstLevelApprovers types.List   `tfsdk:"first_level_approvers"`
 }
 
 var outputPortAttrTypes = map[string]attr.Type{
-	"name":            types.StringType,
-	"urn":             types.StringType,
-	"lens":            types.StringType,
-	"materialization": types.StringType,
-	"view_query":      types.StringType,
-	"view_sql":        types.StringType,
+	"name":                  types.StringType,
+	"urn":                   types.StringType,
+	"lens":                  types.StringType,
+	"materialization":       types.StringType,
+	"view_query":            types.StringType,
+	"view_sql":              types.StringType,
+	"sensitivity":           types.StringType,
+	"authorized_roles":      types.ListType{ElemType: types.StringType},
+	"first_level_approvers": types.ListType{ElemType: types.StringType},
 }
 
 var outputPortObjectType = types.ObjectType{
 	AttrTypes: outputPortAttrTypes,
+}
+
+type supercargoPAMEntitlementModel struct {
+	EntitlementID       types.String `tfsdk:"entitlement_id"`
+	PortName            types.String `tfsdk:"port_name"`
+	PortURN             types.String `tfsdk:"port_urn"`
+	Lens                types.String `tfsdk:"lens"`
+	Sensitivity         types.String `tfsdk:"sensitivity"`
+	AuthorizedRoles     types.List   `tfsdk:"authorized_roles"`
+	FirstLevelApprovers types.List   `tfsdk:"first_level_approvers"`
+	RequiresPAM         types.Bool   `tfsdk:"requires_pam"`
+	RequiresKMSDecrypt  types.Bool   `tfsdk:"requires_kms_decrypt"`
+	TermsPurpose        types.String `tfsdk:"terms_purpose"`
+	TermsUsage          types.String `tfsdk:"terms_usage"`
+	TermsLimitations    types.String `tfsdk:"terms_limitations"`
+}
+
+var pamEntitlementAttrTypes = map[string]attr.Type{
+	"entitlement_id":        types.StringType,
+	"port_name":             types.StringType,
+	"port_urn":              types.StringType,
+	"lens":                  types.StringType,
+	"sensitivity":           types.StringType,
+	"authorized_roles":      types.ListType{ElemType: types.StringType},
+	"first_level_approvers": types.ListType{ElemType: types.StringType},
+	"requires_pam":          types.BoolType,
+	"requires_kms_decrypt":  types.BoolType,
+	"terms_purpose":         types.StringType,
+	"terms_usage":           types.StringType,
+	"terms_limitations":     types.StringType,
+}
+
+var pamEntitlementObjectType = types.ObjectType{
+	AttrTypes: pamEntitlementAttrTypes,
 }
 
 type supercargoInputPortModel struct {
@@ -267,6 +308,78 @@ func (d *supercargoDataProductDataSource) Schema(ctx context.Context, req dataso
 						},
 						"view_sql": schema.StringAttribute{
 							MarkdownDescription: "Full GoogleSQL CREATE VIEW DDL statement.",
+							Computed:            true,
+						},
+						"sensitivity": schema.StringAttribute{
+							MarkdownDescription: "Resolved maximum sensitivity tier (PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED).",
+							Computed:            true,
+						},
+						"authorized_roles": schema.ListAttribute{
+							MarkdownDescription: "Producer-declared governance roles authorized to access this output port.",
+							ElementType:         types.StringType,
+							Computed:            true,
+						},
+						"first_level_approvers": schema.ListAttribute{
+							MarkdownDescription: "Producer governance approver team names from ODCS roles[].firstLevelApprovers.",
+							ElementType:         types.StringType,
+							Computed:            true,
+						},
+					},
+				},
+			},
+			"pam_entitlements": schema.MapNestedAttribute{
+				MarkdownDescription: "Deterministic plan-time GCP PAM entitlement metadata keyed by output port slug (includes both view-backed and transform-backed outputs).",
+				Computed:            true,
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"entitlement_id": schema.StringAttribute{
+							MarkdownDescription: "Sanitized GCP PAM entitlement ID matching core/pkg/validation.SanitizePAMIdentifier.",
+							Computed:            true,
+						},
+						"port_name": schema.StringAttribute{
+							MarkdownDescription: "Output port slug.",
+							Computed:            true,
+						},
+						"port_urn": schema.StringAttribute{
+							MarkdownDescription: "Output contract URN.",
+							Computed:            true,
+						},
+						"lens": schema.StringAttribute{
+							MarkdownDescription: "Relational lens applied (if any).",
+							Computed:            true,
+						},
+						"sensitivity": schema.StringAttribute{
+							MarkdownDescription: "Resolved maximum sensitivity tier.",
+							Computed:            true,
+						},
+						"authorized_roles": schema.ListAttribute{
+							MarkdownDescription: "Producer-declared governance roles.",
+							ElementType:         types.StringType,
+							Computed:            true,
+						},
+						"first_level_approvers": schema.ListAttribute{
+							MarkdownDescription: "Producer governance approver team names.",
+							ElementType:         types.StringType,
+							Computed:            true,
+						},
+						"requires_pam": schema.BoolAttribute{
+							MarkdownDescription: "True when lens == 'reidentified', sensitivity is CONFIDENTIAL/RESTRICTED, or authorized_roles is non-empty.",
+							Computed:            true,
+						},
+						"requires_kms_decrypt": schema.BoolAttribute{
+							MarkdownDescription: "True when lens == 'reidentified'.",
+							Computed:            true,
+						},
+						"terms_purpose": schema.StringAttribute{
+							MarkdownDescription: "ODCS description.purpose / terms_of_use.purpose.",
+							Computed:            true,
+						},
+						"terms_usage": schema.StringAttribute{
+							MarkdownDescription: "ODCS description.usage / terms_of_use.usage.",
+							Computed:            true,
+						},
+						"terms_limitations": schema.StringAttribute{
+							MarkdownDescription: "ODCS description.limitations / terms_of_use.limitations.",
 							Computed:            true,
 						},
 					},
@@ -654,6 +767,7 @@ func (d *supercargoDataProductDataSource) Read(ctx context.Context, req datasour
 
 	outputsMap := make(map[string]supercargoOutputPortModel)
 	inputsMap := make(map[string]supercargoInputPortModel)
+	pamEntitlementsMap := make(map[string]supercargoPAMEntitlementModel)
 
 	if foundLock && discoveredLockDir != "" {
 		data.LockDir = types.StringValue(discoveredLockDir)
@@ -667,7 +781,7 @@ func (d *supercargoDataProductDataSource) Read(ctx context.Context, req datasour
 				)
 				return
 			}
-			resp.Diagnostics.AddError("Error Loading Compiled Outputs", fmt.Sprintf("Failed to load compiled outputs from lock directory %q: %s", discoveredLockDir, err))
+			resp.Diagnostics.AddError("Error Loading Compiled Outputs", fmt.Sprintf("Failed to load compiled outputs from lock directory %q: %s", discoveredLockDir, maskBearerTokens(err.Error())))
 			return
 		}
 
@@ -683,13 +797,62 @@ func (d *supercargoDataProductDataSource) Read(ctx context.Context, req datasour
 				)
 				return
 			}
+			rolesList, listDiags := stringSliceToList(ctx, out.AuthorizedRoles)
+			resp.Diagnostics.Append(listDiags...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+			approversList, listDiags := stringSliceToList(ctx, out.FirstLevelApprovers)
+			resp.Diagnostics.Append(listDiags...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
 			outputsMap[k] = supercargoOutputPortModel{
-				Name:            types.StringValue(out.Name),
-				URN:             types.StringValue(out.URN),
-				Lens:            types.StringValue(out.Lens),
-				Materialization: types.StringValue(mat),
-				ViewQuery:       types.StringValue(out.ViewQuery),
-				ViewSQL:         types.StringValue(out.ViewSQL),
+				Name:                types.StringValue(out.Name),
+				URN:                 types.StringValue(out.URN),
+				Lens:                types.StringValue(out.Lens),
+				Materialization:     types.StringValue(mat),
+				ViewQuery:           types.StringValue(out.ViewQuery),
+				ViewSQL:             types.StringValue(out.ViewSQL),
+				Sensitivity:         types.StringValue(out.Sensitivity),
+				AuthorizedRoles:     rolesList,
+				FirstLevelApprovers: approversList,
+			}
+		}
+
+		compiledPAM, err := manifest.LoadCompiledPAMEntitlements(discoveredLockDir, productSlug)
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Error Loading Compiled PAM Entitlements",
+				fmt.Sprintf("Failed to load compiled PAM entitlements from lock directory %q: %s", discoveredLockDir, maskBearerTokens(err.Error())),
+			)
+			return
+		}
+
+		for k, ent := range compiledPAM {
+			rolesList, listDiags := stringSliceToList(ctx, ent.AuthorizedRoles)
+			resp.Diagnostics.Append(listDiags...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+			approversList, listDiags := stringSliceToList(ctx, ent.FirstLevelApprovers)
+			resp.Diagnostics.Append(listDiags...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+			pamEntitlementsMap[k] = supercargoPAMEntitlementModel{
+				EntitlementID:       types.StringValue(ent.EntitlementID),
+				PortName:            types.StringValue(ent.PortName),
+				PortURN:             types.StringValue(ent.PortURN),
+				Lens:                types.StringValue(ent.Lens),
+				Sensitivity:         types.StringValue(ent.Sensitivity),
+				AuthorizedRoles:     rolesList,
+				FirstLevelApprovers: approversList,
+				RequiresPAM:         types.BoolValue(ent.RequiresPAM),
+				RequiresKMSDecrypt:  types.BoolValue(ent.RequiresKMSDecrypt),
+				TermsPurpose:        types.StringValue(ent.TermsPurpose),
+				TermsUsage:          types.StringValue(ent.TermsUsage),
+				TermsLimitations:    types.StringValue(ent.TermsLimitations),
 			}
 		}
 
@@ -702,7 +865,7 @@ func (d *supercargoDataProductDataSource) Read(ctx context.Context, req datasour
 				)
 				return
 			}
-			resp.Diagnostics.AddError("Error Loading Compiled Inputs", fmt.Sprintf("Failed to load compiled inputs from lock directory %q: %s", discoveredLockDir, err))
+			resp.Diagnostics.AddError("Error Loading Compiled Inputs", fmt.Sprintf("Failed to load compiled inputs from lock directory %q: %s", discoveredLockDir, maskBearerTokens(err.Error())))
 			return
 		}
 
@@ -734,7 +897,21 @@ func (d *supercargoDataProductDataSource) Read(ctx context.Context, req datasour
 	}
 	data.Inputs = inputsVal
 
+	pamVal, diags := types.MapValueFrom(ctx, pamEntitlementObjectType, pamEntitlementsMap)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	data.PAMEntitlements = pamVal
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+}
+
+func stringSliceToList(ctx context.Context, items []string) (types.List, diag.Diagnostics) {
+	if len(items) == 0 {
+		return types.ListValueFrom(ctx, types.StringType, []string{})
+	}
+	return types.ListValueFrom(ctx, types.StringType, items)
 }
 
 func stringOrNull(s string) types.String {

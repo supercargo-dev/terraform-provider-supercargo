@@ -138,3 +138,24 @@ output "landing_table_ids" {
   value       = { for k, v in google_bigquery_table.inputs : k => v.table_id }
 }
 
+output "pam_entitlement_ids" {
+  description = "Map of output port slugs to provisioned GCP PAM entitlement IDs"
+  value       = { for k, v in google_privileged_access_manager_entitlement.port_jit : k => v.entitlement_id }
+}
+
+output "pam_gcloud_commands" {
+  description = "Map of output port slugs to ready-to-run gcloud beta pam grants create commands"
+  value = {
+    for k, v in google_privileged_access_manager_entitlement.port_jit :
+    k => "gcloud beta pam grants create --entitlement=${v.entitlement_id} --requested-duration=1800s --justification=\"TICKET-123: reason\" --location=${var.pam_location} --project=${var.project_id}"
+  }
+}
+
+output "pam_console_urls" {
+  description = "Map of output port slugs to GCP Console PAM entitlement deep-links"
+  value = {
+    for k, v in google_privileged_access_manager_entitlement.port_jit :
+    k => "https://console.cloud.google.com/iam-admin/pam/entitlements/detail/${var.pam_location}/${v.entitlement_id}?project=${var.project_id}"
+  }
+}
+

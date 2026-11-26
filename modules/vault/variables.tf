@@ -164,4 +164,68 @@ variable "sla_tier" {
   }
 }
 
+# --- SearchHash PAM JIT Variables ---
+
+variable "enable_search_hash_pam" {
+  description = "Whether to provision a GCP PAM JIT entitlement for Vault SearchHash operations."
+  type        = bool
+  default     = false
+}
+
+variable "search_hash_pam_location" {
+  description = "GCP PAM location ('global' or a regional identifier such as 'us-central1') for the Vault SearchHash entitlement."
+  type        = string
+  default     = "global"
+  validation {
+    condition     = can(regex("^(global|[a-z]+-[a-z]+[0-9]+)$", var.search_hash_pam_location))
+    error_message = "search_hash_pam_location must be 'global' or a valid GCP region identifier matching ^(global|[a-z]+-[a-z]+[0-9]+)$."
+  }
+}
+
+variable "search_hash_pam_max_duration" {
+  description = "Maximum GCP PAM grant duration in seconds (bounded between 900s and 3600s) for Vault SearchHash."
+  type        = string
+  default     = "3600s"
+  validation {
+    condition     = can(regex("^[0-9]+s$", var.search_hash_pam_max_duration)) && tonumber(trimsuffix(var.search_hash_pam_max_duration, "s")) >= 900 && tonumber(trimsuffix(var.search_hash_pam_max_duration, "s")) <= 3600
+    error_message = "search_hash_pam_max_duration must be an integer seconds string between 900s and 3600s (inclusive)."
+  }
+}
+
+variable "search_hash_pam_requesters" {
+  description = "List of IAM principals (user:, group:, serviceAccount:, domain:) eligible to request PAM JIT access for Vault SearchHash."
+  type        = list(string)
+  default     = []
+  validation {
+    condition = alltrue([
+      for m in var.search_hash_pam_requesters : can(regex("^(user|group|serviceAccount|domain):.+$", trimspace(m)))
+    ])
+    error_message = "Every entry in search_hash_pam_requesters must start with user:, group:, serviceAccount:, or domain:."
+  }
+}
+
+variable "search_hash_pam_approvers" {
+  description = "List of IAM principals (user:, group:, serviceAccount:, domain:) authorized to approve Vault SearchHash PAM JIT requests."
+  type        = list(string)
+  default     = []
+  validation {
+    condition = alltrue([
+      for m in var.search_hash_pam_approvers : can(regex("^(user|group|serviceAccount|domain):.+$", trimspace(m)))
+    ])
+    error_message = "Every entry in search_hash_pam_approvers must start with user:, group:, serviceAccount:, or domain:."
+  }
+}
+
+variable "enforce_search_justification" {
+  description = "Whether Vault SearchHash requires an explicit ticket_id justification on every request."
+  type        = bool
+  default     = true
+}
+
+variable "search_hash_allowed_roles" {
+  description = "Optional list of Vault RBAC roles/principals permitted to call SearchHash (when empty, Vault defaults to privacyOfficer/complianceAuditor)."
+  type        = list(string)
+  default     = []
+}
+
 
