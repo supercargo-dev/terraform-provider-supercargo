@@ -134,7 +134,7 @@ func TestModules_DataProduct_PAMEntitlementsAndConditions(t *testing.T) {
 					if sub.Type == "condition" {
 						hasCond = true
 						assert.Contains(t, exprToString(pamFile.Bytes, sub.Body.Attributes["title"].Expr), "supercargo-jit-ttl-${each.value.grant_key}")
-						assert.Contains(t, exprToString(pamFile.Bytes, sub.Body.Attributes["expression"].Expr), `request.time < timestamp("${each.value.expiration}")`)
+						assert.Contains(t, exprToString(pamFile.Bytes, sub.Body.Attributes["expression"].Expr), `request.time < timestamp(\"${each.value.expiration}\")`)
 					}
 				}
 				assert.True(t, hasCond, "conditional_consumers must include condition block")
