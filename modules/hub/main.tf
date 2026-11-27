@@ -393,6 +393,36 @@ resource "google_cloud_run_v2_service" "hub" {
         value = google_service_account.events_invoker.email
       }
 
+      env {
+        name  = "LINEAGE_BACKPUSH_ENABLED"
+        value = tostring(var.lineage_backpush_enabled)
+      }
+
+      env {
+        name  = "LINEAGE_KEEPALIVE_TTL"
+        value = var.lineage_keepalive_ttl
+      }
+
+      env {
+        name  = "LINEAGE_KEEPALIVE_CHECK_INTERVAL"
+        value = var.lineage_keepalive_check_interval
+      }
+
+      env {
+        name  = "DATAPLEX_STREAMING_ENABLED"
+        value = tostring(var.dataplex_streaming_enabled)
+      }
+
+      env {
+        name  = "LINEAGE_HISTORY_DATASET"
+        value = var.enable_lineage_history ? google_bigquery_dataset.supercargo_catalog[0].dataset_id : "supercargo_catalog"
+      }
+
+      env {
+        name  = "LINEAGE_HISTORY_TABLE"
+        value = var.lineage_history_table_id
+      }
+
       ports {
         container_port = 8080
         name           = "h2c"
@@ -506,7 +536,7 @@ resource "google_cloud_run_v2_service" "shovel" {
       }
       env {
         name  = "TOPIC_ROUTING"
-        value = jsonencode(var.topic_routing)
+        value = jsonencode(merge(var.enable_lineage_history ? { "urn:supercargo:hub:contract:lineage-submission-event" = google_pubsub_topic.lineage_events[0].name } : {}, var.topic_routing))
       }
       env {
         name  = "FORCE_DEPLOY"
@@ -607,6 +637,18 @@ resource "google_eventarc_trigger" "outbox_trigger" {
 
 resource "google_cloud_run_v2_service_iam_member" "additional_invokers" {
   for_each = toset(var.authorized_invokers)
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.hub.name
+  role     = "roles/run.invoker"
+  member   = each.value
+}
+
+resource "google_cloud_run_v2_service_iam_member" "openlineage_invokers" {
+  for_each = toset([
+    for sa in compact(var.openlineage_invoker_service_accounts) :
+    startswith(trimspace(sa), "serviceAccount:") ? trimspace(sa) : "serviceAccount:${trimspace(sa)}"
+  ])
   project  = var.project_id
   location = var.region
   name     = google_cloud_run_v2_service.hub.name
@@ -751,7 +793,7 @@ resource "google_pubsub_topic_iam_member" "hub_health_events_publisher" {
 }
 
 resource "google_bigquery_dataset" "supercargo_catalog" {
-  count                      = var.enable_health_mesh ? 1 : 0
+  count                      = (var.enable_health_mesh || var.enable_lineage_history) ? 1 : 0
   project                    = var.project_id
   dataset_id                 = var.catalog_dataset_id
   location                   = local.bq_location
@@ -761,7 +803,7 @@ resource "google_bigquery_dataset" "supercargo_catalog" {
 }
 
 resource "google_bigquery_dataset_iam_member" "pubsub_health_bq_writer" {
-  count      = var.enable_health_mesh ? 1 : 0
+  count      = (var.enable_health_mesh || var.enable_lineage_history) ? 1 : 0
   project    = var.project_id
   dataset_id = google_bigquery_dataset.supercargo_catalog[0].dataset_id
   role       = "roles/bigquery.dataEditor"
@@ -769,7 +811,7 @@ resource "google_bigquery_dataset_iam_member" "pubsub_health_bq_writer" {
 }
 
 resource "google_bigquery_dataset_iam_member" "pubsub_health_bq_metadata" {
-  count      = var.enable_health_mesh ? 1 : 0
+  count      = (var.enable_health_mesh || var.enable_lineage_history) ? 1 : 0
   project    = var.project_id
   dataset_id = google_bigquery_dataset.supercargo_catalog[0].dataset_id
   role       = "roles/bigquery.metadataViewer"
@@ -931,6 +973,269 @@ WHERE row_num = 1
 EOF
     use_legacy_sql = false
   }
+}
+
+# --- Lineage Events History & BigQuery Subscription Infrastructure ---
+
+resource "google_pubsub_topic" "lineage_events" {
+  count   = var.enable_lineage_history ? 1 : 0
+  project = var.project_id
+  name    = "${var.lineage_events_topic}${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
+}
+
+resource "google_pubsub_topic" "lineage_events_dlq" {
+  count   = var.enable_lineage_history ? 1 : 0
+  project = var.project_id
+  name    = "${var.lineage_events_topic}-dlq${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
+}
+
+resource "google_pubsub_topic_iam_member" "shovel_lineage_events_publisher" {
+  count   = var.enable_lineage_history ? 1 : 0
+  project = var.project_id
+  topic   = google_pubsub_topic.lineage_events[0].name
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:${google_service_account.shovel_runtime.email}"
+}
+
+resource "google_pubsub_topic_iam_member" "hub_lineage_events_publisher" {
+  count   = var.enable_lineage_history ? 1 : 0
+  project = var.project_id
+  topic   = google_pubsub_topic.lineage_events[0].name
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:${google_service_account.hub_runtime.email}"
+}
+
+resource "google_pubsub_topic_iam_member" "lineage_dlq_publisher" {
+  count   = var.enable_lineage_history ? 1 : 0
+  project = var.project_id
+  topic   = google_pubsub_topic.lineage_events_dlq[0].name
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:service-${var.project_number != "" ? var.project_number : data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
+resource "google_bigquery_table" "lineage_events_history" {
+  count               = var.enable_lineage_history ? 1 : 0
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.supercargo_catalog[0].dataset_id
+  table_id            = var.lineage_history_table_id
+  deletion_protection = var.bigquery_deletion_protection
+
+  time_partitioning {
+    type  = "DAY"
+    field = "event_time"
+  }
+
+  clustering = ["source_system", "granularity", "submission_id"]
+
+  schema = jsonencode([
+    {
+      name        = "submission_id"
+      type        = "STRING"
+      mode        = "REQUIRED"
+      description = "Unique identifier for the lineage submission"
+    },
+    {
+      name        = "chunk_index"
+      type        = "INT64"
+      mode        = "REQUIRED"
+      description = "Zero-based index of this submission chunk"
+    },
+    {
+      name        = "chunk_total"
+      type        = "INT64"
+      mode        = "REQUIRED"
+      description = "Total number of chunks in the submission"
+    },
+    {
+      name        = "source_system"
+      type        = "STRING"
+      mode        = "REQUIRED"
+      description = "Originating lineage plane (dbt, dataform, dataplex, openlineage, manifest)"
+    },
+    {
+      name        = "granularity"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Execution granularity (MODEL, TASK, QUERY, PIPELINE)"
+    },
+    {
+      name        = "event_time"
+      type        = "TIMESTAMP"
+      mode        = "REQUIRED"
+      description = "Timestamp when the lineage submission occurred"
+    },
+    {
+      name        = "actor"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Authenticated principal or service submitting the lineage event"
+    },
+    {
+      name        = "product_urn"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Optional owning Data Product URN"
+    },
+    {
+      name        = "run_id"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Orchestrator or pipeline run identifier"
+    },
+    {
+      name        = "run_state"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Terminal run state (COMPLETE, FAIL, ABORT)"
+    },
+    {
+      name        = "scope_id"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Scoped manifest or project identifier for stale-edge replacement"
+    },
+    {
+      name        = "edges_json"
+      type        = "JSON"
+      mode        = "NULLABLE"
+      description = "JSON-encoded array of canonical table/asset edges in this chunk"
+    },
+    {
+      name        = "field_edges_json"
+      type        = "JSON"
+      mode        = "NULLABLE"
+      description = "JSON-encoded array of canonical column-level field edges in this chunk"
+    },
+    {
+      name        = "subscription_name"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Name of the Pub/Sub subscription delivering the event"
+    },
+    {
+      name        = "message_id"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Pub/Sub message ID"
+    },
+    {
+      name        = "publish_time"
+      type        = "TIMESTAMP"
+      mode        = "NULLABLE"
+      description = "Pub/Sub message publish timestamp"
+    },
+    {
+      name        = "attributes"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Pub/Sub message attributes map"
+    }
+  ])
+}
+
+resource "google_pubsub_subscription" "lineage_events_bq" {
+  count   = var.enable_lineage_history ? 1 : 0
+  project = var.project_id
+  name    = "supercargo-lineage-events-bq${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
+  topic   = google_pubsub_topic.lineage_events[0].name
+
+  expiration_policy {
+    ttl = ""
+  }
+
+  bigquery_config {
+    table               = "${var.project_id}.${google_bigquery_dataset.supercargo_catalog[0].dataset_id}.${google_bigquery_table.lineage_events_history[0].table_id}"
+    use_table_schema    = true
+    write_metadata      = true
+    drop_unknown_fields = true
+  }
+
+  dead_letter_policy {
+    dead_letter_topic     = google_pubsub_topic.lineage_events_dlq[0].id
+    max_delivery_attempts = 5
+  }
+
+  depends_on = [
+    google_bigquery_dataset_iam_member.pubsub_health_bq_writer,
+    google_bigquery_dataset_iam_member.pubsub_health_bq_metadata,
+    google_pubsub_topic_iam_member.lineage_dlq_publisher,
+  ]
+}
+
+resource "google_pubsub_subscription_iam_member" "lineage_bq_dlq_subscriber" {
+  count        = var.enable_lineage_history ? 1 : 0
+  project      = var.project_id
+  subscription = google_pubsub_subscription.lineage_events_bq[0].name
+  role         = "roles/pubsub.subscriber"
+  member       = "serviceAccount:service-${var.project_number != "" ? var.project_number : data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
+resource "google_pubsub_subscription" "lineage_events_dlq_pull" {
+  count   = var.enable_lineage_history ? 1 : 0
+  project = var.project_id
+  name    = "${var.lineage_events_topic}-dlq-sub${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
+  topic   = google_pubsub_topic.lineage_events_dlq[0].name
+
+  message_retention_duration = "604800s"
+  retain_acked_messages      = false
+
+  expiration_policy {
+    ttl = ""
+  }
+}
+
+resource "google_bigquery_table" "lineage_current_edges" {
+  count               = var.enable_lineage_history ? 1 : 0
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.supercargo_catalog[0].dataset_id
+  table_id            = var.lineage_current_edges_view_id
+  deletion_protection = false
+
+  view {
+    query          = <<EOF
+SELECT
+  submission_id,
+  chunk_index,
+  chunk_total,
+  source_system,
+  granularity,
+  event_time,
+  actor,
+  product_urn,
+  run_id,
+  run_state,
+  scope_id,
+  edges_json,
+  field_edges_json,
+  publish_time
+FROM (
+  SELECT
+    *,
+    ROW_NUMBER() OVER(
+      PARTITION BY submission_id, chunk_index
+      ORDER BY event_time DESC, publish_time DESC NULLS LAST
+    ) AS row_num
+  FROM `${var.project_id}.${google_bigquery_dataset.supercargo_catalog[0].dataset_id}.${google_bigquery_table.lineage_events_history[0].table_id}`
+)
+WHERE row_num = 1
+EOF
+    use_legacy_sql = false
+  }
+}
+
+resource "google_bigquery_dataset_iam_member" "hub_catalog_bq_viewer" {
+  count      = var.enable_lineage_history ? 1 : 0
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.supercargo_catalog[0].dataset_id
+  role       = "roles/bigquery.dataViewer"
+  member     = "serviceAccount:${google_service_account.hub_runtime.email}"
+}
+
+resource "google_project_iam_member" "hub_bq_job_user" {
+  count   = var.enable_lineage_history ? 1 : 0
+  project = var.project_id
+  role    = "roles/bigquery.jobUser"
+  member  = "serviceAccount:${google_service_account.hub_runtime.email}"
 }
 
 # --- Event-Driven Alert Relay Infrastructure ---

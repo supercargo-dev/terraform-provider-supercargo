@@ -207,6 +207,60 @@ variable "current_health_view_id" {
   default     = "asset_current_health"
 }
 
+variable "enable_lineage_history" {
+  description = "Whether to provision the Pub/Sub lineage events topic, BigQuery lineage_events_history table, and streaming subscription"
+  type        = bool
+  default     = true
+}
+
+variable "lineage_events_topic" {
+  description = "Base Pub/Sub topic name for canonical lineage submission events"
+  type        = string
+  default     = "supercargo-lineage-events"
+}
+
+variable "lineage_history_table_id" {
+  description = "BigQuery table ID for append-only lineage submission event history"
+  type        = string
+  default     = "lineage_events_history"
+}
+
+variable "lineage_current_edges_view_id" {
+  description = "BigQuery view ID for latest lineage submission edges analytical projection"
+  type        = string
+  default     = "lineage_current_edges"
+}
+
+variable "lineage_backpush_enabled" {
+  description = "Whether Hub mirrors non-GCP/custom lineage edges back to Dataplex Knowledge Catalog"
+  type        = bool
+  default     = false
+}
+
+variable "lineage_keepalive_ttl" {
+  description = "Duration threshold after which active custom lineage links are refreshed by the keep-alive worker"
+  type        = string
+  default     = "600h"
+}
+
+variable "lineage_keepalive_check_interval" {
+  description = "Interval at which the Hub lineage keep-alive worker checks for expiring custom links"
+  type        = string
+  default     = "6h"
+}
+
+variable "dataplex_streaming_enabled" {
+  description = "Whether Hub prefers Dataplex SearchLineageStreaming over regional SearchLinks fallback"
+  type        = bool
+  default     = true
+}
+
+variable "openlineage_invoker_service_accounts" {
+  description = "Optional list of service account emails (or serviceAccount: members) granted roles/run.invoker on Hub for OpenLineage push ingress"
+  type        = list(string)
+  default     = []
+}
+
 variable "enable_dataform_integration" {
   description = "Whether to provision the Dataform Cloud Logging sink and Pub/Sub push subscription"
   type        = bool

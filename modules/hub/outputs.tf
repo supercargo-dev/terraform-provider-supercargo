@@ -118,6 +118,21 @@ output "health_events_subscription_name" {
   value       = var.enable_health_mesh ? google_pubsub_subscription.health_events_bq[0].name : null
 }
 
+output "lineage_events_topic_name" {
+  description = "The Pub/Sub topic name for canonical lineage submission events"
+  value       = var.enable_lineage_history ? google_pubsub_topic.lineage_events[0].name : null
+}
+
+output "lineage_events_history_table_id" {
+  description = "The BigQuery table ID for lineage submission event history"
+  value       = var.enable_lineage_history ? google_bigquery_table.lineage_events_history[0].table_id : null
+}
+
+output "lineage_current_edges_view_id" {
+  description = "The BigQuery view ID for latest lineage submission edges projection"
+  value       = var.enable_lineage_history ? google_bigquery_table.lineage_current_edges[0].table_id : null
+}
+
 output "dataform_events_topic_name" {
   description = "The Pub/Sub topic name for Dataform workflow execution events"
   value       = var.enable_dataform_integration ? google_pubsub_topic.dataform_events[0].name : null
