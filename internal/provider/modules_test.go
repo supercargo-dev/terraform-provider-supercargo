@@ -7328,3 +7328,317 @@ func TestModules_ControlPlaneMonitoring(t *testing.T) {
 		}
 	})
 }
+
+func TestModules_HubLineageHistoryAndEnvVars_AST(t *testing.T) {
+	t.Parallel()
+	modulesDir := "../../modules"
+	hubDir := filepath.Join(modulesDir, "hub")
+
+	t.Run("VariablesDeclaredWithCorrectDefaults", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		varFile, varBody := parseHCLFileAST(t, parser, filepath.Join(hubDir, "variables.tf"))
+
+		vars := make(map[string]*hclsyntax.Block)
+		for _, block := range varBody.Blocks {
+			if block.Type == "variable" && len(block.Labels) == 1 {
+				vars[block.Labels[0]] = block
+			}
+		}
+
+		expectedVars := []struct {
+			name        string
+			wantType    string
+			wantDefault string
+		}{
+			{name: "enable_lineage_history", wantType: "bool", wantDefault: "true"},
+			{name: "lineage_events_topic", wantType: "string", wantDefault: `"supercargo-lineage-events"`},
+			{name: "lineage_history_table_id", wantType: "string", wantDefault: `"lineage_events_history"`},
+			{name: "lineage_current_edges_view_id", wantType: "string", wantDefault: `"lineage_current_edges"`},
+			{name: "lineage_backpush_enabled", wantType: "bool", wantDefault: "false"},
+			{name: "lineage_keepalive_ttl", wantType: "string", wantDefault: `"600h"`},
+			{name: "lineage_keepalive_check_interval", wantType: "string", wantDefault: `"6h"`},
+			{name: "dataplex_streaming_enabled", wantType: "bool", wantDefault: "true"},
+			{name: "openlineage_invoker_service_accounts", wantType: "list(string)", wantDefault: "[]"},
+		}
+
+		for _, ev := range expectedVars {
+			blk, ok := vars[ev.name]
+			require.True(t, ok, "modules/hub/variables.tf missing variable %q", ev.name)
+			typeAttr, hasType := blk.Body.Attributes["type"]
+			require.True(t, hasType, "variable %q missing type", ev.name)
+			assert.Equal(t, ev.wantType, getExprSource(varFile, typeAttr.Expr), "variable %q type mismatch", ev.name)
+
+			defAttr, hasDef := blk.Body.Attributes["default"]
+			require.True(t, hasDef, "variable %q missing default", ev.name)
+			assert.Equal(t, ev.wantDefault, getExprSource(varFile, defAttr.Expr), "variable %q default mismatch", ev.name)
+		}
+	})
+
+	t.Run("CatalogDatasetAndPubSubBQIAMGuardedByHealthOrLineage", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		mainFile, mainBody := parseHCLFileAST(t, parser, filepath.Join(hubDir, "main.tf"))
+
+		resources := make(map[string]*hclsyntax.Block)
+		for _, block := range mainBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 {
+				resources[block.Labels[0]+"."+block.Labels[1]] = block
+			}
+		}
+
+		expectedCount := "(var.enable_health_mesh || var.enable_lineage_history) ? 1 : 0"
+		for _, resID := range []string{
+			"google_bigquery_dataset.supercargo_catalog",
+			"google_bigquery_dataset_iam_member.pubsub_health_bq_writer",
+			"google_bigquery_dataset_iam_member.pubsub_health_bq_metadata",
+		} {
+			blk, ok := resources[resID]
+			require.True(t, ok, "modules/hub/main.tf missing resource %s", resID)
+			countAttr, hasCount := blk.Body.Attributes["count"]
+			require.True(t, hasCount, "%s missing count attribute", resID)
+			assert.Equal(t, expectedCount, getExprSource(mainFile, countAttr.Expr), "%s count guard mismatch", resID)
+		}
+	})
+
+	t.Run("LineagePubSubBQTableSubscriptionAndView", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		mainFile, mainBody := parseHCLFileAST(t, parser, filepath.Join(hubDir, "main.tf"))
+
+		resources := make(map[string]*hclsyntax.Block)
+		for _, block := range mainBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 {
+				resources[block.Labels[0]+"."+block.Labels[1]] = block
+			}
+		}
+
+		// 1. Pub/Sub topic + publisher IAMs
+		topicBlk, ok := resources["google_pubsub_topic.lineage_events"]
+		require.True(t, ok, "missing google_pubsub_topic.lineage_events")
+		assert.Equal(t, "var.enable_lineage_history ? 1 : 0", getExprSource(mainFile, topicBlk.Body.Attributes["count"].Expr))
+		assert.Contains(t, getExprSource(mainFile, topicBlk.Body.Attributes["name"].Expr), "var.lineage_events_topic")
+		assert.Contains(t, getExprSource(mainFile, topicBlk.Body.Attributes["name"].Expr), "var.name_suffix")
+
+		for _, pubRes := range []string{
+			"google_pubsub_topic_iam_member.shovel_lineage_events_publisher",
+			"google_pubsub_topic_iam_member.hub_lineage_events_publisher",
+		} {
+			blk, exists := resources[pubRes]
+			require.True(t, exists, "missing %s", pubRes)
+			assert.Equal(t, `"roles/pubsub.publisher"`, getExprSource(mainFile, blk.Body.Attributes["role"].Expr))
+		}
+
+		// 2. BigQuery table lineage_events_history
+		histBlk, ok := resources["google_bigquery_table.lineage_events_history"]
+		require.True(t, ok, "missing google_bigquery_table.lineage_events_history")
+		assert.Equal(t, "var.enable_lineage_history ? 1 : 0", getExprSource(mainFile, histBlk.Body.Attributes["count"].Expr))
+		assert.Equal(t, "var.bigquery_deletion_protection", getExprSource(mainFile, histBlk.Body.Attributes["deletion_protection"].Expr))
+		assert.Equal(t, `["source_system", "granularity", "submission_id"]`, getExprSource(mainFile, histBlk.Body.Attributes["clustering"].Expr))
+
+		var partBlock *hclsyntax.Block
+		for _, sub := range histBlk.Body.Blocks {
+			if sub.Type == "time_partitioning" {
+				partBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, partBlock, "lineage_events_history missing time_partitioning block")
+		assert.Equal(t, `"DAY"`, getExprSource(mainFile, partBlock.Body.Attributes["type"].Expr))
+		assert.Equal(t, `"event_time"`, getExprSource(mainFile, partBlock.Body.Attributes["field"].Expr))
+
+		schemaSrc := getExprSource(mainFile, histBlk.Body.Attributes["schema"].Expr)
+		expectedCols := []string{
+			"submission_id",
+			"chunk_index",
+			"chunk_total",
+			"source_system",
+			"granularity",
+			"event_time",
+			"actor",
+			"product_urn",
+			"run_id",
+			"run_state",
+			"scope_id",
+			"edges_json",
+			"field_edges_json",
+			"subscription_name",
+			"message_id",
+			"publish_time",
+			"attributes",
+		}
+		for _, col := range expectedCols {
+			assert.Contains(t, schemaSrc, `name        = "`+col+`"`, "lineage_events_history schema missing column %q", col)
+		}
+
+		// Verify edges_json and field_edges_json are stored as STRING (not JSON) to prevent
+		// BigQuery Pub/Sub direct-ingestion double-encoding of protojson string fields.
+		schemaCall, ok := histBlk.Body.Attributes["schema"].Expr.(*hclsyntax.FunctionCallExpr)
+		require.True(t, ok, "lineage_events_history schema must be a jsonencode(...) function call")
+		require.Equal(t, "jsonencode", schemaCall.Name)
+		require.Len(t, schemaCall.Args, 1)
+		schemaList, ok := schemaCall.Args[0].(*hclsyntax.TupleConsExpr)
+		require.True(t, ok, "lineage_events_history schema jsonencode arg must be a tuple")
+
+		colTypes := make(map[string]string, len(schemaList.Exprs))
+		for _, elem := range schemaList.Exprs {
+			obj, isObj := elem.(*hclsyntax.ObjectConsExpr)
+			require.True(t, isObj, "schema entry must be an object")
+			var colName, colType string
+			for _, item := range obj.Items {
+				key := strings.Trim(getExprSource(mainFile, item.KeyExpr), `"`)
+				val := strings.Trim(getExprSource(mainFile, item.ValueExpr), `"`)
+				if key == "name" {
+					colName = val
+				} else if key == "type" {
+					colType = val
+				}
+			}
+			if colName != "" {
+				colTypes[colName] = colType
+			}
+		}
+		assert.Equal(t, "STRING", colTypes["edges_json"], "edges_json must be STRING (never JSON) to avoid Pub/Sub double-encoding")
+		assert.Equal(t, "STRING", colTypes["field_edges_json"], "field_edges_json must be STRING (never JSON) to avoid Pub/Sub double-encoding")
+		assert.NotEqual(t, "JSON", colTypes["edges_json"])
+		assert.NotEqual(t, "JSON", colTypes["field_edges_json"])
+
+		// 3. Pub/Sub BigQuery subscription lineage_events_bq
+		subBlk, ok := resources["google_pubsub_subscription.lineage_events_bq"]
+		require.True(t, ok, "missing google_pubsub_subscription.lineage_events_bq")
+		assert.Equal(t, "var.enable_lineage_history ? 1 : 0", getExprSource(mainFile, subBlk.Body.Attributes["count"].Expr))
+
+		var bqCfg *hclsyntax.Block
+		for _, b := range subBlk.Body.Blocks {
+			if b.Type == "bigquery_config" {
+				bqCfg = b
+				break
+			}
+		}
+		require.NotNil(t, bqCfg, "lineage_events_bq missing bigquery_config block")
+		assert.Equal(t, "true", getExprSource(mainFile, bqCfg.Body.Attributes["use_table_schema"].Expr))
+		assert.Equal(t, "true", getExprSource(mainFile, bqCfg.Body.Attributes["write_metadata"].Expr))
+		assert.Equal(t, "true", getExprSource(mainFile, bqCfg.Body.Attributes["drop_unknown_fields"].Expr))
+
+		// 4. Analytical view lineage_current_edges
+		viewBlk, ok := resources["google_bigquery_table.lineage_current_edges"]
+		require.True(t, ok, "missing google_bigquery_table.lineage_current_edges")
+		assert.Equal(t, "var.enable_lineage_history ? 1 : 0", getExprSource(mainFile, viewBlk.Body.Attributes["count"].Expr))
+		assert.Equal(t, "false", getExprSource(mainFile, viewBlk.Body.Attributes["deletion_protection"].Expr))
+		assert.Equal(t, "var.lineage_current_edges_view_id", getExprSource(mainFile, viewBlk.Body.Attributes["table_id"].Expr))
+
+		var viewBlock *hclsyntax.Block
+		for _, sub := range viewBlk.Body.Blocks {
+			if sub.Type == "view" {
+				viewBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, viewBlock, "lineage_current_edges missing view block")
+		assert.Equal(t, "false", getExprSource(mainFile, viewBlock.Body.Attributes["use_legacy_sql"].Expr))
+		viewQuerySrc := getExprSource(mainFile, viewBlock.Body.Attributes["query"].Expr)
+		assert.Contains(t, viewQuerySrc, "SAFE.PARSE_JSON(edges_json) AS edges_json")
+		assert.Contains(t, viewQuerySrc, "SAFE.PARSE_JSON(field_edges_json) AS field_edges_json")
+
+		// 5. Hub BigQuery IAM + OpenLineage invokers
+		viewerBlk, ok := resources["google_bigquery_dataset_iam_member.hub_catalog_bq_viewer"]
+		require.True(t, ok, "missing google_bigquery_dataset_iam_member.hub_catalog_bq_viewer")
+		assert.Equal(t, `"roles/bigquery.dataViewer"`, getExprSource(mainFile, viewerBlk.Body.Attributes["role"].Expr))
+
+		jobUserBlk, ok := resources["google_project_iam_member.hub_bq_job_user"]
+		require.True(t, ok, "missing google_project_iam_member.hub_bq_job_user")
+		assert.Equal(t, `"roles/bigquery.jobUser"`, getExprSource(mainFile, jobUserBlk.Body.Attributes["role"].Expr))
+
+		invokerBlk, ok := resources["google_cloud_run_v2_service_iam_member.openlineage_invokers"]
+		require.True(t, ok, "missing google_cloud_run_v2_service_iam_member.openlineage_invokers")
+		assert.Equal(t, `"roles/run.invoker"`, getExprSource(mainFile, invokerBlk.Body.Attributes["role"].Expr))
+		assert.Contains(t, getExprSource(mainFile, invokerBlk.Body.Attributes["for_each"].Expr), "var.openlineage_invoker_service_accounts")
+	})
+
+	t.Run("ShovelTopicRoutingAndHubLineageEnvVars", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		mainFile, mainBody := parseHCLFileAST(t, parser, filepath.Join(hubDir, "main.tf"))
+
+		resources := make(map[string]*hclsyntax.Block)
+		for _, block := range mainBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 {
+				resources[block.Labels[0]+"."+block.Labels[1]] = block
+			}
+		}
+
+		extractContainerEnvs := func(svcName string) map[string]string {
+			svc, ok := resources["google_cloud_run_v2_service."+svcName]
+			require.True(t, ok, "missing google_cloud_run_v2_service.%s", svcName)
+			envs := make(map[string]string)
+			for _, tmpl := range svc.Body.Blocks {
+				if tmpl.Type != "template" {
+					continue
+				}
+				for _, ctr := range tmpl.Body.Blocks {
+					if ctr.Type != "containers" {
+						continue
+					}
+					for _, envBlk := range ctr.Body.Blocks {
+						if envBlk.Type != "env" {
+							continue
+						}
+						nameSrc := strings.Trim(getExprSource(mainFile, envBlk.Body.Attributes["name"].Expr), `"`)
+						valSrc := getExprSource(mainFile, envBlk.Body.Attributes["value"].Expr)
+						envs[nameSrc] = valSrc
+					}
+				}
+			}
+			return envs
+		}
+
+		shovelEnvs := extractContainerEnvs("shovel")
+		topicRouting, hasTR := shovelEnvs["TOPIC_ROUTING"]
+		require.True(t, hasTR, "shovel missing TOPIC_ROUTING env var")
+		assert.Contains(t, topicRouting, "var.enable_lineage_history")
+		assert.Contains(t, topicRouting, `"urn:supercargo:hub:contract:lineage-submission-event"`)
+		assert.Contains(t, topicRouting, "google_pubsub_topic.lineage_events[0].name")
+		assert.Contains(t, topicRouting, "var.topic_routing")
+
+		hubEnvs := extractContainerEnvs("hub")
+		expectedHubEnvs := map[string]string{
+			"LINEAGE_BACKPUSH_ENABLED":         "tostring(var.lineage_backpush_enabled)",
+			"LINEAGE_KEEPALIVE_TTL":            "var.lineage_keepalive_ttl",
+			"LINEAGE_KEEPALIVE_CHECK_INTERVAL": "var.lineage_keepalive_check_interval",
+			"DATAPLEX_STREAMING_ENABLED":       "tostring(var.dataplex_streaming_enabled)",
+			"LINEAGE_HISTORY_DATASET":          `var.enable_lineage_history ? google_bigquery_dataset.supercargo_catalog[0].dataset_id : "supercargo_catalog"`,
+			"LINEAGE_HISTORY_TABLE":            "var.lineage_history_table_id",
+		}
+		for k, wantVal := range expectedHubEnvs {
+			gotVal, ok := hubEnvs[k]
+			require.True(t, ok, "hub Cloud Run service missing env var %s", k)
+			assert.Equal(t, wantVal, gotVal, "hub env var %s value mismatch", k)
+		}
+	})
+
+	t.Run("OutputsExported", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		outFile, outBody := parseHCLFileAST(t, parser, filepath.Join(hubDir, "outputs.tf"))
+
+		outputs := make(map[string]*hclsyntax.Block)
+		for _, block := range outBody.Blocks {
+			if block.Type == "output" && len(block.Labels) == 1 {
+				outputs[block.Labels[0]] = block
+			}
+		}
+
+		expectedOutputs := map[string]string{
+			"lineage_events_topic_name":       "var.enable_lineage_history ? google_pubsub_topic.lineage_events[0].name : null",
+			"lineage_events_history_table_id": "var.enable_lineage_history ? google_bigquery_table.lineage_events_history[0].table_id : null",
+			"lineage_current_edges_view_id":   "var.enable_lineage_history ? google_bigquery_table.lineage_current_edges[0].table_id : null",
+		}
+		for name, wantExpr := range expectedOutputs {
+			blk, ok := outputs[name]
+			require.True(t, ok, "modules/hub/outputs.tf missing output %q", name)
+			valAttr, hasVal := blk.Body.Attributes["value"]
+			require.True(t, hasVal)
+			assert.Equal(t, wantExpr, getExprSource(outFile, valAttr.Expr))
+		}
+	})
+}

@@ -66,10 +66,12 @@ module "hub" {
 | `custom_audiences` | `list(string)` | `[]` | no | List of custom audiences to accept for OIDC |
 | `dataform_events_topic` | `string` | `"supercargo-dataform-events"` | no | Base Pub/Sub topic name for Dataform workflow execution events |
 | `dataform_sink_filter` | `string` | `""` | no | Custom Cloud Logging sink filter expression for Dataform events (falls back to default dual-compatible filter if empty) |
+| `dataplex_streaming_enabled` | `bool` | `true` | no | Whether Hub prefers Dataplex SearchLineageStreaming over regional SearchLinks fallback |
 | `enable_audit_sink` | `bool` | `true` | no | Whether to provision the BigQuery audit sink and Pub/Sub subscription for outbox events |
 | `enable_dataform_integration` | `bool` | `false` | no | Whether to provision the Dataform Cloud Logging sink and Pub/Sub push subscription |
 | `enable_health_mesh` | `bool` | `true` | no | Whether to provision the Pub/Sub health events mesh, BigQuery catalog dataset, and streaming subscription |
 | `enable_job_monitoring_integration` | `bool` | `false` | no | Whether to provision the Cloud Run Job logging sink, Pub/Sub topics, and Cloud Monitoring alert integration |
+| `enable_lineage_history` | `bool` | `true` | no | Whether to provision the Pub/Sub lineage events topic, BigQuery lineage_events_history table, and streaming subscription |
 | `enable_monitoring` | `bool` | `false` | no | Whether to provision the Cloud Monitoring pack for the Hub control plane |
 | `environment` | `string` | *required* | no | The environment name (dev, staging, prod) |
 | `firestore_project_id` | `string` | *required* | no | Project ID where Firestore resides |
@@ -83,6 +85,12 @@ module "hub" {
 | `ingress_type` | `string` | `"INGRESS_TRAFFIC_ALL"` | no | The type of ingress traffic allowed (INGRESS_TRAFFIC_ALL or INGRESS_TRAFFIC_INTERNAL_ONLY or INGRESS_TRAFFIC_INTERNAL_AND_GCLB) |
 | `job_events_topic` | `string` | `"supercargo-job-events"` | no | Base Pub/Sub topic name for Cloud Run Job execution and Cloud Monitoring alert events |
 | `job_sink_filter` | `string` | `""` | no | Custom Cloud Logging sink filter expression for Cloud Run Job events (falls back to default job completion filter if empty) |
+| `lineage_backpush_enabled` | `bool` | `false` | no | Whether Hub mirrors non-GCP/custom lineage edges back to Dataplex Knowledge Catalog |
+| `lineage_current_edges_view_id` | `string` | `"lineage_current_edges"` | no | BigQuery view ID for latest lineage submission edges analytical projection |
+| `lineage_events_topic` | `string` | `"supercargo-lineage-events"` | no | Base Pub/Sub topic name for canonical lineage submission events |
+| `lineage_history_table_id` | `string` | `"lineage_events_history"` | no | BigQuery table ID for append-only lineage submission event history |
+| `lineage_keepalive_check_interval` | `string` | `"6h"` | no | Interval at which the Hub lineage keep-alive worker checks for expiring custom links |
+| `lineage_keepalive_ttl` | `string` | `"600h"` | no | Duration threshold after which active custom lineage links are refreshed by the keep-alive worker |
 | `max_instances` | `number` | `3` | no | The maximum number of instances for the Hub service |
 | `mcp_allowed_invokers` | `list(string)` | `[]` | no | List of IAM members authorized to invoke the MCP companion service (e.g. serviceAccount:..., group:...) |
 | `mcp_enabled` | `bool` | `false` | no | Whether to deploy the Supercargo MCP companion Cloud Run service |
@@ -91,6 +99,7 @@ module "hub" {
 | `mcp_oidc_audience` | `string` | `""` | no | Custom OIDC audience for the MCP companion service. In non-development environments, either this or var.oidc_audience must be set to enforce fail-closed token validation. |
 | `name_suffix` | `string` | `""` | no | Optional deterministic suffix appended to resource names for environment/branch disambiguation. Defaults to empty. |
 | `oidc_audience` | `string` | `""` | no | The expected audience for OIDC tokens |
+| `openlineage_invoker_service_accounts` | `list(string)` | `[]` | no | Optional list of service account emails (or serviceAccount: members) granted roles/run.invoker on Hub for OpenLineage push ingress |
 | `platform_trust_team` | `string` | `"platform-trust"` | no | The name of the platform trust team (or email of trusted SA) for emergency bypass |
 | `project_id` | `string` | *required* | no | The GCP Project ID |
 | `project_number` | `string` | *required* | no | The GCP Project Number |
@@ -136,6 +145,9 @@ module "hub" {
 | `job_events_topic_id` | no | The Pub/Sub topic ID for Cloud Run Job execution and Cloud Monitoring alert events |
 | `job_events_topic_name` | no | The Pub/Sub topic name for Cloud Run Job execution and Cloud Monitoring alert events |
 | `job_monitoring_notification_channel_id` | no | The Cloud Monitoring Pub/Sub notification channel ID for Hub alert routing |
+| `lineage_current_edges_view_id` | no | The BigQuery view ID for latest lineage submission edges projection |
+| `lineage_events_history_table_id` | no | The BigQuery table ID for lineage submission event history |
+| `lineage_events_topic_name` | no | The Pub/Sub topic name for canonical lineage submission events |
 | `mcp_service_account_email` | no | The service account email of the Supercargo MCP companion service |
 | `mcp_service_name` | no | The name of the Supercargo MCP companion Cloud Run service |
 | `mcp_service_url` | no | The URI of the Supercargo MCP companion Cloud Run service |
