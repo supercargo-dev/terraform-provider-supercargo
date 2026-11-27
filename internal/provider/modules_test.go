@@ -7471,6 +7471,38 @@ func TestModules_HubLineageHistoryAndEnvVars_AST(t *testing.T) {
 			assert.Contains(t, schemaSrc, `name        = "`+col+`"`, "lineage_events_history schema missing column %q", col)
 		}
 
+		// Verify edges_json and field_edges_json are stored as STRING (not JSON) to prevent
+		// BigQuery Pub/Sub direct-ingestion double-encoding of protojson string fields.
+		schemaCall, ok := histBlk.Body.Attributes["schema"].Expr.(*hclsyntax.FunctionCallExpr)
+		require.True(t, ok, "lineage_events_history schema must be a jsonencode(...) function call")
+		require.Equal(t, "jsonencode", schemaCall.Name)
+		require.Len(t, schemaCall.Args, 1)
+		schemaList, ok := schemaCall.Args[0].(*hclsyntax.TupleConsExpr)
+		require.True(t, ok, "lineage_events_history schema jsonencode arg must be a tuple")
+
+		colTypes := make(map[string]string, len(schemaList.Exprs))
+		for _, elem := range schemaList.Exprs {
+			obj, isObj := elem.(*hclsyntax.ObjectConsExpr)
+			require.True(t, isObj, "schema entry must be an object")
+			var colName, colType string
+			for _, item := range obj.Items {
+				key := strings.Trim(getExprSource(mainFile, item.KeyExpr), `"`)
+				val := strings.Trim(getExprSource(mainFile, item.ValueExpr), `"`)
+				if key == "name" {
+					colName = val
+				} else if key == "type" {
+					colType = val
+				}
+			}
+			if colName != "" {
+				colTypes[colName] = colType
+			}
+		}
+		assert.Equal(t, "STRING", colTypes["edges_json"], "edges_json must be STRING (never JSON) to avoid Pub/Sub double-encoding")
+		assert.Equal(t, "STRING", colTypes["field_edges_json"], "field_edges_json must be STRING (never JSON) to avoid Pub/Sub double-encoding")
+		assert.NotEqual(t, "JSON", colTypes["edges_json"])
+		assert.NotEqual(t, "JSON", colTypes["field_edges_json"])
+
 		// 3. Pub/Sub BigQuery subscription lineage_events_bq
 		subBlk, ok := resources["google_pubsub_subscription.lineage_events_bq"]
 		require.True(t, ok, "missing google_pubsub_subscription.lineage_events_bq")
@@ -7494,6 +7526,19 @@ func TestModules_HubLineageHistoryAndEnvVars_AST(t *testing.T) {
 		assert.Equal(t, "var.enable_lineage_history ? 1 : 0", getExprSource(mainFile, viewBlk.Body.Attributes["count"].Expr))
 		assert.Equal(t, "false", getExprSource(mainFile, viewBlk.Body.Attributes["deletion_protection"].Expr))
 		assert.Equal(t, "var.lineage_current_edges_view_id", getExprSource(mainFile, viewBlk.Body.Attributes["table_id"].Expr))
+
+		var viewBlock *hclsyntax.Block
+		for _, sub := range viewBlk.Body.Blocks {
+			if sub.Type == "view" {
+				viewBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, viewBlock, "lineage_current_edges missing view block")
+		assert.Equal(t, "false", getExprSource(mainFile, viewBlock.Body.Attributes["use_legacy_sql"].Expr))
+		viewQuerySrc := getExprSource(mainFile, viewBlock.Body.Attributes["query"].Expr)
+		assert.Contains(t, viewQuerySrc, "SAFE.PARSE_JSON(edges_json) AS edges_json")
+		assert.Contains(t, viewQuerySrc, "SAFE.PARSE_JSON(field_edges_json) AS field_edges_json")
 
 		// 5. Hub BigQuery IAM + OpenLineage invokers
 		viewerBlk, ok := resources["google_bigquery_dataset_iam_member.hub_catalog_bq_viewer"]

@@ -1096,13 +1096,13 @@ resource "google_bigquery_table" "lineage_events_history" {
     },
     {
       name        = "edges_json"
-      type        = "JSON"
+      type        = "STRING"
       mode        = "NULLABLE"
       description = "JSON-encoded array of canonical table/asset edges in this chunk"
     },
     {
       name        = "field_edges_json"
-      type        = "JSON"
+      type        = "STRING"
       mode        = "NULLABLE"
       description = "JSON-encoded array of canonical column-level field edges in this chunk"
     },
@@ -1205,8 +1205,8 @@ SELECT
   run_id,
   run_state,
   scope_id,
-  edges_json,
-  field_edges_json,
+  SAFE.PARSE_JSON(edges_json) AS edges_json,
+  SAFE.PARSE_JSON(field_edges_json) AS field_edges_json,
   publish_time
 FROM (
   SELECT
