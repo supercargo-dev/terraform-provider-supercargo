@@ -1927,9 +1927,9 @@ resource "google_bigquery_table" "field_edges" {
     },
     {
       name        = "metadata"
-      type        = "STRING"
+      type        = "JSON"
       mode        = "NULLABLE"
-      description = "JSON-encoded provider-specific or audit metadata string"
+      description = "Provider-specific or audit metadata JSON object"
     },
     {
       name        = "updated_at"

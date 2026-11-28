@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestModules_CloudRunLifecycleDecoupling(t *testing.T) {
@@ -7779,7 +7780,7 @@ func TestModules_HubFieldEdgesAndFieldClosuresView_AST(t *testing.T) {
 			"participants":        {colType: "STRING", mode: "REPEATED"},
 			"transformation_kind": {colType: "STRING", mode: "NULLABLE"},
 			"approved_mask":       {colType: "BOOL", mode: "NULLABLE"},
-			"metadata":            {colType: "STRING", mode: "NULLABLE"},
+			"metadata":            {colType: "JSON", mode: "NULLABLE"},
 			"updated_at":          {colType: "TIMESTAMP", mode: "REQUIRED"},
 			"kind":                {colType: "STRING", mode: "NULLABLE"},
 			"confidence":          {colType: "STRING", mode: "NULLABLE"},
@@ -7920,4 +7921,169 @@ func TestModules_HubFieldEdgesAndFieldClosuresView_AST(t *testing.T) {
 			assert.Equal(t, wantExpr, getExprSource(outFile, valAttr.Expr))
 		}
 	})
+}
+
+type bqColumnSpec struct {
+	colType string
+	mode    string
+}
+
+func extractHubFieldEdgesBQSchemaAndSub(t *testing.T, hubMainPath string) (map[string]bqColumnSpec, map[string]string) {
+	t.Helper()
+	parser := hclparse.NewParser()
+	mainFile, mainBody := parseHCLFileAST(t, parser, hubMainPath)
+
+	resources := make(map[string]*hclsyntax.Block)
+	for _, block := range mainBody.Blocks {
+		if block.Type == "resource" && len(block.Labels) == 2 {
+			resources[block.Labels[0]+"."+block.Labels[1]] = block
+		}
+	}
+
+	tblBlk, ok := resources["google_bigquery_table.field_edges"]
+	require.True(t, ok, "missing google_bigquery_table.field_edges")
+
+	schemaCall, ok := tblBlk.Body.Attributes["schema"].Expr.(*hclsyntax.FunctionCallExpr)
+	require.True(t, ok, "field_edges schema must be a jsonencode(...) function call")
+	require.Equal(t, "jsonencode", schemaCall.Name)
+	require.Len(t, schemaCall.Args, 1)
+	schemaList, ok := schemaCall.Args[0].(*hclsyntax.TupleConsExpr)
+	require.True(t, ok, "field_edges schema jsonencode arg must be a tuple")
+
+	cols := make(map[string]bqColumnSpec, len(schemaList.Exprs))
+	for _, elem := range schemaList.Exprs {
+		obj, isObj := elem.(*hclsyntax.ObjectConsExpr)
+		require.True(t, isObj, "schema entry must be an object")
+		var colName, colType, colMode string
+		for _, item := range obj.Items {
+			key := strings.Trim(getExprSource(mainFile, item.KeyExpr), `"`)
+			val := strings.Trim(getExprSource(mainFile, item.ValueExpr), `"`)
+			switch key {
+			case "name":
+				colName = val
+			case "type":
+				colType = val
+			case "mode":
+				colMode = val
+			}
+		}
+		if colName != "" {
+			cols[colName] = bqColumnSpec{colType: colType, mode: colMode}
+		}
+	}
+
+	subBlk, ok := resources["google_pubsub_subscription.field_edges_bq"]
+	require.True(t, ok, "missing google_pubsub_subscription.field_edges_bq")
+	var bqCfg *hclsyntax.Block
+	for _, b := range subBlk.Body.Blocks {
+		if b.Type == "bigquery_config" {
+			bqCfg = b
+			break
+		}
+	}
+	require.NotNil(t, bqCfg, "field_edges_bq missing bigquery_config block")
+
+	bqConfigAttrs := make(map[string]string, len(bqCfg.Body.Attributes))
+	for k, attr := range bqCfg.Body.Attributes {
+		bqConfigAttrs[k] = getExprSource(mainFile, attr.Expr)
+	}
+	return cols, bqConfigAttrs
+}
+
+func contractDataTypeToBigQueryType(t *testing.T, fieldName, contractType string) string {
+	t.Helper()
+	switch contractType {
+	case "DATA_TYPE_STRING":
+		return "STRING"
+	case "DATA_TYPE_BOOL":
+		return "BOOL"
+	case "DATA_TYPE_TIMESTAMP":
+		return "TIMESTAMP"
+	case "DATA_TYPE_JSON":
+		// protojson *_json fields serialize as JSON-encoded strings; map/object fields (e.g. metadata) use native BigQuery JSON.
+		if strings.HasSuffix(fieldName, "_json") {
+			return "STRING"
+		}
+		return "JSON"
+	default:
+		t.Fatalf("unmapped contract data type %q for field %q", contractType, fieldName)
+		return ""
+	}
+}
+
+func TestModules_HubFieldEdgesContractSchemaParity_AST(t *testing.T) {
+	t.Parallel()
+	hubMainPath := filepath.Join("..", "..", "modules", "hub", "main.tf")
+	cols, bqCfg := extractHubFieldEdgesBQSchemaAndSub(t, hubMainPath)
+
+	// Pub/Sub BigQuery ingestion relies on the BigQuery table schema directly.
+	assert.Equal(t, "true", bqCfg["use_table_schema"])
+	assert.Equal(t, "true", bqCfg["write_metadata"])
+	assert.Equal(t, "true", bqCfg["drop_unknown_fields"])
+
+	// Guard against regression: metadata is a CDC map (DATA_TYPE_JSON -> BigQuery JSON, not STRING).
+	metaCol, hasMeta := cols["metadata"]
+	require.True(t, hasMeta, "field_edges table must declare metadata column")
+	assert.Equal(t, "JSON", metaCol.colType, "field_edges.metadata must use BigQuery JSON type to match FieldEdge.Metadata CDC map")
+	assert.NotEqual(t, "STRING", metaCol.colType)
+
+	// Explicit contract-to-BigQuery column expectations (applies in standalone provider CI even without monorepo core/).
+	expectedContractToBQ := map[string]string{
+		"from_field_urn":      contractDataTypeToBigQueryType(t, "from_field_urn", "DATA_TYPE_STRING"),
+		"to_field_urn":        contractDataTypeToBigQueryType(t, "to_field_urn", "DATA_TYPE_STRING"),
+		"type":                contractDataTypeToBigQueryType(t, "type", "DATA_TYPE_STRING"),
+		"participants":        contractDataTypeToBigQueryType(t, "participants", "DATA_TYPE_STRING"),
+		"transformation_kind": contractDataTypeToBigQueryType(t, "transformation_kind", "DATA_TYPE_STRING"),
+		"approved_mask":       contractDataTypeToBigQueryType(t, "approved_mask", "DATA_TYPE_BOOL"),
+		"metadata":            contractDataTypeToBigQueryType(t, "metadata", "DATA_TYPE_JSON"),
+		"updated_at":          contractDataTypeToBigQueryType(t, "updated_at", "DATA_TYPE_TIMESTAMP"),
+		"kind":                contractDataTypeToBigQueryType(t, "kind", "DATA_TYPE_STRING"),
+		"confidence":          contractDataTypeToBigQueryType(t, "confidence", "DATA_TYPE_STRING"),
+		"granularity":         contractDataTypeToBigQueryType(t, "granularity", "DATA_TYPE_STRING"),
+		"source_system":       contractDataTypeToBigQueryType(t, "source_system", "DATA_TYPE_STRING"),
+		"job_fqn":             contractDataTypeToBigQueryType(t, "job_fqn", "DATA_TYPE_STRING"),
+		"first_seen_at":       contractDataTypeToBigQueryType(t, "first_seen_at", "DATA_TYPE_TIMESTAMP"),
+		"last_observed_at":    contractDataTypeToBigQueryType(t, "last_observed_at", "DATA_TYPE_TIMESTAMP"),
+		"deleted_at":          contractDataTypeToBigQueryType(t, "deleted_at", "DATA_TYPE_TIMESTAMP"),
+	}
+	for colName, wantBQType := range expectedContractToBQ {
+		got, exists := cols[colName]
+		require.True(t, exists, "field_edges BigQuery table missing contract column %q", colName)
+		assert.Equal(t, wantBQType, got.colType, "field_edges column %q BigQuery type mismatch", colName)
+	}
+
+	// Pub/Sub write_metadata = true requires the 4 Pub/Sub metadata columns.
+	pubsubMetaCols := map[string]bqColumnSpec{
+		"subscription_name": {colType: "STRING", mode: "NULLABLE"},
+		"message_id":        {colType: "STRING", mode: "NULLABLE"},
+		"publish_time":      {colType: "TIMESTAMP", mode: "NULLABLE"},
+		"attributes":        {colType: "JSON", mode: "NULLABLE"},
+	}
+	for colName, want := range pubsubMetaCols {
+		got, exists := cols[colName]
+		require.True(t, exists, "field_edges BigQuery table missing Pub/Sub metadata column %q", colName)
+		assert.Equal(t, want, got, "Pub/Sub metadata column %q mismatch", colName)
+	}
+	assert.Len(t, cols, len(expectedContractToBQ)+len(pubsubMetaCols), "unexpected extra or missing columns in field_edges BigQuery table")
+
+	// When running inside the monorepo worktree, dynamically verify against field-edge.contract.yaml.
+	contractPath := filepath.Join("..", "..", "..", "core", "services", "hub", "internal", "bootstrap", "manifests", "contracts", "field-edge.contract.yaml")
+	if contractBytes, err := os.ReadFile(contractPath); err == nil {
+		var contract struct {
+			Schema []struct {
+				Name string `yaml:"name"`
+				Type string `yaml:"type"`
+			} `yaml:"schema"`
+		}
+		require.NoError(t, yaml.Unmarshal(contractBytes, &contract), "parse %s", contractPath)
+		require.NotEmpty(t, contract.Schema, "field-edge.contract.yaml schema must not be empty")
+		assert.Len(t, contract.Schema, len(expectedContractToBQ), "field-edge.contract.yaml field count drifted from Terraform parity map")
+
+		for _, field := range contract.Schema {
+			got, exists := cols[field.Name]
+			require.True(t, exists, "contract field %q (%s) missing from google_bigquery_table.field_edges", field.Name, field.Type)
+			wantType := contractDataTypeToBigQueryType(t, field.Name, field.Type)
+			assert.Equal(t, wantType, got.colType, "contract field %q (%s) drifted from BigQuery column type %q", field.Name, field.Type, got.colType)
+		}
+	}
 }
