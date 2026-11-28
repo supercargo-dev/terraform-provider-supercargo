@@ -1468,7 +1468,7 @@ resource "google_bigquery_table" "asset_current_health" {
 WITH latest_health AS (
   SELECT * EXCEPT(row_num)
   FROM (
-    SELECT *, ROW_NUMBER() OVER(PARTITION BY asset_urn ORDER BY timestamp DESC, publish_time DESC NULLS LAST) AS row_num
+    SELECT *, ROW_NUMBER() OVER(PARTITION BY asset_urn ORDER BY timestamp DESC, publish_time DESC NULLS LAST) as row_num
     FROM `${var.project_id}.${google_bigquery_dataset.supercargo_catalog[0].dataset_id}.${google_bigquery_table.asset_health_history[0].table_id}`
   )
   WHERE row_num = 1
