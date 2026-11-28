@@ -118,6 +118,41 @@ output "health_events_subscription_name" {
   value       = var.enable_health_mesh ? google_pubsub_subscription.health_events_bq[0].name : null
 }
 
+output "incident_events_topic_name" {
+  description = "The Pub/Sub topic name for bounded asset incident CDC events"
+  value       = var.enable_health_mesh ? google_pubsub_topic.incident_events[0].name : null
+}
+
+output "incident_events_topic_id" {
+  description = "The Pub/Sub topic ID for bounded asset incident CDC events"
+  value       = var.enable_health_mesh ? google_pubsub_topic.incident_events[0].id : null
+}
+
+output "incident_events_dlq_topic_name" {
+  description = "The Pub/Sub dead-letter topic name for asset incident CDC events"
+  value       = var.enable_health_mesh ? google_pubsub_topic.incident_events_dlq[0].name : null
+}
+
+output "asset_incident_events_table_id" {
+  description = "The BigQuery table ID for append-only asset incident CDC events"
+  value       = var.enable_health_mesh ? google_bigquery_table.asset_incident_events[0].table_id : null
+}
+
+output "asset_incidents_view_id" {
+  description = "The BigQuery view ID for deduplicated bounded asset incidents"
+  value       = var.enable_health_mesh ? google_bigquery_table.asset_incidents[0].table_id : null
+}
+
+output "timesfm_incident_feedback_view_id" {
+  description = "The BigQuery view ID for TimesFM false-negative and false-alarm incident feedback"
+  value       = var.enable_health_mesh ? google_bigquery_table.v_timesfm_incident_feedback[0].table_id : null
+}
+
+output "incident_events_subscription_name" {
+  description = "The Pub/Sub BigQuery subscription name for bounded asset incident CDC events"
+  value       = var.enable_health_mesh ? google_pubsub_subscription.incident_events_bq[0].name : null
+}
+
 output "lineage_events_topic_name" {
   description = "The Pub/Sub topic name for canonical lineage submission events"
   value       = var.enable_lineage_history ? google_pubsub_topic.lineage_events[0].name : null

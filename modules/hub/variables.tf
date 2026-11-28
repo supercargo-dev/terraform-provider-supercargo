@@ -207,6 +207,30 @@ variable "current_health_view_id" {
   default     = "asset_current_health"
 }
 
+variable "incident_events_topic" {
+  description = "Base Pub/Sub topic name for bounded asset incident CDC events"
+  type        = string
+  default     = "supercargo-incident-events"
+}
+
+variable "incident_events_table_id" {
+  description = "BigQuery table ID for append-only asset incident CDC events"
+  type        = string
+  default     = "asset_incident_events"
+}
+
+variable "incidents_view_id" {
+  description = "BigQuery view ID for deduplicated bounded asset incidents"
+  type        = string
+  default     = "asset_incidents"
+}
+
+variable "timesfm_incident_feedback_view_id" {
+  description = "BigQuery view ID for TimesFM false-negative and false-alarm incident feedback"
+  type        = string
+  default     = "v_timesfm_incident_feedback"
+}
+
 variable "enable_lineage_history" {
   description = "Whether to provision the Pub/Sub lineage events topic, BigQuery lineage_events_history table, and streaming subscription"
   type        = bool

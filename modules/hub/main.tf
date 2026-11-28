@@ -265,6 +265,180 @@ resource "google_firestore_index" "pii_masks_index" {
   depends_on = [google_firestore_database.database]
 }
 
+resource "google_firestore_index" "asset_incidents_by_asset_started_index" {
+  project    = var.project_id
+  collection = "asset_incidents"
+
+  fields {
+    field_path = "asset_urn"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "started_at"
+    order      = "DESCENDING"
+  }
+
+  fields {
+    field_path = "__name__"
+    order      = "DESCENDING"
+  }
+
+  depends_on = [google_firestore_database.database]
+}
+
+resource "google_firestore_index" "asset_incidents_by_status_started_index" {
+  project    = var.project_id
+  collection = "asset_incidents"
+
+  fields {
+    field_path = "status"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "started_at"
+    order      = "DESCENDING"
+  }
+
+  fields {
+    field_path = "__name__"
+    order      = "DESCENDING"
+  }
+
+  depends_on = [google_firestore_database.database]
+}
+
+resource "google_firestore_index" "asset_incidents_by_asset_status_started_index" {
+  project    = var.project_id
+  collection = "asset_incidents"
+
+  fields {
+    field_path = "asset_urn"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "status"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "started_at"
+    order      = "DESCENDING"
+  }
+
+  fields {
+    field_path = "__name__"
+    order      = "DESCENDING"
+  }
+
+  depends_on = [google_firestore_database.database]
+}
+
+resource "google_firestore_index" "asset_incidents_by_category_started_index" {
+  project    = var.project_id
+  collection = "asset_incidents"
+
+  fields {
+    field_path = "category"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "started_at"
+    order      = "DESCENDING"
+  }
+
+  fields {
+    field_path = "__name__"
+    order      = "DESCENDING"
+  }
+
+  depends_on = [google_firestore_database.database]
+}
+
+resource "google_firestore_index" "asset_incidents_by_backlink_started_index" {
+  project    = var.project_id
+  collection = "asset_incidents"
+
+  fields {
+    field_path = "backlink_status"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "started_at"
+    order      = "DESCENDING"
+  }
+
+  fields {
+    field_path = "__name__"
+    order      = "DESCENDING"
+  }
+
+  depends_on = [google_firestore_database.database]
+}
+
+resource "google_firestore_index" "asset_incident_active_index" {
+  project    = var.project_id
+  collection = "asset_incident_active"
+
+  fields {
+    field_path = "asset_urn"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "status"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "started_at"
+    order      = "DESCENDING"
+  }
+
+  fields {
+    field_path = "__name__"
+    order      = "DESCENDING"
+  }
+
+  depends_on = [google_firestore_database.database]
+}
+
+resource "google_firestore_index" "asset_incident_active_key_index" {
+  project    = var.project_id
+  collection = "asset_incident_active"
+
+  fields {
+    field_path = "key_hash"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "asset_urn"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "status"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "started_at"
+    order      = "DESCENDING"
+  }
+
+  fields {
+    field_path = "__name__"
+    order      = "DESCENDING"
+  }
+
+  depends_on = [google_firestore_database.database]
+}
+
 resource "time_sleep" "wait_for_apis" {
   depends_on = [google_firestore_database.database]
 
@@ -535,8 +709,16 @@ resource "google_cloud_run_v2_service" "shovel" {
         value = var.auth_enforce ? "true" : "false"
       }
       env {
-        name  = "TOPIC_ROUTING"
-        value = jsonencode(merge(var.enable_lineage_history ? { "urn:supercargo:hub:contract:lineage-submission-event" = google_pubsub_topic.lineage_events[0].name } : {}, var.topic_routing))
+        name  = "INCIDENT_EVENTS_TOPIC"
+        value = var.enable_health_mesh ? google_pubsub_topic.incident_events[0].name : ""
+      }
+      env {
+        name = "TOPIC_ROUTING"
+        value = jsonencode(merge(
+          var.enable_lineage_history ? { "urn:supercargo:hub:contract:lineage-submission-event" = google_pubsub_topic.lineage_events[0].name } : {},
+          var.enable_health_mesh ? { "urn:supercargo:hub:contract:asset-incident" = google_pubsub_topic.incident_events[0].name } : {},
+          var.topic_routing
+        ))
       }
       env {
         name  = "FORCE_DEPLOY"
@@ -955,6 +1137,325 @@ resource "google_pubsub_subscription" "health_events_bq" {
   ]
 }
 
+resource "google_pubsub_topic" "incident_events" {
+  count   = var.enable_health_mesh ? 1 : 0
+  project = var.project_id
+  name    = "${var.incident_events_topic}${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
+}
+
+resource "google_pubsub_topic" "incident_events_dlq" {
+  count   = var.enable_health_mesh ? 1 : 0
+  project = var.project_id
+  name    = "${var.incident_events_topic}-dlq${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
+}
+
+resource "google_pubsub_topic_iam_member" "shovel_incident_events_publisher" {
+  count   = var.enable_health_mesh ? 1 : 0
+  project = var.project_id
+  topic   = google_pubsub_topic.incident_events[0].name
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:${google_service_account.shovel_runtime.email}"
+}
+
+resource "google_pubsub_topic_iam_member" "hub_incident_events_publisher" {
+  count   = var.enable_health_mesh ? 1 : 0
+  project = var.project_id
+  topic   = google_pubsub_topic.incident_events[0].name
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:${google_service_account.hub_runtime.email}"
+}
+
+resource "google_pubsub_topic_iam_member" "incident_dlq_publisher" {
+  count   = var.enable_health_mesh ? 1 : 0
+  project = var.project_id
+  topic   = google_pubsub_topic.incident_events_dlq[0].name
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:service-${var.project_number != "" ? var.project_number : data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
+resource "google_bigquery_table" "asset_incident_events" {
+  count               = var.enable_health_mesh ? 1 : 0
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.supercargo_catalog[0].dataset_id
+  table_id            = var.incident_events_table_id
+  deletion_protection = var.bigquery_deletion_protection
+
+  time_partitioning {
+    type  = "DAY"
+    field = "started_at"
+  }
+
+  clustering = ["asset_urn", "category", "status"]
+
+  schema = jsonencode([
+    {
+      name        = "event_id"
+      type        = "STRING"
+      mode        = "REQUIRED"
+      description = "Unique incident CDC outbox event identifier"
+    },
+    {
+      name        = "incident_id"
+      type        = "STRING"
+      mode        = "REQUIRED"
+      description = "Immutable bounded incident interval identifier"
+    },
+    {
+      name        = "asset_urn"
+      type        = "STRING"
+      mode        = "REQUIRED"
+      description = "Canonical URN of the affected data asset"
+    },
+    {
+      name        = "category"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Canonical incident root category (SCHEMA, ASSERTION, ANOMALY, SLA, SEMANTIC, INFRA, MANUAL)"
+    },
+    {
+      name        = "subtype"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Operational incident subtype (DBT, DATAFORM, BENTO_DLQ, OPENLINEAGE, TIMESFM, etc.)"
+    },
+    {
+      name        = "incident_type"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Original or normalized CATEGORY:SUBTYPE classification"
+    },
+    {
+      name        = "reporter"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Reporting subsystem or authenticated human operator identity"
+    },
+    {
+      name        = "status"
+      type        = "STRING"
+      mode        = "REQUIRED"
+      description = "Incident lifecycle state (INCIDENT_STATUS_OPEN, INCIDENT_STATUS_ACKNOWLEDGED, INCIDENT_STATUS_CLOSED)"
+    },
+    {
+      name        = "health_state"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Health state projected by this incident event"
+    },
+    {
+      name        = "reason"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Scrubbed diagnostic reason for the incident"
+    },
+    {
+      name        = "run_id"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Latest orchestrator or pipeline run ID associated with the incident"
+    },
+    {
+      name        = "coalesced_count"
+      type        = "INT64"
+      mode        = "NULLABLE"
+      description = "Number of repeated failures coalesced into this bounded interval"
+    },
+    {
+      name        = "started_at"
+      type        = "TIMESTAMP"
+      mode        = "REQUIRED"
+      description = "Timestamp when the bounded incident interval opened"
+    },
+    {
+      name        = "last_seen_at"
+      type        = "TIMESTAMP"
+      mode        = "NULLABLE"
+      description = "Timestamp of the most recent failure coalesced into the interval"
+    },
+    {
+      name        = "ended_at"
+      type        = "TIMESTAMP"
+      mode        = "NULLABLE"
+      description = "Timestamp when the bounded incident interval closed"
+    },
+    {
+      name        = "duration_seconds"
+      type        = "INT64"
+      mode        = "NULLABLE"
+      description = "Total elapsed outage duration in seconds once closed"
+    },
+    {
+      name        = "resolution_type"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "How the incident was closed (AUTO_RECOVERED, MANUAL_OVERRIDE, FALSE_ALARM)"
+    },
+    {
+      name        = "override_reason"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Operator justification when closed manually"
+    },
+    {
+      name        = "root_cause_category"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Post-triage root cause classification"
+    },
+    {
+      name        = "audit_actor"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Server-stamped identity of the actor opening or closing the incident"
+    },
+    {
+      name        = "acknowledged_by"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Server-stamped identity of the operator who acknowledged the incident"
+    },
+    {
+      name        = "acknowledged_at"
+      type        = "TIMESTAMP"
+      mode        = "NULLABLE"
+      description = "Timestamp when the incident was acknowledged"
+    },
+    {
+      name        = "backlink_status"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "TimesFM false-negative attribution status"
+    },
+    {
+      name        = "linked_snapshot_id"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Linked TimesFM feature window snapshot identifier"
+    },
+    {
+      name        = "linked_window_start"
+      type        = "TIMESTAMP"
+      mode        = "NULLABLE"
+      description = "Start of the back-linked TimesFM feature window"
+    },
+    {
+      name        = "linked_window_end"
+      type        = "TIMESTAMP"
+      mode        = "NULLABLE"
+      description = "End of the back-linked TimesFM feature window"
+    },
+    {
+      name        = "metadata_json"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "JSON-encoded incident metadata map (including dbt failing_tests)"
+    },
+    {
+      name        = "emitted_at"
+      type        = "TIMESTAMP"
+      mode        = "REQUIRED"
+      description = "Timestamp when the CDC outbox event was emitted"
+    },
+    {
+      name        = "subscription_name"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Name of the Pub/Sub subscription delivering the event"
+    },
+    {
+      name        = "message_id"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Pub/Sub message ID"
+    },
+    {
+      name        = "publish_time"
+      type        = "TIMESTAMP"
+      mode        = "NULLABLE"
+      description = "Pub/Sub message publish timestamp"
+    },
+    {
+      name        = "attributes"
+      type        = "JSON"
+      mode        = "NULLABLE"
+      description = "Pub/Sub message attributes map"
+    }
+  ])
+}
+
+resource "google_pubsub_subscription" "incident_events_bq" {
+  count   = var.enable_health_mesh ? 1 : 0
+  project = var.project_id
+  name    = "supercargo-incident-events-bq${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
+  topic   = google_pubsub_topic.incident_events[0].name
+
+  expiration_policy {
+    ttl = ""
+  }
+
+  bigquery_config {
+    table               = "${var.project_id}.${google_bigquery_dataset.supercargo_catalog[0].dataset_id}.${google_bigquery_table.asset_incident_events[0].table_id}"
+    use_table_schema    = true
+    write_metadata      = true
+    drop_unknown_fields = true
+  }
+
+  dead_letter_policy {
+    dead_letter_topic     = google_pubsub_topic.incident_events_dlq[0].id
+    max_delivery_attempts = 5
+  }
+
+  depends_on = [
+    google_bigquery_dataset_iam_member.pubsub_health_bq_writer,
+    google_bigquery_dataset_iam_member.pubsub_health_bq_metadata,
+    google_pubsub_topic_iam_member.incident_dlq_publisher,
+  ]
+}
+
+resource "google_pubsub_subscription_iam_member" "incident_bq_dlq_subscriber" {
+  count        = var.enable_health_mesh ? 1 : 0
+  project      = var.project_id
+  subscription = google_pubsub_subscription.incident_events_bq[0].name
+  role         = "roles/pubsub.subscriber"
+  member       = "serviceAccount:service-${var.project_number != "" ? var.project_number : data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
+resource "google_pubsub_subscription" "incident_events_dlq_pull" {
+  count   = var.enable_health_mesh ? 1 : 0
+  project = var.project_id
+  name    = "${var.incident_events_topic}-dlq-sub${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
+  topic   = google_pubsub_topic.incident_events_dlq[0].name
+
+  message_retention_duration = "604800s"
+  retain_acked_messages      = false
+
+  expiration_policy {
+    ttl = ""
+  }
+}
+
+resource "google_bigquery_table" "asset_incidents" {
+  count               = var.enable_health_mesh ? 1 : 0
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.supercargo_catalog[0].dataset_id
+  table_id            = var.incidents_view_id
+  deletion_protection = false
+
+  view {
+    query          = <<EOF
+SELECT * EXCEPT(row_num)
+FROM (
+  SELECT
+    *,
+    ROW_NUMBER() OVER(PARTITION BY incident_id ORDER BY emitted_at DESC, publish_time DESC NULLS LAST) AS row_num
+  FROM `${var.project_id}.${google_bigquery_dataset.supercargo_catalog[0].dataset_id}.${google_bigquery_table.asset_incident_events[0].table_id}`
+)
+WHERE row_num = 1
+EOF
+    use_legacy_sql = false
+  }
+}
+
 resource "google_bigquery_table" "asset_current_health" {
   count               = var.enable_health_mesh ? 1 : 0
   project             = var.project_id
@@ -964,12 +1465,121 @@ resource "google_bigquery_table" "asset_current_health" {
 
   view {
     query          = <<EOF
-SELECT * EXCEPT(row_num)
-FROM (
-  SELECT *, ROW_NUMBER() OVER(PARTITION BY asset_urn ORDER BY timestamp DESC, publish_time DESC NULLS LAST) as row_num
-  FROM `${var.project_id}.${google_bigquery_dataset.supercargo_catalog[0].dataset_id}.${google_bigquery_table.asset_health_history[0].table_id}`
+WITH latest_health AS (
+  SELECT * EXCEPT(row_num)
+  FROM (
+    SELECT *, ROW_NUMBER() OVER(PARTITION BY asset_urn ORDER BY timestamp DESC, publish_time DESC NULLS LAST) as row_num
+    FROM `${var.project_id}.${google_bigquery_dataset.supercargo_catalog[0].dataset_id}.${google_bigquery_table.asset_health_history[0].table_id}`
+  )
+  WHERE row_num = 1
+),
+open_incidents_agg AS (
+  SELECT
+    asset_urn,
+    COUNT(1) AS open_incident_count,
+    ARRAY_AGG(DISTINCT reporter IGNORE NULLS) AS active_reporters,
+    MIN(started_at) AS oldest_started_at,
+    ARRAY_AGG(reason IGNORE NULLS ORDER BY started_at ASC LIMIT 1)[SAFE_OFFSET(0)] AS primary_incident_reason,
+    ARRAY_AGG(incident_type IGNORE NULLS ORDER BY started_at ASC LIMIT 1)[SAFE_OFFSET(0)] AS primary_incident_type,
+    ARRAY_AGG(reporter IGNORE NULLS ORDER BY started_at ASC LIMIT 1)[SAFE_OFFSET(0)] AS primary_reporter
+  FROM `${var.project_id}.${google_bigquery_dataset.supercargo_catalog[0].dataset_id}.${google_bigquery_table.asset_incidents[0].table_id}`
+  WHERE status IN ('INCIDENT_STATUS_OPEN', 'INCIDENT_STATUS_ACKNOWLEDGED', 'OPEN', 'ACKNOWLEDGED')
+  GROUP BY asset_urn
+),
+all_urns AS (
+  SELECT asset_urn FROM latest_health
+  UNION DISTINCT
+  SELECT asset_urn FROM open_incidents_agg
 )
-WHERE row_num = 1
+SELECT
+  COALESCE(h.event_id, CONCAT('inc-proj-', u.asset_urn)) AS event_id,
+  u.asset_urn AS asset_urn,
+  h.previous_state AS previous_state,
+  CASE
+    WHEN COALESCE(o.open_incident_count, 0) > 0 THEN COALESCE(NULLIF(h.current_state, ''), 'HEALTH_STATE_DEGRADED')
+    ELSE h.current_state
+  END AS current_state,
+  COALESCE(NULLIF(h.reason, ''), o.primary_incident_reason) AS reason,
+  COALESCE(NULLIF(h.incident_type, ''), o.primary_incident_type) AS incident_type,
+  h.run_id AS run_id,
+  COALESCE(NULLIF(h.reporter, ''), o.primary_reporter) AS reporter,
+  COALESCE(NULLIF(h.status_source_urn, ''), IF(COALESCE(o.open_incident_count, 0) > 0, u.asset_urn, NULL)) AS status_source_urn,
+  COALESCE(h.timestamp, o.oldest_started_at) AS timestamp,
+  IFNULL(h.downstream_urns, ARRAY<STRING>[]) AS downstream_urns,
+  IFNULL(h.impacted_teams, ARRAY<STRING>[]) AS impacted_teams,
+  h.subscription_name AS subscription_name,
+  h.message_id AS message_id,
+  h.publish_time AS publish_time,
+  h.attributes AS attributes,
+  CASE
+    WHEN COALESCE(o.open_incident_count, 0) > 0 OR h.current_state IN ('DEGRADED', 'HEALTH_STATE_DEGRADED', 'UNHEALTHY', 'HEALTH_STATE_UNHEALTHY') THEN 'RED'
+    WHEN h.current_state IN ('AT_RISK', 'HEALTH_STATE_AT_RISK') THEN 'YELLOW'
+    ELSE 'GREEN'
+  END AS traffic_light,
+  COALESCE(NULLIF(h.status_source_urn, ''), IF(COALESCE(o.open_incident_count, 0) > 0, u.asset_urn, NULL)) AS root_cause_urn,
+  COALESCE(o.open_incident_count, 0) AS open_incident_count,
+  IFNULL(o.active_reporters, ARRAY<STRING>[]) AS active_reporters,
+  o.oldest_started_at AS oldest_started_at
+FROM all_urns u
+LEFT JOIN latest_health h ON u.asset_urn = h.asset_urn
+LEFT JOIN open_incidents_agg o ON u.asset_urn = o.asset_urn
+EOF
+    use_legacy_sql = false
+  }
+}
+
+resource "google_bigquery_table" "v_timesfm_incident_feedback" {
+  count               = var.enable_health_mesh ? 1 : 0
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.supercargo_catalog[0].dataset_id
+  table_id            = var.timesfm_incident_feedback_view_id
+  deletion_protection = false
+
+  view {
+    query          = <<EOF
+SELECT
+  incident_id,
+  asset_urn,
+  category,
+  subtype,
+  incident_type,
+  reporter,
+  status,
+  health_state,
+  reason,
+  coalesced_count,
+  started_at,
+  last_seen_at,
+  ended_at,
+  duration_seconds,
+  resolution_type,
+  override_reason,
+  root_cause_category,
+  audit_actor,
+  acknowledged_by,
+  acknowledged_at,
+  backlink_status,
+  linked_snapshot_id,
+  linked_window_start,
+  linked_window_end,
+  (backlink_status IN ('BACKLINK_STATUS_MISSED_BY_TIMESFM', 'MISSED_BY_TIMESFM')) AS is_missed_by_timesfm,
+  (resolution_type IN ('RESOLUTION_TYPE_FALSE_ALARM', 'FALSE_ALARM')) AS is_false_alarm,
+  emitted_at
+FROM `${var.project_id}.${google_bigquery_dataset.supercargo_catalog[0].dataset_id}.${google_bigquery_table.asset_incidents[0].table_id}`
+WHERE
+  backlink_status IN (
+    'BACKLINK_STATUS_MISSED_BY_TIMESFM',
+    'MISSED_BY_TIMESFM',
+    'BACKLINK_STATUS_MATCHED_EXISTING_ALERT',
+    'MATCHED_EXISTING_ALERT'
+  )
+  OR resolution_type IN (
+    'RESOLUTION_TYPE_FALSE_ALARM',
+    'FALSE_ALARM',
+    'RESOLUTION_TYPE_MANUAL_OVERRIDE',
+    'MANUAL_OVERRIDE'
+  )
+  OR category = 'MANUAL'
 EOF
     use_legacy_sql = false
   }
