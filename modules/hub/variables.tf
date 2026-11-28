@@ -255,6 +255,24 @@ variable "lineage_current_edges_view_id" {
   default     = "lineage_current_edges"
 }
 
+variable "field_edges_topic" {
+  description = "Base Pub/Sub topic name for column-level field edge CDC events"
+  type        = string
+  default     = "supercargo-field-edges"
+}
+
+variable "field_edges_table_id" {
+  description = "BigQuery table ID for column-level field lineage edges"
+  type        = string
+  default     = "field_edges"
+}
+
+variable "field_closures_view_id" {
+  description = "BigQuery view ID for recursive column-level field lineage closures"
+  type        = string
+  default     = "v_field_closures"
+}
+
 variable "lineage_backpush_enabled" {
   description = "Whether Hub mirrors non-GCP/custom lineage edges back to Dataplex Knowledge Catalog"
   type        = bool

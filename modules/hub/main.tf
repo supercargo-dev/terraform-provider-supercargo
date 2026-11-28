@@ -715,7 +715,10 @@ resource "google_cloud_run_v2_service" "shovel" {
       env {
         name = "TOPIC_ROUTING"
         value = jsonencode(merge(
-          var.enable_lineage_history ? { "urn:supercargo:hub:contract:lineage-submission-event" = google_pubsub_topic.lineage_events[0].name } : {},
+          var.enable_lineage_history ? {
+            "urn:supercargo:hub:contract:lineage-submission-event" = google_pubsub_topic.lineage_events[0].name
+            "urn:supercargo:hub:contract:field-edge"               = google_pubsub_topic.field_edges[0].name
+          } : {},
           var.enable_health_mesh ? { "urn:supercargo:hub:contract:asset-incident" = google_pubsub_topic.incident_events[0].name } : {},
           var.topic_routing
         ))
@@ -1828,6 +1831,383 @@ FROM (
   FROM `${var.project_id}.${google_bigquery_dataset.supercargo_catalog[0].dataset_id}.${google_bigquery_table.lineage_events_history[0].table_id}`
 )
 WHERE row_num = 1
+EOF
+    use_legacy_sql = false
+  }
+}
+
+# --- Column-Level Field Edges CDC & Recursive Field Closures View (#1381) ---
+
+resource "google_pubsub_topic" "field_edges" {
+  count   = var.enable_lineage_history ? 1 : 0
+  project = var.project_id
+  name    = "${var.field_edges_topic}${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
+}
+
+resource "google_pubsub_topic" "field_edges_dlq" {
+  count   = var.enable_lineage_history ? 1 : 0
+  project = var.project_id
+  name    = "${var.field_edges_topic}-dlq${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
+}
+
+resource "google_pubsub_topic_iam_member" "shovel_field_edges_publisher" {
+  count   = var.enable_lineage_history ? 1 : 0
+  project = var.project_id
+  topic   = google_pubsub_topic.field_edges[0].name
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:${google_service_account.shovel_runtime.email}"
+}
+
+resource "google_pubsub_topic_iam_member" "hub_field_edges_publisher" {
+  count   = var.enable_lineage_history ? 1 : 0
+  project = var.project_id
+  topic   = google_pubsub_topic.field_edges[0].name
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:${google_service_account.hub_runtime.email}"
+}
+
+resource "google_pubsub_topic_iam_member" "field_edges_dlq_publisher" {
+  count   = var.enable_lineage_history ? 1 : 0
+  project = var.project_id
+  topic   = google_pubsub_topic.field_edges_dlq[0].name
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:service-${var.project_number != "" ? var.project_number : data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
+resource "google_bigquery_table" "field_edges" {
+  count               = var.enable_lineage_history ? 1 : 0
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.supercargo_catalog[0].dataset_id
+  table_id            = var.field_edges_table_id
+  deletion_protection = var.bigquery_deletion_protection
+
+  time_partitioning {
+    type  = "DAY"
+    field = "updated_at"
+  }
+
+  clustering = ["from_field_urn", "to_field_urn", "source_system"]
+
+  schema = jsonencode([
+    {
+      name        = "from_field_urn"
+      type        = "STRING"
+      mode        = "REQUIRED"
+      description = "The source field URN (upstream)"
+    },
+    {
+      name        = "to_field_urn"
+      type        = "STRING"
+      mode        = "REQUIRED"
+      description = "The destination field URN (downstream)"
+    },
+    {
+      name        = "type"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Origin of the edge (MANAGED, NATIVE)"
+    },
+    {
+      name        = "participants"
+      type        = "STRING"
+      mode        = "REPEATED"
+      description = "Array containing both from_field_urn and to_field_urn"
+    },
+    {
+      name        = "transformation_kind"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Type of transformation (e.g., IDENTITY, HASH, VIEW)"
+    },
+    {
+      name        = "approved_mask"
+      type        = "BOOL"
+      mode        = "NULLABLE"
+      description = "True if the transformation is approved for PII declassification"
+    },
+    {
+      name        = "metadata"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "JSON-encoded provider-specific or audit metadata string"
+    },
+    {
+      name        = "updated_at"
+      type        = "TIMESTAMP"
+      mode        = "REQUIRED"
+      description = "Timestamp when the edge was last updated or reconciled"
+    },
+    {
+      name        = "kind"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Semantic kind of the lineage edge (DATAFLOW, VIEW, REFERENCE, TRANSPORT)"
+    },
+    {
+      name        = "confidence"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Certainty level of the lineage edge (OBSERVED, DECLARED, INFERRED)"
+    },
+    {
+      name        = "granularity"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Granularity at which the edge was captured (COLUMN, QUERY, TASK, WORKFLOW)"
+    },
+    {
+      name        = "source_system"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Originating platform or tool (manifest, dbt, dataform, dataplex, openlineage)"
+    },
+    {
+      name        = "job_fqn"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Job or query FQN that produced this edge"
+    },
+    {
+      name        = "first_seen_at"
+      type        = "TIMESTAMP"
+      mode        = "NULLABLE"
+      description = "Timestamp when the edge was first observed or declared"
+    },
+    {
+      name        = "last_observed_at"
+      type        = "TIMESTAMP"
+      mode        = "NULLABLE"
+      description = "Timestamp when the edge was most recently observed"
+    },
+    {
+      name        = "deleted_at"
+      type        = "TIMESTAMP"
+      mode        = "NULLABLE"
+      description = "Soft-delete tombstone timestamp for incremental CDC"
+    },
+    {
+      name        = "subscription_name"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Name of the Pub/Sub subscription delivering the event"
+    },
+    {
+      name        = "message_id"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Pub/Sub message ID"
+    },
+    {
+      name        = "publish_time"
+      type        = "TIMESTAMP"
+      mode        = "NULLABLE"
+      description = "Pub/Sub message publish timestamp"
+    },
+    {
+      name        = "attributes"
+      type        = "JSON"
+      mode        = "NULLABLE"
+      description = "Pub/Sub message attributes map"
+    }
+  ])
+}
+
+resource "google_pubsub_subscription" "field_edges_bq" {
+  count   = var.enable_lineage_history ? 1 : 0
+  project = var.project_id
+  name    = "supercargo-field-edges-bq${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
+  topic   = google_pubsub_topic.field_edges[0].name
+
+  expiration_policy {
+    ttl = ""
+  }
+
+  bigquery_config {
+    table               = "${var.project_id}.${google_bigquery_dataset.supercargo_catalog[0].dataset_id}.${google_bigquery_table.field_edges[0].table_id}"
+    use_table_schema    = true
+    write_metadata      = true
+    drop_unknown_fields = true
+  }
+
+  dead_letter_policy {
+    dead_letter_topic     = google_pubsub_topic.field_edges_dlq[0].id
+    max_delivery_attempts = 5
+  }
+
+  depends_on = [
+    google_bigquery_dataset_iam_member.pubsub_health_bq_writer,
+    google_bigquery_dataset_iam_member.pubsub_health_bq_metadata,
+    google_pubsub_topic_iam_member.field_edges_dlq_publisher,
+  ]
+}
+
+resource "google_pubsub_subscription_iam_member" "field_edges_bq_dlq_subscriber" {
+  count        = var.enable_lineage_history ? 1 : 0
+  project      = var.project_id
+  subscription = google_pubsub_subscription.field_edges_bq[0].name
+  role         = "roles/pubsub.subscriber"
+  member       = "serviceAccount:service-${var.project_number != "" ? var.project_number : data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
+resource "google_pubsub_subscription" "field_edges_dlq_pull" {
+  count   = var.enable_lineage_history ? 1 : 0
+  project = var.project_id
+  name    = "${var.field_edges_topic}-dlq-sub${var.name_suffix != "" ? "-${var.name_suffix}" : ""}"
+  topic   = google_pubsub_topic.field_edges_dlq[0].name
+
+  message_retention_duration = "604800s"
+  retain_acked_messages      = false
+
+  expiration_policy {
+    ttl = ""
+  }
+}
+
+resource "google_bigquery_table" "v_field_closures" {
+  count               = var.enable_lineage_history ? 1 : 0
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.supercargo_catalog[0].dataset_id
+  table_id            = var.field_closures_view_id
+  deletion_protection = false
+
+  view {
+    query          = <<EOF
+WITH RECURSIVE
+ranked_edges AS (
+  SELECT
+    from_field_urn,
+    to_field_urn,
+    transformation_kind,
+    COALESCE(approved_mask, FALSE) AS approved_mask,
+    confidence,
+    updated_at,
+    last_observed_at,
+    deleted_at,
+    ROW_NUMBER() OVER (
+      PARTITION BY from_field_urn, to_field_urn, COALESCE(source_system, '')
+      ORDER BY updated_at DESC, last_observed_at DESC
+    ) AS rn
+  FROM `${var.project_id}.${google_bigquery_dataset.supercargo_catalog[0].dataset_id}.${google_bigquery_table.field_edges[0].table_id}`
+),
+
+active_edges AS (
+  SELECT
+    from_field_urn,
+    to_field_urn,
+    transformation_kind,
+    approved_mask,
+    confidence
+  FROM ranked_edges
+  WHERE rn = 1
+    AND deleted_at IS NULL
+),
+
+root_fields AS (
+  SELECT from_field_urn AS field_urn FROM active_edges
+  UNION DISTINCT
+  SELECT to_field_urn AS field_urn FROM active_edges
+),
+
+upstream_walk AS (
+  SELECT
+    r.field_urn AS root_field_urn,
+    r.field_urn AS current_field_urn,
+    CAST(NULL AS STRING) AS ancestor_field_urn,
+    0 AS depth,
+    CONCAT('|', r.field_urn, '|') AS path,
+    0 AS confidence_rank
+  FROM root_fields r
+  UNION ALL
+  SELECT
+    w.root_field_urn,
+    e.from_field_urn AS current_field_urn,
+    e.from_field_urn AS ancestor_field_urn,
+    w.depth + 1 AS depth,
+    CONCAT(w.path, e.from_field_urn, '|') AS path,
+    CASE UPPER(COALESCE(e.confidence, ''))
+      WHEN 'OBSERVED' THEN 3
+      WHEN 'DECLARED' THEN 2
+      WHEN 'INFERRED' THEN 1
+      ELSE 0
+    END AS confidence_rank
+  FROM upstream_walk w
+  JOIN active_edges e
+    ON e.to_field_urn = w.current_field_urn
+  WHERE w.depth < 10
+    AND STRPOS(w.path, CONCAT('|', e.from_field_urn, '|')) = 0
+),
+
+downstream_walk AS (
+  SELECT
+    r.field_urn AS root_field_urn,
+    r.field_urn AS current_field_urn,
+    CAST(NULL AS STRING) AS descendant_field_urn,
+    0 AS depth,
+    CONCAT('|', r.field_urn, '|') AS path,
+    FALSE AS path_masked,
+    0 AS confidence_rank
+  FROM root_fields r
+  UNION ALL
+  SELECT
+    w.root_field_urn,
+    e.to_field_urn AS current_field_urn,
+    e.to_field_urn AS descendant_field_urn,
+    w.depth + 1 AS depth,
+    CONCAT(w.path, e.to_field_urn, '|') AS path,
+    (w.path_masked OR e.approved_mask) AS path_masked,
+    CASE UPPER(COALESCE(e.confidence, ''))
+      WHEN 'OBSERVED' THEN 3
+      WHEN 'DECLARED' THEN 2
+      WHEN 'INFERRED' THEN 1
+      ELSE 0
+    END AS confidence_rank
+  FROM downstream_walk w
+  JOIN active_edges e
+    ON e.from_field_urn = w.current_field_urn
+  WHERE w.depth < 10
+    AND STRPOS(w.path, CONCAT('|', e.to_field_urn, '|')) = 0
+),
+
+upstream_agg AS (
+  SELECT
+    root_field_urn,
+    IFNULL(ARRAY_AGG(DISTINCT IF(depth > 0, ancestor_field_urn, NULL) IGNORE NULLS), CAST([] AS ARRAY<STRING>)) AS upstream,
+    COALESCE(LOGICAL_OR(depth >= 10), FALSE) AS upstream_truncated,
+    MAX(confidence_rank) AS max_confidence_rank
+  FROM upstream_walk
+  GROUP BY root_field_urn
+),
+
+downstream_agg AS (
+  SELECT
+    root_field_urn,
+    IFNULL(ARRAY_AGG(DISTINCT IF(depth > 0, descendant_field_urn, NULL) IGNORE NULLS), CAST([] AS ARRAY<STRING>)) AS downstream,
+    COALESCE(LOGICAL_OR(depth >= 10), FALSE) AS downstream_truncated,
+    COALESCE(LOGICAL_OR(depth > 0 AND NOT path_masked), FALSE) AS has_unmasked_downstream,
+    MAX(confidence_rank) AS max_confidence_rank
+  FROM downstream_walk
+  GROUP BY root_field_urn
+)
+
+SELECT
+  r.field_urn,
+  COALESCE(ua.upstream, CAST([] AS ARRAY<STRING>)) AS upstream,
+  COALESCE(da.downstream, CAST([] AS ARRAY<STRING>)) AS downstream,
+  COALESCE(ua.upstream_truncated, FALSE) AS upstream_truncated,
+  COALESCE(da.downstream_truncated, FALSE) AS downstream_truncated,
+  COALESCE(da.has_unmasked_downstream, FALSE) AS has_unmasked_downstream,
+  CASE GREATEST(COALESCE(ua.max_confidence_rank, 0), COALESCE(da.max_confidence_rank, 0))
+    WHEN 3 THEN 'OBSERVED'
+    WHEN 2 THEN 'DECLARED'
+    WHEN 1 THEN 'INFERRED'
+    ELSE CAST(NULL AS STRING)
+  END AS max_confidence,
+  CURRENT_TIMESTAMP() AS computed_at
+FROM root_fields r
+LEFT JOIN upstream_agg ua
+  ON r.field_urn = ua.root_field_urn
+LEFT JOIN downstream_agg da
+  ON r.field_urn = da.root_field_urn
 EOF
     use_legacy_sql = false
   }

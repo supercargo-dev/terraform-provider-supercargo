@@ -168,6 +168,26 @@ output "lineage_current_edges_view_id" {
   value       = var.enable_lineage_history ? google_bigquery_table.lineage_current_edges[0].table_id : null
 }
 
+output "field_edges_topic_name" {
+  description = "The Pub/Sub topic name for column-level field edge CDC events"
+  value       = var.enable_lineage_history ? google_pubsub_topic.field_edges[0].name : null
+}
+
+output "field_edges_table_id" {
+  description = "The BigQuery table ID for column-level field lineage edges"
+  value       = var.enable_lineage_history ? google_bigquery_table.field_edges[0].table_id : null
+}
+
+output "v_field_closures_view_id" {
+  description = "The BigQuery view ID for recursive column-level field lineage closures"
+  value       = var.enable_lineage_history ? google_bigquery_table.v_field_closures[0].table_id : null
+}
+
+output "field_edges_subscription_name" {
+  description = "The Pub/Sub BigQuery subscription name for column-level field edge CDC events"
+  value       = var.enable_lineage_history ? google_pubsub_subscription.field_edges_bq[0].name : null
+}
+
 output "dataform_events_topic_name" {
   description = "The Pub/Sub topic name for Dataform workflow execution events"
   value       = var.enable_dataform_integration ? google_pubsub_topic.dataform_events[0].name : null
