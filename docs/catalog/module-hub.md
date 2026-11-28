@@ -82,6 +82,9 @@ module "hub" {
 | `hub_image_tag` | `string` | `""` | no | The image tag for the hub service (Git SHA). Optional for local infra updates. |
 | `iam_domain` | `string` | `"example.com"` | no | The domain for IAM groups and users |
 | `image_project_id` | `string` | *required* | no | Project ID where the Artifact Registry resides |
+| `incident_events_table_id` | `string` | `"asset_incident_events"` | no | BigQuery table ID for append-only asset incident CDC events |
+| `incident_events_topic` | `string` | `"supercargo-incident-events"` | no | Base Pub/Sub topic name for bounded asset incident CDC events |
+| `incidents_view_id` | `string` | `"asset_incidents"` | no | BigQuery view ID for deduplicated bounded asset incidents |
 | `ingress_type` | `string` | `"INGRESS_TRAFFIC_ALL"` | no | The type of ingress traffic allowed (INGRESS_TRAFFIC_ALL or INGRESS_TRAFFIC_INTERNAL_ONLY or INGRESS_TRAFFIC_INTERNAL_AND_GCLB) |
 | `job_events_topic` | `string` | `"supercargo-job-events"` | no | Base Pub/Sub topic name for Cloud Run Job execution and Cloud Monitoring alert events |
 | `job_sink_filter` | `string` | `""` | no | Custom Cloud Logging sink filter expression for Cloud Run Job events (falls back to default job completion filter if empty) |
@@ -108,6 +111,7 @@ module "hub" {
 | `shovel_max_instances` | `number` | `3` | no | The maximum number of instances for the metadata shovel service |
 | `shovel_oidc_audience` | `string` | `""` | no | The expected audience for metadata shovel OIDC tokens. Falls back to oidc_audience or supercargo-metadata-shovel-<env>. |
 | `sla_tier` | `string` | `"TIER_1"` | no | SLA tier for the control plane (TIER_1, TIER_2, TIER_3) |
+| `timesfm_incident_feedback_view_id` | `string` | `"v_timesfm_incident_feedback"` | no | BigQuery view ID for TimesFM false-negative and false-alarm incident feedback |
 | `topic_routing` | `map(string)` | `{}` | no | A map of URN prefixes to Pub/Sub topic names for custom routing in the metadata shovel. |
 
 ## Module Outputs
@@ -116,6 +120,8 @@ module "hub" {
 | :--- | :--- | :--- |
 | `asset_current_health_view_id` | no | The BigQuery view ID for latest asset health analytical projection |
 | `asset_health_history_table_id` | no | The BigQuery table ID for asset health transition history |
+| `asset_incident_events_table_id` | no | The BigQuery table ID for append-only asset incident CDC events |
+| `asset_incidents_view_id` | no | The BigQuery view ID for deduplicated bounded asset incidents |
 | `audit_dataset_id` | no | The BigQuery dataset ID for outbox audit events |
 | `audit_subscription_id` | no | The Pub/Sub subscription ID for the BigQuery audit sink |
 | `audit_subscription_name` | no | The Pub/Sub subscription name for the BigQuery audit sink (resolves #300) |
@@ -139,6 +145,10 @@ module "hub" {
 | `health_events_topic_id` | no | The Pub/Sub topic ID for asset health transition events |
 | `health_events_topic_name` | no | The Pub/Sub topic name for asset health transition events |
 | `hub_service_account_email` | no | The service account email of the Hub runtime service |
+| `incident_events_dlq_topic_name` | no | The Pub/Sub dead-letter topic name for asset incident CDC events |
+| `incident_events_subscription_name` | no | The Pub/Sub BigQuery subscription name for bounded asset incident CDC events |
+| `incident_events_topic_id` | no | The Pub/Sub topic ID for bounded asset incident CDC events |
+| `incident_events_topic_name` | no | The Pub/Sub topic name for bounded asset incident CDC events |
 | `job_events_dlq_subscription_name` | no | The Pub/Sub pull subscription name for inspecting Cloud Run Job dead-letter messages |
 | `job_events_dlq_topic_name` | no | The Pub/Sub dead-letter topic name for Cloud Run Job execution and Cloud Monitoring alert events |
 | `job_events_subscription_name` | no | The Pub/Sub push subscription name for Cloud Run Job execution and Cloud Monitoring alert events |
@@ -156,6 +166,7 @@ module "hub" {
 | `service_url` | no | The URI of the Hub Cloud Run service |
 | `shovel_service_account_email` | no | The service account email of the Metadata Shovel service |
 | `shovel_service_name` | no | The name of the Metadata Shovel Cloud Run service |
+| `timesfm_incident_feedback_view_id` | no | The BigQuery view ID for TimesFM false-negative and false-alarm incident feedback |
 
 ## Implementation
 - Source Code: `modules/hub`
