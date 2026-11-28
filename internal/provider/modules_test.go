@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestModules_CloudRunLifecycleDecoupling(t *testing.T) {
@@ -7641,4 +7642,448 @@ func TestModules_HubLineageHistoryAndEnvVars_AST(t *testing.T) {
 			assert.Equal(t, wantExpr, getExprSource(outFile, valAttr.Expr))
 		}
 	})
+}
+
+func TestModules_HubFieldEdgesAndFieldClosuresView_AST(t *testing.T) {
+	t.Parallel()
+	modulesDir := "../../modules"
+	hubDir := filepath.Join(modulesDir, "hub")
+
+	t.Run("VariablesDeclaredWithCorrectDefaults", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		varFile, varBody := parseHCLFileAST(t, parser, filepath.Join(hubDir, "variables.tf"))
+
+		vars := make(map[string]*hclsyntax.Block)
+		for _, block := range varBody.Blocks {
+			if block.Type == "variable" && len(block.Labels) == 1 {
+				vars[block.Labels[0]] = block
+			}
+		}
+
+		expectedVars := []struct {
+			name        string
+			wantType    string
+			wantDefault string
+		}{
+			{name: "field_edges_topic", wantType: "string", wantDefault: `"supercargo-field-edges"`},
+			{name: "field_edges_table_id", wantType: "string", wantDefault: `"field_edges"`},
+			{name: "field_closures_view_id", wantType: "string", wantDefault: `"v_field_closures"`},
+		}
+
+		for _, ev := range expectedVars {
+			blk, ok := vars[ev.name]
+			require.True(t, ok, "modules/hub/variables.tf missing variable %q", ev.name)
+			typeAttr, hasType := blk.Body.Attributes["type"]
+			require.True(t, hasType, "variable %q missing type", ev.name)
+			assert.Equal(t, ev.wantType, getExprSource(varFile, typeAttr.Expr), "variable %q type mismatch", ev.name)
+
+			defAttr, hasDef := blk.Body.Attributes["default"]
+			require.True(t, hasDef, "variable %q missing default", ev.name)
+			assert.Equal(t, ev.wantDefault, getExprSource(varFile, defAttr.Expr), "variable %q default mismatch", ev.name)
+		}
+	})
+
+	t.Run("FieldEdgesTableSubscriptionAndFirestoreIndexes", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		mainFile, mainBody := parseHCLFileAST(t, parser, filepath.Join(hubDir, "main.tf"))
+
+		resources := make(map[string]*hclsyntax.Block)
+		for _, block := range mainBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 {
+				resources[block.Labels[0]+"."+block.Labels[1]] = block
+			}
+		}
+
+		// Existing Firestore field_edges indexes must stay intact.
+		for _, idxRes := range []string{
+			"google_firestore_index.field_edges_from_index",
+			"google_firestore_index.field_edges_to_index",
+		} {
+			blk, ok := resources[idxRes]
+			require.True(t, ok, "existing Firestore index %s must remain intact", idxRes)
+			assert.Equal(t, `"field_edges"`, getExprSource(mainFile, blk.Body.Attributes["collection"].Expr))
+		}
+
+		// Pub/Sub topic + publisher IAMs for field-edge CDC.
+		topicBlk, ok := resources["google_pubsub_topic.field_edges"]
+		require.True(t, ok, "missing google_pubsub_topic.field_edges")
+		assert.Equal(t, "var.enable_lineage_history ? 1 : 0", getExprSource(mainFile, topicBlk.Body.Attributes["count"].Expr))
+		assert.Contains(t, getExprSource(mainFile, topicBlk.Body.Attributes["name"].Expr), "var.field_edges_topic")
+
+		for _, pubRes := range []string{
+			"google_pubsub_topic_iam_member.shovel_field_edges_publisher",
+			"google_pubsub_topic_iam_member.hub_field_edges_publisher",
+		} {
+			blk, exists := resources[pubRes]
+			require.True(t, exists, "missing %s", pubRes)
+			assert.Equal(t, `"roles/pubsub.publisher"`, getExprSource(mainFile, blk.Body.Attributes["role"].Expr))
+		}
+
+		// BigQuery table field_edges matching snake_case Shovel CDC schema.
+		tblBlk, ok := resources["google_bigquery_table.field_edges"]
+		require.True(t, ok, "missing google_bigquery_table.field_edges")
+		assert.Equal(t, "var.enable_lineage_history ? 1 : 0", getExprSource(mainFile, tblBlk.Body.Attributes["count"].Expr))
+		assert.Equal(t, "var.field_edges_table_id", getExprSource(mainFile, tblBlk.Body.Attributes["table_id"].Expr))
+		assert.Equal(t, "var.bigquery_deletion_protection", getExprSource(mainFile, tblBlk.Body.Attributes["deletion_protection"].Expr))
+		assert.Equal(t, `["from_field_urn", "to_field_urn", "source_system"]`, getExprSource(mainFile, tblBlk.Body.Attributes["clustering"].Expr))
+
+		var partBlock *hclsyntax.Block
+		for _, sub := range tblBlk.Body.Blocks {
+			if sub.Type == "time_partitioning" {
+				partBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, partBlock, "field_edges missing time_partitioning block")
+		assert.Equal(t, `"DAY"`, getExprSource(mainFile, partBlock.Body.Attributes["type"].Expr))
+		assert.Equal(t, `"updated_at"`, getExprSource(mainFile, partBlock.Body.Attributes["field"].Expr))
+
+		schemaCall, ok := tblBlk.Body.Attributes["schema"].Expr.(*hclsyntax.FunctionCallExpr)
+		require.True(t, ok, "field_edges schema must be a jsonencode(...) function call")
+		require.Equal(t, "jsonencode", schemaCall.Name)
+		require.Len(t, schemaCall.Args, 1)
+		schemaList, ok := schemaCall.Args[0].(*hclsyntax.TupleConsExpr)
+		require.True(t, ok, "field_edges schema jsonencode arg must be a tuple")
+
+		type colSpec struct {
+			colType string
+			mode    string
+		}
+		cols := make(map[string]colSpec, len(schemaList.Exprs))
+		for _, elem := range schemaList.Exprs {
+			obj, isObj := elem.(*hclsyntax.ObjectConsExpr)
+			require.True(t, isObj, "schema entry must be an object")
+			var colName, colType, colMode string
+			for _, item := range obj.Items {
+				key := strings.Trim(getExprSource(mainFile, item.KeyExpr), `"`)
+				val := strings.Trim(getExprSource(mainFile, item.ValueExpr), `"`)
+				switch key {
+				case "name":
+					colName = val
+				case "type":
+					colType = val
+				case "mode":
+					colMode = val
+				}
+			}
+			if colName != "" {
+				cols[colName] = colSpec{colType: colType, mode: colMode}
+			}
+		}
+
+		expectedCols := map[string]colSpec{
+			"from_field_urn":      {colType: "STRING", mode: "REQUIRED"},
+			"to_field_urn":        {colType: "STRING", mode: "REQUIRED"},
+			"type":                {colType: "STRING", mode: "NULLABLE"},
+			"participants":        {colType: "STRING", mode: "REPEATED"},
+			"transformation_kind": {colType: "STRING", mode: "NULLABLE"},
+			"approved_mask":       {colType: "BOOL", mode: "NULLABLE"},
+			"metadata":            {colType: "JSON", mode: "NULLABLE"},
+			"updated_at":          {colType: "TIMESTAMP", mode: "REQUIRED"},
+			"kind":                {colType: "STRING", mode: "NULLABLE"},
+			"confidence":          {colType: "STRING", mode: "NULLABLE"},
+			"granularity":         {colType: "STRING", mode: "NULLABLE"},
+			"source_system":       {colType: "STRING", mode: "NULLABLE"},
+			"job_fqn":             {colType: "STRING", mode: "NULLABLE"},
+			"first_seen_at":       {colType: "TIMESTAMP", mode: "NULLABLE"},
+			"last_observed_at":    {colType: "TIMESTAMP", mode: "NULLABLE"},
+			"deleted_at":          {colType: "TIMESTAMP", mode: "NULLABLE"},
+		}
+		for colName, want := range expectedCols {
+			got, exists := cols[colName]
+			require.True(t, exists, "field_edges schema missing snake_case column %q", colName)
+			assert.Equal(t, want.colType, got.colType, "column %q type mismatch", colName)
+			assert.Equal(t, want.mode, got.mode, "column %q mode mismatch", colName)
+		}
+
+		// Pub/Sub BigQuery subscription field_edges_bq
+		subBlk, ok := resources["google_pubsub_subscription.field_edges_bq"]
+		require.True(t, ok, "missing google_pubsub_subscription.field_edges_bq")
+		assert.Equal(t, "var.enable_lineage_history ? 1 : 0", getExprSource(mainFile, subBlk.Body.Attributes["count"].Expr))
+
+		var bqCfg *hclsyntax.Block
+		for _, b := range subBlk.Body.Blocks {
+			if b.Type == "bigquery_config" {
+				bqCfg = b
+				break
+			}
+		}
+		require.NotNil(t, bqCfg, "field_edges_bq missing bigquery_config block")
+		assert.Equal(t, "true", getExprSource(mainFile, bqCfg.Body.Attributes["use_table_schema"].Expr))
+		assert.Equal(t, "true", getExprSource(mainFile, bqCfg.Body.Attributes["write_metadata"].Expr))
+		assert.Equal(t, "true", getExprSource(mainFile, bqCfg.Body.Attributes["drop_unknown_fields"].Expr))
+	})
+
+	t.Run("VFieldClosuresRecursiveViewAndTopicRouting", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		mainFile, mainBody := parseHCLFileAST(t, parser, filepath.Join(hubDir, "main.tf"))
+
+		resources := make(map[string]*hclsyntax.Block)
+		for _, block := range mainBody.Blocks {
+			if block.Type == "resource" && len(block.Labels) == 2 {
+				resources[block.Labels[0]+"."+block.Labels[1]] = block
+			}
+		}
+
+		viewBlk, ok := resources["google_bigquery_table.v_field_closures"]
+		require.True(t, ok, "missing google_bigquery_table.v_field_closures")
+		assert.Equal(t, "var.enable_lineage_history ? 1 : 0", getExprSource(mainFile, viewBlk.Body.Attributes["count"].Expr))
+		assert.Equal(t, "false", getExprSource(mainFile, viewBlk.Body.Attributes["deletion_protection"].Expr))
+		assert.Equal(t, "var.field_closures_view_id", getExprSource(mainFile, viewBlk.Body.Attributes["table_id"].Expr))
+		_, hasStaticSchema := viewBlk.Body.Attributes["schema"]
+		assert.False(t, hasStaticSchema, "v_field_closures view must not attach static schema JSON")
+
+		var viewBlock *hclsyntax.Block
+		for _, sub := range viewBlk.Body.Blocks {
+			if sub.Type == "view" {
+				viewBlock = sub
+				break
+			}
+		}
+		require.NotNil(t, viewBlock, "v_field_closures missing view block")
+		assert.Equal(t, "false", getExprSource(mainFile, viewBlock.Body.Attributes["use_legacy_sql"].Expr))
+
+		viewQuerySrc := getExprSource(mainFile, viewBlock.Body.Attributes["query"].Expr)
+		for _, requiredToken := range []string{
+			"WITH RECURSIVE",
+			"google_bigquery_table.field_edges[0].table_id",
+			"deleted_at IS NULL",
+			"UNION DISTINCT",
+			"upstream_walk",
+			"downstream_walk",
+			"STRPOS(",
+			"depth < 10",
+			"upstream_truncated",
+			"downstream_truncated",
+			"has_unmasked_downstream",
+			"max_confidence",
+			"'OBSERVED'",
+			"'DECLARED'",
+			"'INFERRED'",
+			"computed_at",
+		} {
+			assert.Contains(t, viewQuerySrc, requiredToken, "v_field_closures view SQL missing %q", requiredToken)
+		}
+
+		// Verify Shovel TOPIC_ROUTING wires urn:supercargo:hub:contract:field-edge.
+		svc, ok := resources["google_cloud_run_v2_service.shovel"]
+		require.True(t, ok, "missing google_cloud_run_v2_service.shovel")
+		var topicRoutingExpr string
+		for _, tmpl := range svc.Body.Blocks {
+			if tmpl.Type != "template" {
+				continue
+			}
+			for _, ctr := range tmpl.Body.Blocks {
+				if ctr.Type != "containers" {
+					continue
+				}
+				for _, envBlk := range ctr.Body.Blocks {
+					if envBlk.Type != "env" {
+						continue
+					}
+					if strings.Trim(getExprSource(mainFile, envBlk.Body.Attributes["name"].Expr), `"`) == "TOPIC_ROUTING" {
+						topicRoutingExpr = getExprSource(mainFile, envBlk.Body.Attributes["value"].Expr)
+					}
+				}
+			}
+		}
+		require.NotEmpty(t, topicRoutingExpr, "shovel missing TOPIC_ROUTING env var")
+		assert.Contains(t, topicRoutingExpr, `"urn:supercargo:hub:contract:field-edge"`)
+		assert.Contains(t, topicRoutingExpr, "google_pubsub_topic.field_edges[0].name")
+	})
+
+	t.Run("OutputsExported", func(t *testing.T) {
+		t.Parallel()
+		parser := hclparse.NewParser()
+		outFile, outBody := parseHCLFileAST(t, parser, filepath.Join(hubDir, "outputs.tf"))
+
+		outputs := make(map[string]*hclsyntax.Block)
+		for _, block := range outBody.Blocks {
+			if block.Type == "output" && len(block.Labels) == 1 {
+				outputs[block.Labels[0]] = block
+			}
+		}
+
+		expectedOutputs := map[string]string{
+			"field_edges_topic_name":        "var.enable_lineage_history ? google_pubsub_topic.field_edges[0].name : null",
+			"field_edges_table_id":          "var.enable_lineage_history ? google_bigquery_table.field_edges[0].table_id : null",
+			"v_field_closures_view_id":      "var.enable_lineage_history ? google_bigquery_table.v_field_closures[0].table_id : null",
+			"field_edges_subscription_name": "var.enable_lineage_history ? google_pubsub_subscription.field_edges_bq[0].name : null",
+		}
+		for name, wantExpr := range expectedOutputs {
+			blk, ok := outputs[name]
+			require.True(t, ok, "modules/hub/outputs.tf missing output %q", name)
+			valAttr, hasVal := blk.Body.Attributes["value"]
+			require.True(t, hasVal)
+			assert.Equal(t, wantExpr, getExprSource(outFile, valAttr.Expr))
+		}
+	})
+}
+
+type bqColumnSpec struct {
+	colType string
+	mode    string
+}
+
+func extractHubFieldEdgesBQSchemaAndSub(t *testing.T, hubMainPath string) (map[string]bqColumnSpec, map[string]string) {
+	t.Helper()
+	parser := hclparse.NewParser()
+	mainFile, mainBody := parseHCLFileAST(t, parser, hubMainPath)
+
+	resources := make(map[string]*hclsyntax.Block)
+	for _, block := range mainBody.Blocks {
+		if block.Type == "resource" && len(block.Labels) == 2 {
+			resources[block.Labels[0]+"."+block.Labels[1]] = block
+		}
+	}
+
+	tblBlk, ok := resources["google_bigquery_table.field_edges"]
+	require.True(t, ok, "missing google_bigquery_table.field_edges")
+
+	schemaCall, ok := tblBlk.Body.Attributes["schema"].Expr.(*hclsyntax.FunctionCallExpr)
+	require.True(t, ok, "field_edges schema must be a jsonencode(...) function call")
+	require.Equal(t, "jsonencode", schemaCall.Name)
+	require.Len(t, schemaCall.Args, 1)
+	schemaList, ok := schemaCall.Args[0].(*hclsyntax.TupleConsExpr)
+	require.True(t, ok, "field_edges schema jsonencode arg must be a tuple")
+
+	cols := make(map[string]bqColumnSpec, len(schemaList.Exprs))
+	for _, elem := range schemaList.Exprs {
+		obj, isObj := elem.(*hclsyntax.ObjectConsExpr)
+		require.True(t, isObj, "schema entry must be an object")
+		var colName, colType, colMode string
+		for _, item := range obj.Items {
+			key := strings.Trim(getExprSource(mainFile, item.KeyExpr), `"`)
+			val := strings.Trim(getExprSource(mainFile, item.ValueExpr), `"`)
+			switch key {
+			case "name":
+				colName = val
+			case "type":
+				colType = val
+			case "mode":
+				colMode = val
+			}
+		}
+		if colName != "" {
+			cols[colName] = bqColumnSpec{colType: colType, mode: colMode}
+		}
+	}
+
+	subBlk, ok := resources["google_pubsub_subscription.field_edges_bq"]
+	require.True(t, ok, "missing google_pubsub_subscription.field_edges_bq")
+	var bqCfg *hclsyntax.Block
+	for _, b := range subBlk.Body.Blocks {
+		if b.Type == "bigquery_config" {
+			bqCfg = b
+			break
+		}
+	}
+	require.NotNil(t, bqCfg, "field_edges_bq missing bigquery_config block")
+
+	bqConfigAttrs := make(map[string]string, len(bqCfg.Body.Attributes))
+	for k, attr := range bqCfg.Body.Attributes {
+		bqConfigAttrs[k] = getExprSource(mainFile, attr.Expr)
+	}
+	return cols, bqConfigAttrs
+}
+
+func contractDataTypeToBigQueryType(t *testing.T, fieldName, contractType string) string {
+	t.Helper()
+	switch contractType {
+	case "DATA_TYPE_STRING":
+		return "STRING"
+	case "DATA_TYPE_BOOL":
+		return "BOOL"
+	case "DATA_TYPE_TIMESTAMP":
+		return "TIMESTAMP"
+	case "DATA_TYPE_JSON":
+		// protojson *_json fields serialize as JSON-encoded strings; map/object fields (e.g. metadata) use native BigQuery JSON.
+		if strings.HasSuffix(fieldName, "_json") {
+			return "STRING"
+		}
+		return "JSON"
+	default:
+		t.Fatalf("unmapped contract data type %q for field %q", contractType, fieldName)
+		return ""
+	}
+}
+
+func TestModules_HubFieldEdgesContractSchemaParity_AST(t *testing.T) {
+	t.Parallel()
+	hubMainPath := filepath.Join("..", "..", "modules", "hub", "main.tf")
+	cols, bqCfg := extractHubFieldEdgesBQSchemaAndSub(t, hubMainPath)
+
+	// Pub/Sub BigQuery ingestion relies on the BigQuery table schema directly.
+	assert.Equal(t, "true", bqCfg["use_table_schema"])
+	assert.Equal(t, "true", bqCfg["write_metadata"])
+	assert.Equal(t, "true", bqCfg["drop_unknown_fields"])
+
+	// Guard against regression: metadata is a CDC map (DATA_TYPE_JSON -> BigQuery JSON, not STRING).
+	metaCol, hasMeta := cols["metadata"]
+	require.True(t, hasMeta, "field_edges table must declare metadata column")
+	assert.Equal(t, "JSON", metaCol.colType, "field_edges.metadata must use BigQuery JSON type to match FieldEdge.Metadata CDC map")
+	assert.NotEqual(t, "STRING", metaCol.colType)
+
+	// Explicit contract-to-BigQuery column expectations (applies in standalone provider CI even without monorepo core/).
+	expectedContractToBQ := map[string]string{
+		"from_field_urn":      contractDataTypeToBigQueryType(t, "from_field_urn", "DATA_TYPE_STRING"),
+		"to_field_urn":        contractDataTypeToBigQueryType(t, "to_field_urn", "DATA_TYPE_STRING"),
+		"type":                contractDataTypeToBigQueryType(t, "type", "DATA_TYPE_STRING"),
+		"participants":        contractDataTypeToBigQueryType(t, "participants", "DATA_TYPE_STRING"),
+		"transformation_kind": contractDataTypeToBigQueryType(t, "transformation_kind", "DATA_TYPE_STRING"),
+		"approved_mask":       contractDataTypeToBigQueryType(t, "approved_mask", "DATA_TYPE_BOOL"),
+		"metadata":            contractDataTypeToBigQueryType(t, "metadata", "DATA_TYPE_JSON"),
+		"updated_at":          contractDataTypeToBigQueryType(t, "updated_at", "DATA_TYPE_TIMESTAMP"),
+		"kind":                contractDataTypeToBigQueryType(t, "kind", "DATA_TYPE_STRING"),
+		"confidence":          contractDataTypeToBigQueryType(t, "confidence", "DATA_TYPE_STRING"),
+		"granularity":         contractDataTypeToBigQueryType(t, "granularity", "DATA_TYPE_STRING"),
+		"source_system":       contractDataTypeToBigQueryType(t, "source_system", "DATA_TYPE_STRING"),
+		"job_fqn":             contractDataTypeToBigQueryType(t, "job_fqn", "DATA_TYPE_STRING"),
+		"first_seen_at":       contractDataTypeToBigQueryType(t, "first_seen_at", "DATA_TYPE_TIMESTAMP"),
+		"last_observed_at":    contractDataTypeToBigQueryType(t, "last_observed_at", "DATA_TYPE_TIMESTAMP"),
+		"deleted_at":          contractDataTypeToBigQueryType(t, "deleted_at", "DATA_TYPE_TIMESTAMP"),
+	}
+	for colName, wantBQType := range expectedContractToBQ {
+		got, exists := cols[colName]
+		require.True(t, exists, "field_edges BigQuery table missing contract column %q", colName)
+		assert.Equal(t, wantBQType, got.colType, "field_edges column %q BigQuery type mismatch", colName)
+	}
+
+	// Pub/Sub write_metadata = true requires the 4 Pub/Sub metadata columns.
+	pubsubMetaCols := map[string]bqColumnSpec{
+		"subscription_name": {colType: "STRING", mode: "NULLABLE"},
+		"message_id":        {colType: "STRING", mode: "NULLABLE"},
+		"publish_time":      {colType: "TIMESTAMP", mode: "NULLABLE"},
+		"attributes":        {colType: "JSON", mode: "NULLABLE"},
+	}
+	for colName, want := range pubsubMetaCols {
+		got, exists := cols[colName]
+		require.True(t, exists, "field_edges BigQuery table missing Pub/Sub metadata column %q", colName)
+		assert.Equal(t, want, got, "Pub/Sub metadata column %q mismatch", colName)
+	}
+	assert.Len(t, cols, len(expectedContractToBQ)+len(pubsubMetaCols), "unexpected extra or missing columns in field_edges BigQuery table")
+
+	// When running inside the monorepo worktree, dynamically verify against field-edge.contract.yaml.
+	contractPath := filepath.Join("..", "..", "..", "core", "services", "hub", "internal", "bootstrap", "manifests", "contracts", "field-edge.contract.yaml")
+	if contractBytes, err := os.ReadFile(contractPath); err == nil {
+		var contract struct {
+			Schema []struct {
+				Name string `yaml:"name"`
+				Type string `yaml:"type"`
+			} `yaml:"schema"`
+		}
+		require.NoError(t, yaml.Unmarshal(contractBytes, &contract), "parse %s", contractPath)
+		require.NotEmpty(t, contract.Schema, "field-edge.contract.yaml schema must not be empty")
+		assert.Len(t, contract.Schema, len(expectedContractToBQ), "field-edge.contract.yaml field count drifted from Terraform parity map")
+
+		for _, field := range contract.Schema {
+			got, exists := cols[field.Name]
+			require.True(t, exists, "contract field %q (%s) missing from google_bigquery_table.field_edges", field.Name, field.Type)
+			wantType := contractDataTypeToBigQueryType(t, field.Name, field.Type)
+			assert.Equal(t, wantType, got.colType, "contract field %q (%s) drifted from BigQuery column type %q", field.Name, field.Type, got.colType)
+		}
+	}
 }

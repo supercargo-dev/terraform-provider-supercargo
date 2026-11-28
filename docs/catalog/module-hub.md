@@ -74,6 +74,9 @@ module "hub" {
 | `enable_lineage_history` | `bool` | `true` | no | Whether to provision the Pub/Sub lineage events topic, BigQuery lineage_events_history table, and streaming subscription |
 | `enable_monitoring` | `bool` | `false` | no | Whether to provision the Cloud Monitoring pack for the Hub control plane |
 | `environment` | `string` | *required* | no | The environment name (dev, staging, prod) |
+| `field_closures_view_id` | `string` | `"v_field_closures"` | no | BigQuery view ID for recursive column-level field lineage closures |
+| `field_edges_table_id` | `string` | `"field_edges"` | no | BigQuery table ID for column-level field lineage edges |
+| `field_edges_topic` | `string` | `"supercargo-field-edges"` | no | Base Pub/Sub topic name for column-level field edge CDC events |
 | `firestore_project_id` | `string` | *required* | no | Project ID where Firestore resides |
 | `force_deploy_trigger` | `string` | `"static"` | no | A value that, when changed, triggers a new Cloud Run revision (e.g. git SHA or image digest). Use 'latest' or a fixed value for idempotency. |
 | `gateway_service_account_email` | `string` | `null` | no | The service account email of the Ingestion Gateway |
@@ -141,6 +144,9 @@ module "hub" {
 | `dataform_events_topic_id` | no | The Pub/Sub topic ID for Dataform workflow execution events |
 | `dataform_events_topic_name` | no | The Pub/Sub topic name for Dataform workflow execution events |
 | `deployment_project_id` | no | The deployment GCP project ID |
+| `field_edges_subscription_name` | no | The Pub/Sub BigQuery subscription name for column-level field edge CDC events |
+| `field_edges_table_id` | no | The BigQuery table ID for column-level field lineage edges |
+| `field_edges_topic_name` | no | The Pub/Sub topic name for column-level field edge CDC events |
 | `health_events_subscription_name` | no | The Pub/Sub BigQuery subscription name for health events |
 | `health_events_topic_id` | no | The Pub/Sub topic ID for asset health transition events |
 | `health_events_topic_name` | no | The Pub/Sub topic name for asset health transition events |
@@ -167,6 +173,7 @@ module "hub" {
 | `shovel_service_account_email` | no | The service account email of the Metadata Shovel service |
 | `shovel_service_name` | no | The name of the Metadata Shovel Cloud Run service |
 | `timesfm_incident_feedback_view_id` | no | The BigQuery view ID for TimesFM false-negative and false-alarm incident feedback |
+| `v_field_closures_view_id` | no | The BigQuery view ID for recursive column-level field lineage closures |
 
 ## Implementation
 - Source Code: `modules/hub`
